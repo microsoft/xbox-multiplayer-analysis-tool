@@ -149,23 +149,6 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void Run_RelativeUriWithAHostStillFails()
-        {
-            ServiceCallItem[] calls =
-                CreateCalls(
-                    "/p",
-                    "example.test");
-            CallFrequencyRule rule =
-                CreateRule("/p");
-
-            Assert.Throws<UriFormatException>(
-                () => rule.Run(
-                    new RulesEngine(false),
-                    calls,
-                    new ServiceCallStats(calls)));
-        }
-
-        [Fact]
         public void Run_MalformedUriWithoutSubpathsDoesNotParseThePath()
         {
             ServiceCallItem[] calls =
@@ -185,34 +168,124 @@ namespace XMAT.Tests
             Assert.Empty(result.Violations);
         }
 
-        [Fact]
-        public void Run_HostlessMalformedAbsoluteUriThrowsFrozenExceptionType()
+        // Text that neither parse reads, such as a malformed URL kept as written for an unknown scheme, is matched as it is,
+        // with or without a host, and nothing throws; the path once threw for it, which failed the whole analysis. This
+        // supersedes the frozen exception type that a hostless malformed URL once gave.
+        [Theory]
+        [InlineData("https://[", "")]
+        [InlineData("https://[", "example.test")]
+        [InlineData("http:x", "example.test")]
+        public void Run_TextThatNoParseReads_IsMatchedAsItIs(
+            string uri,
+            string host)
         {
             ServiceCallItem[] calls =
                 CreateCalls(
-                    "https://[",
-                    string.Empty);
-            CallFrequencyRule rule =
-                CreateRule("/p");
+                    uri,
+                    host);
 
-            Exception expected =
-                Record.Exception(
-                    () => FrozenApplicableCalls(
-                        rule,
-                        calls));
-            Exception actual =
-                Record.Exception(
-                    () => rule.Run(
-                        new RulesEngine(false),
-                        calls,
-                        new ServiceCallStats(calls)));
+            RuleResult matching = CreateRule(uri).Run(
+                new RulesEngine(false),
+                calls,
+                new ServiceCallStats(calls));
+            RuleResult other = CreateRule("/p").Run(
+                new RulesEngine(false),
+                calls,
+                new ServiceCallStats(calls));
 
-            Assert.IsType<UriFormatException>(
-                expected);
-            Assert.NotNull(actual);
             Assert.Equal(
-                expected.GetType(),
-                actual.GetType());
+                calls,
+                Assert.Single(matching.Violations).m_violatingCalls.ToArray());
+            Assert.Empty(other.Violations);
+            Assert.All(
+                calls,
+                call => Assert.Equal((uri, host), (call.Uri, call.Host)));
+        }
+
+        // A row with a host whose scheme makes no URL keeps its path as the call's URI, which limits match like a hostless
+        // row's path; such a URI once threw, as a relative URI with a host still failed.
+        [Fact]
+        public void Run_MatchesThePathKeptForARowWithAHost()
+        {
+            ServiceCallItem[] calls =
+                CreateCalls(
+                    "/p?q=1#f",
+                    "example.test");
+
+            RuleResult result = CreateRule("/p").Run(
+                new RulesEngine(false),
+                calls,
+                new ServiceCallStats(calls));
+
+            Assert.Equal(
+                calls,
+                Assert.Single(result.Violations).m_violatingCalls.ToArray());
+        }
+
+        // The path is the frozen one wherever that gave one: every URI of a hostless row, and every URI with a scheme, which
+        // every URI is that analysis makes for a row with a host and a scheme that makes a URL.
+        [Theory]
+        [InlineData("https://example.test/p?q=1#f", "example.test")]
+        [InlineData("http://example.test:8080/a%20b/c", "example.test")]
+        [InlineData("ftp://files.example.test/f", "files.example.test")]
+        [InlineData("get://example.test/v1/items", "example.test")]
+        [InlineData("file:///C:/x", "example.test")]
+        [InlineData("https://example.test/p", "")]
+        [InlineData("/p?q=1#f", "")]
+        [InlineData("/a%20b", "")]
+        [InlineData("relative/p", "")]
+        [InlineData("*", "")]
+        [InlineData("", "")]
+        [InlineData("//server/x", "")]
+        [InlineData("\\\\server\\x", "")]
+        [InlineData("C:\\x", "")]
+        public void GetPath_IsTheFrozenPath_WhereThatGaveOne(
+            string uri,
+            string host)
+        {
+            ServiceCallItem call =
+                CreateCall(
+                    1,
+                    uri,
+                    host,
+                    TimeSpan.Zero);
+
+            Assert.Equal(
+                FrozenGetPath(call),
+                CallFrequencyRule.GetPath(call));
+        }
+
+        // Where the frozen path threw, the path is the text as it is when neither parse reads it, and a path without a
+        // scheme is parsed against the base whatever the host.
+        [Theory]
+        [InlineData("https://[", "", "https://[", true)]
+        [InlineData("https://[", "example.test", "https://[", true)]
+        [InlineData("http:x", "example.test", "http:x", true)]
+        [InlineData("https:/x", "", "https:/x", true)]
+        [InlineData("a:b", "", "a:b", true)]
+        [InlineData("/p?q=1#f", "example.test", "/p", true)]
+        [InlineData("*", "example.test", "/*", true)]
+        [InlineData("\\\\server\\x", "example.test", "//server/x", false)]
+        [InlineData("//server/x", "example.test", "/x", false)]
+        public void GetPath_NeverThrows(
+            string uri,
+            string host,
+            string expected,
+            bool frozenThrew)
+        {
+            ServiceCallItem call =
+                CreateCall(
+                    1,
+                    uri,
+                    host,
+                    TimeSpan.Zero);
+
+            Assert.Equal(
+                expected,
+                CallFrequencyRule.GetPath(call));
+            Assert.Equal(
+                frozenThrew,
+                Record.Exception(() => FrozenGetPath(call)) is UriFormatException);
         }
 
         private static CallFrequencyRule CreateRule(

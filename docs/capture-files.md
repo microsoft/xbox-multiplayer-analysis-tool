@@ -107,22 +107,49 @@ XMAT checks capture files before reading them and never changes them:
   of header data (its first line, the header lines and the empty line that ends them);
   a larger message stops the import rather than being truncated. Malformed header
   lines and incomplete frames are skipped, and the status bar notes that data was
-  skipped. A request without a usable `Host` header is imported without a host;
-  analysis keeps its path, and the Block and Bypass actions do not apply to it.
+  skipped. A request whose request line, other than a `CONNECT`'s, names an absolute
+  `http`, `https` or `ftp` URL with a valid host name or address and a port from 1 to
+  65535 takes its scheme, host and port from that URL, as HTTP requires, even when its
+  `Host` header is missing, malformed or names another host; its request line and
+  headers are kept as they are. Any other request line, such as one with a path, `*`
+  or a `CONNECT`'s target, gives an unknown scheme, shown blank rather than guessed,
+  and its request can't be replayed. Earlier versions of XMAT showed the method
+  instead for a path, `*` or text that is no URL, `http` for a `CONNECT`, and
+  otherwise what .NET read as the target's scheme, such as `file` for a drive or UNC
+  path; captures they saved keep it. A request with neither such a URL nor a usable
+  `Host` header is imported without a host, and the Block and Bypass actions do not
+  apply to it. Analysis names a request that has a host by its `Host` header when it
+  has one, even an empty one, and otherwise by that host, and a request without a host
+  by an empty host. It analyzes a request named by an empty host, or whose scheme is
+  unknown, with its path only.
+- A session's client address (its `x-clientip` flag) is kept as written, except that
+  an IPv4 address written in its IPv6 form, such as `::ffff:10.0.0.1`, is kept as
+  `10.0.0.1`. A session without the flag has the address `0.0.0.0`, and an archive
+  with a flag that has no value is malformed and is not imported.
 - Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
   character rather than `?`, and a line of such characters alone, such as 0x85 or 0xA0,
   is a malformed header line rather than the empty line that ends the headers. A header
-  name may contain an apostrophe, as HTTP allows, and a name that repeats is shown once,
-  with its values joined by commas. A time with an offset or `Z` is read as that
-  instant; one without, as XMAT's own exports write it, is this PC's local time. A
-  duration is the time between two instants, also across a daylight saving change, and
-  exports keep it. A time is read as unknown when it is the start of the year 1 without
-  an offset, which Fiddler writes for a timer it never set and XMAT's exports for a time
-  they do not know, or when it names no instant this PC can show as a local time, such
-  as the first hours of the year 1 in UTC, read in a time zone west of UTC. An unknown
-  time stays unknown when the capture is saved, exported or reloaded. Analysis and the
-  timeline leave out a request whose time is unknown or earlier than 1601, which
-  includes the year-1 times that earlier versions of XMAT saved for unknown times.
+  name may contain an apostrophe, as HTTP allows. Each header line is kept in its order
+  and with its name as written, its value without the spaces around it, so a name that
+  repeats keeps each of its lines: two `Set-Cookie` lines stay two, though their dates
+  hold commas. The import and analysis look a header up with the lines of a repeated
+  name joined by commas, as before; replay and `--verify` take the last line of a
+  repeated name instead, as in a capture that XMAT recorded. Earlier versions joined
+  the lines of a repeated name with commas on import; a capture saved from such an
+  import keeps them joined. A time with an offset or `Z` is read as that instant; one
+  without, as XMAT's own exports write it, is this PC's local time. A duration is the
+  time between two instants, also across a daylight saving change, and exports keep it.
+  A time is read as unknown when it is the start of the year 1 without an offset, which
+  Fiddler writes for a timer it never set and XMAT's exports for a time they do not
+  know, or when it names no instant this PC can show as a local time, such as the first
+  hours of the year 1 in UTC, read in a time zone west of UTC. An unknown time stays
+  unknown when the capture is saved, exported or reloaded. Analysis and the timeline
+  leave out a request whose time is unknown or earlier than 1601, which includes the
+  year-1 times that earlier versions of XMAT saved for unknown times.
+- XMAT stores each request and response head with the empty line that ends it, and
+  Save Captures and Load Captures keep heads exactly. A `.SAZ` export writes each
+  stored head unchanged. Characters inside header values, double quotation marks
+  included, are kept.
 
 ### Replays saved by xmat
 
@@ -156,6 +183,48 @@ saved or first sent for, only in memory with its row in the **Replays** tab, so 
 later send of it to another origin asks for consent. Saved and exported captures do not
 keep it.
 
+## Capture text markers and marked copies
+
+Current `.XMATCAP` files carry SQLite `user_version = 1`, which means XMAT
+stored their text literally. This is a storage classification only; it does
+not certify that every attempted network byte was transmitted or recorded
+without omission. An older or foreign file with marker `0` is
+**AmbiguousUnmarked**. XMAT opens it read-only and uses every stored character
+unchanged, with a warning: adjacent double quotation marks may be original data
+or may have been added by an older XMAT version. Any `user_version` other than
+0 or 1 is unsupported and refused before SQLite opens.
+
+| Stored-text source | View and analyze | Import into a live marked session | Sanitized export |
+|---|---|---|---|
+| Marked (`user_version = 1`) | Proceed without a warning. | Allowed literally. | Allowed. |
+| Unmarked (`user_version = 0`) | Preserve the stored text and warn that its historical interpretation is ambiguous. | Refused. | Refused; create and open a marked copy first. |
+| Unsupported `user_version` | Refused before SQLite opens. | Refused. | Refused. |
+| Unclassified/custom source | Treat as ambiguous and fail closed. | Refused. | Refused; use a marked native capture. |
+
+Replaying a request, saving it as a request file and exporting it as a cURL script
+use its stored text too. The GUI refuses them for an unmarked capture; create
+and open a marked copy first. `xmat replay`, `xmat save-request` and `xmat curl`
+use an unmarked capture's text as stored only with `--accept-stored-text`, for
+that run's input alone (see [Command line](cli.md)).
+
+Create a separate marked copy from the command line:
+
+```text
+xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer
+```
+
+`as-stored` preserves the file's stored values. `legacy-one-layer` is
+explicit: it accepts only TEXT values that are strict UTF-8 and whose every run
+of `"` has even length, then removes one quote-doubling layer. The source
+remains unchanged, extension columns are untouched, and marker 1 is written
+only after the selected interpretation succeeds. XMAT never guesses an
+interpretation and never applies this repair to a Fiddler archive or request
+file.
+
+Versions before capture-text fidelity cannot reliably filter a marked capture
+whose device name contains a double quotation mark, so such a tab can appear
+empty; open it with the current XMAT version.
+
 ## Export a sanitized capture
 
 1. Select the web proxy capture to share.
@@ -169,6 +238,10 @@ Sanitization is per export, not a preference. Ordinary exports and native
 the original capture is not sanitized in place. A sanitized archive keeps XMAT's
 request numbers, connection ids, times and schemes, but not the client IP address,
 the raw request path or the client process.
+
+An unmarked or unclassified selected capture is refused before export work
+starts. Create a marked copy with `xmat mark-capture-text`, open that copy, and
+export it instead.
 
 ### What is inspected
 

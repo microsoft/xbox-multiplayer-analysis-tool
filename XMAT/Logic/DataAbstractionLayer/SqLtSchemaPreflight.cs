@@ -56,6 +56,9 @@ namespace XMAT.DataAbstractionLayer
         private static SqLtSchemaException Unsupported() =>
             new(SqLtSchemaFailure.Unsupported);
 
+        private static SqLtSchemaException NotXmat() =>
+            new(SqLtSchemaFailure.NotXmat);
+
         private static SqLtSchemaException Limit() =>
             new(SqLtSchemaFailure.Limit);
 
@@ -76,6 +79,7 @@ namespace XMAT.DataAbstractionLayer
             private int _usablePageSize;
             private uint _pageCount;
             private int _totalPayloadBytes;
+            private CaptureTextSemantics _textSemantics;
 
             internal Reader(
                 Stream input,
@@ -91,6 +95,34 @@ namespace XMAT.DataAbstractionLayer
                 ReadBtreePage(
                     1,
                     0);
+                // One known XMAT table makes this a native-schema candidate; later missing or invalid objects are schema
+                // failures. SQLite with no known table is not an XMAT capture.
+                bool hasKnownTable = false;
+                foreach (RawSchemaRecord record in
+                    _records)
+                {
+                    if (string.Equals(
+                            record.Type,
+                            "table",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrEmpty(
+                            record.Name) &&
+                        string.Equals(
+                            record.Name,
+                            record.TableName,
+                            StringComparison.OrdinalIgnoreCase) &&
+                        SqLtSchemaProfile.GetKnownTable(
+                            record.Name) != null)
+                    {
+                        hasKnownTable = true;
+                        break;
+                    }
+                }
+                if (!hasKnownTable)
+                {
+                    throw NotXmat();
+                }
+
                 var tables =
                     new Dictionary<string, SqLtValidatedTable>(
                         StringComparer.Ordinal);
@@ -147,7 +179,9 @@ namespace XMAT.DataAbstractionLayer
                     }
                 }
 
-                return new SqLtValidatedSchema(tables);
+                return new SqLtValidatedSchema(
+                    tables,
+                    _textSemantics);
             }
 
             private void ReadHeader()
@@ -251,6 +285,21 @@ namespace XMAT.DataAbstractionLayer
                         checked((uint)physicalPages);
                 }
 
+                uint userVersion =
+                    BinaryPrimitives.ReadUInt32BigEndian(
+                        header.AsSpan(
+                            60,
+                            4));
+                CaptureTextSemantics textSemantics =
+                    userVersion switch
+                    {
+                        CaptureTextFormat.AmbiguousUserVersion =>
+                            CaptureTextSemantics.AmbiguousUnmarked,
+                        CaptureTextFormat.LiteralUserVersion =>
+                            CaptureTextSemantics.Literal,
+                        _ => throw new SqLtSchemaException(
+                            SqLtSchemaFailure.UnsupportedVersion),
+                    };
                 uint encoding =
                     BinaryPrimitives.ReadUInt32BigEndian(
                         header.AsSpan(
@@ -258,8 +307,10 @@ namespace XMAT.DataAbstractionLayer
                             4));
                 if (encoding != 1)
                 {
-                    throw Unsupported();
+                    throw NotXmat();
                 }
+
+                _textSemantics = textSemantics;
             }
 
             private void ReadBtreePage(

@@ -25,7 +25,8 @@ namespace XMAT.DataAbstractionLayer
                     _cachedDataRecord = new SqLtDataRecord(
                         _dataReader,
                         _fieldDefs,
-                        _untypedColumns);
+                        _untypedColumns,
+                        CaptureTextSource);
                 }
 
                 return _cachedDataRecord;

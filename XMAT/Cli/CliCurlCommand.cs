@@ -155,7 +155,7 @@ namespace XMAT.Cli
             HeadlessStorage.Configure(output.WorkPath);
             CliReplay curl = request.Replay;
             OperationResult<ReplayExport> prepared = new ReplayOperation().PrepareForExport(
-                CliSaveRequestCommand.CreateRequest(request, requestBody, file?.Content), cancellationToken);
+                CliSaveRequestCommand.CreateRequest(request, requestBody, file?.Content, curl.AcceptStoredText), cancellationToken);
             foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
@@ -185,6 +185,8 @@ namespace XMAT.Cli
                 report.Curl.InputKind = prepared.Value.InputKind;
                 report.Curl.InputSha256 = prepared.Value.InputSha256;
             }
+
+            report.Curl.StoredText = prepared.Value.StoredText ?? CliStoredText.NotApplicable;
 
             if (!curl.AllowOriginChange && prepared.Value.Items.Any(item => item.Draft.ChangesOrigin))
             {

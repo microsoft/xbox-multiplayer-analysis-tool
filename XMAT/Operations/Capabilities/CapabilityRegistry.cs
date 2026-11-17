@@ -15,6 +15,7 @@ namespace XMAT.Operations.Capabilities
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
         internal const string ReplayOperation = "XMAT.Operations.Replay.ReplayOperation";
+        internal const string MarkCaptureTextOperation = "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
         internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
         internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
 
@@ -109,6 +110,12 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
+            Capability.Supported(
+                "capture-file.mark-text",
+                "Mark or repair capture text storage",
+                "S10",
+                cli: "mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]",
+                operation: MarkCaptureTextOperation),
             // One operation exports every format: File > Export and Export Sanitized (the selected tab) and the capture
             // list's row menu (the selected or the visible sessions), whose save dialog offers each format.
             Capability.Supported(
@@ -242,8 +249,8 @@ namespace XMAT.Operations.Capabilities
                     "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
                     "[--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] " +
-                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] " +
-                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--accept-stored-text] " +
+                    "[--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
                 {
@@ -295,7 +302,8 @@ namespace XMAT.Operations.Capabilities
                 cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
                     "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
                     "[--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
-                    "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
                 {
@@ -314,7 +322,8 @@ namespace XMAT.Operations.Capabilities
                 cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
                     "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
                     "[--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1] " +
-                    "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
                 {

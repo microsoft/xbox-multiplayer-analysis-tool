@@ -60,7 +60,7 @@ namespace XMAT.Tests.Replay
                     ("POST", uri.Scheme, host, port?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "", uri.PathAndQuery, "201"),
                     (record.Method, record.Scheme, record.Host, record.Port, record.Path, record.Status));
                 Assert.Equal(
-                    $"POST {target} HTTP/1.1\r\nHost: {authority}\r\nX'Name: apostrophe\r\nX-Twice: 1,2\r\nContent-Length: 300\r\n\r\n",
+                    $"POST {target} HTTP/1.1\r\nHost: {authority}\r\nX'Name: apostrophe\r\nX-Twice: 1\r\nx-twice: 2\r\nContent-Length: 300\r\n\r\n",
                     record.RequestLineAndHeaders);
                 Assert.Equal(body, record.RequestBody);
                 Assert.Equal("HTTP/1.1 201 Created\r\nX-Latin: caf\u00e9 \u00ff\r\nX-Empty: \r\n\r\n", record.ResponseLineAndHeaders);

@@ -179,6 +179,7 @@ namespace XMAT
             CaptureExportErrorCodes.FormatMismatch => "EXPORT_ERROR_FORMAT",
             CaptureExportErrorCodes.InputLimit => "EXPORT_ERROR_LIMIT",
             CaptureExportErrorCodes.InvalidHttp or CaptureExportErrorCodes.InvalidBody => "EXPORT_ERROR_INPUT",
+            CaptureExportErrorCodes.TextAmbiguous => "CAPTURE_TEXT_EXPORT_POLICY_REQUIRED",
             "export.snapshot.changed" or "export.no-eligible-rows" => "EXPORT_ERROR_CHANGED",
             CaptureExportErrorCodes.WriteFailed or CaptureExportErrorCodes.SanitizerFailed => "EXPORT_ERROR_WRITE",
             _ => "EXPORT_ERROR_UNKNOWN",

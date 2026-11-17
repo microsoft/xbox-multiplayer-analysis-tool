@@ -141,8 +141,8 @@ namespace XMAT.Cli
             // Isolation comes first, as for analyze: legacy statics that keep files use the private staging folder.
             HeadlessStorage.Configure(output.WorkPath);
             CliReplay save = request.Replay;
-            OperationResult<ReplayExport> prepared =
-                new ReplayOperation().PrepareForExport(CreateRequest(request, requestBody, file?.Content), cancellationToken);
+            OperationResult<ReplayExport> prepared = new ReplayOperation().PrepareForExport(
+                CreateRequest(request, requestBody, file?.Content, save.AcceptStoredText), cancellationToken);
             foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
@@ -172,6 +172,8 @@ namespace XMAT.Cli
                 report.SaveRequest.InputKind = prepared.Value.InputKind;
                 report.SaveRequest.InputSha256 = prepared.Value.InputSha256;
             }
+
+            report.SaveRequest.StoredText = prepared.Value.StoredText ?? CliStoredText.NotApplicable;
 
             RequestFileProfile profile = save.IncludeSensitive ? RequestFileProfile.Content : RequestFileProfile.Template;
             if (profile == RequestFileProfile.Content && !save.AllowOriginChange &&
@@ -228,10 +230,13 @@ namespace XMAT.Cli
         }
 
         // The source and edits of save-request and curl: a capture file's selection, a request file's request, or a new one
-        // whose URL is the --url edit.
-        internal static ReplayRequest CreateRequest(CliRequest request, CliRequestBody requestBody, RequestFileContent file)
+        // whose URL is the --url edit. acceptStoredText is the command's --accept-stored-text, which only a capture file's
+        // unmarked text needs; every other source ignores it.
+        internal static ReplayRequest CreateRequest(
+            CliRequest request, CliRequestBody requestBody, RequestFileContent file, bool acceptStoredText)
         {
             CliReplay save = request.Replay;
+            var options = new ReplayOptions(AcceptStoredText: acceptStoredText);
             var edits = new ReplayEdits(
                 Url: save.Url,
                 Method: save.Method,
@@ -250,13 +255,13 @@ namespace XMAT.Cli
                         selection,
                         request.DeviceId,
                         (request.Limits ?? CliLimits.Default).ToAnalysisLimits()),
-                    null,
+                    options,
                     edits);
             }
 
             // A request file's request, or a new one whose URL is the --url edit.
             RequestReplayDraft draft = file != null ? RequestReplayDraft.FromRequestFile(file) : new RequestReplayDraft();
-            return new ReplayRequest(ReplaySource.FromDraft(draft), null, edits);
+            return new ReplayRequest(ReplaySource.FromDraft(draft), options, edits);
         }
     }
 }

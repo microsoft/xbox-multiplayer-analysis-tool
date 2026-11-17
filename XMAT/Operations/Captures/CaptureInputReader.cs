@@ -132,7 +132,11 @@ namespace XMAT.Operations.Captures
                                 ownsRecords: true),
                         },
                         inputIdentity: SqLtFileIdentity.FromHandle(snapshot.SafeFileHandle),
-                        inputPath: input.Path),
+                        inputPath: input.Path,
+                        storedText: new StoredTextSummary(
+                            "notApplicable",
+                            "notNeeded"),
+                        textSource: CaptureTextSource.Literal),
                     _ => throw new CaptureInputException(
                         "analysis.input.unsupported",
                         "The analysis input format is unsupported."),
@@ -257,6 +261,25 @@ namespace XMAT.Operations.Captures
             {
                 using SqLtReadonlyDatabase database = OpenCaptureDatabase(path, limits);
                 string inputSha256 = ComputeSha256(database, cancellationToken);
+                StoredTextSummary storedText =
+                    database.CaptureTextSource.Semantics ==
+                        CaptureTextSemantics.Literal
+                        ? new StoredTextSummary(
+                            "literal",
+                            "notNeeded")
+                        : new StoredTextSummary(
+                            "ambiguousUnmarked",
+                            "notNeeded");
+                if (database.CaptureTextSource.Semantics ==
+                    CaptureTextSemantics.AmbiguousUnmarked)
+                {
+                    diagnostics.Add(
+                        new OperationDiagnostic(
+                            "capture.text.ambiguous",
+                            OperationDiagnosticSeverity.Warning,
+                            "This capture has no XMAT text-format marker. XMAT treats its stored text as ambiguous and will use it unchanged; adjacent double quotation marks may be original data or may have been added by an older XMAT version."));
+                }
+
                 IReadonlyDataTable deviceTable = database.TableByName(CaptureDevicesTableName);
                 IReadonlyDataTable webProxyTable = database.TableByName(WebServiceCaptureMethod.TableName);
                 ValidateTable(deviceTable, CaptureDeviceFields);
@@ -347,7 +370,9 @@ namespace XMAT.Operations.Captures
                     ((SqLtReadonlyDataTable)deviceTable).Columns,
                     deviceRows,
                     database.Identity,
-                    path);
+                    path,
+                    storedText,
+                    database.CaptureTextSource);
             }
             catch (OperationCanceledException)
             {
@@ -396,6 +421,10 @@ namespace XMAT.Operations.Captures
                     SqLtSchemaFailure.UnsupportedLocation => new CaptureInputException(
                         "analysis.input.location-unsupported",
                         "The capture database location cannot be opened safely.",
+                        ex),
+                    SqLtSchemaFailure.UnsupportedVersion => new CaptureInputException(
+                        "capture.format.future",
+                        SqLtSchemaProfile.UnsupportedVersionMessage,
                         ex),
                     _ => new CaptureInputException(
                         "analysis.input.schema",
@@ -650,7 +679,9 @@ namespace XMAT.Operations.Captures
             IReadOnlyList<SqLtSchemaColumn> deviceFields = null,
             IReadOnlyList<IDataRecord> deviceRecords = null,
             SqLtFileIdentity? inputIdentity = null,
-            string inputPath = null)
+            string inputPath = null,
+            StoredTextSummary storedText = null,
+            CaptureTextSource textSource = null)
         {
             Kind = kind;
             InputSha256 = inputSha256;
@@ -660,10 +691,17 @@ namespace XMAT.Operations.Captures
             DeviceRecords = deviceRecords;
             InputIdentity = inputIdentity;
             InputPath = inputPath;
+            StoredText = storedText;
+            TextSource = textSource;
         }
 
         internal AnalysisInputKind Kind { get; }
         internal string InputSha256 { get; }
+        internal StoredTextSummary StoredText { get; }
+
+        // The source of a capture file's stored text (CaptureRecordSet.TextSource); null for records, which carry
+        // their own.
+        internal CaptureTextSource TextSource { get; }
         internal IReadOnlyList<LoadedDevice> Devices { get; }
         internal IReadOnlyList<SqLtSchemaColumn> CaptureFields { get; }
         internal IReadOnlyList<SqLtSchemaColumn> DeviceFields { get; }

@@ -8,6 +8,12 @@ namespace XMAT
 {
     public static class UriUtils
     {
+        // The schemes that a capture's row can make a URL from: http and https, which XMAT captures, and ftp, which Fiddler
+        // also records. Any other scheme is unknown, as is an empty one, and so is the method that earlier imports stored as
+        // the scheme of a request line without one.
+        public static bool IsUrlScheme(string scheme) =>
+            scheme is "http" or "https" or "ftp";
+
         public static string GetAbsoluteUri(
             string uriScheme,
             string uriHost,

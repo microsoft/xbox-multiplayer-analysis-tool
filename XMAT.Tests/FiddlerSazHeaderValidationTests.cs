@@ -74,11 +74,44 @@ namespace XMAT.Tests
             AssertAgreement(NonAsciiName);
         }
 
+        // A request whose target is a path and whose Host header is missing or blank is kept without a host: nothing else
+        // names one.
         [Theory]
         [InlineData("")]
         [InlineData("Host:\r\n")]
         [InlineData("Host:   \r\n")]
-        public void MissingOrBlankHost_IsKeptWithoutInferringTheRequestTargetHost(
+        public void MissingOrBlankHost_IsKeptWithoutAHost(
+            string hostHeader)
+        {
+            string request =
+                "GET /path HTTP/1.1\r\n" +
+                hostHeader +
+                "User-Agent: XboxServicesAPI\r\n\r\n";
+            string response = BuildMessageWithHeaderLines(
+                response: true,
+                headerLines: 0,
+                malformed: false);
+
+            ProxyConnectionModel record = ParseMessages(
+                request,
+                response,
+                out int skipped);
+
+            Assert.NotNull(record);
+            Assert.Equal(string.Empty, record.Host);
+            Assert.Equal(string.Empty, record.Port);
+            Assert.Null(record.ActionableHost);
+            Assert.Equal("/path", record.Path);
+            Assert.Equal(0, skipped);
+        }
+
+        // A request whose target is an absolute URL takes its host from that URL when its Host header is missing or blank
+        // (RFC 9112 3.2.2), where it was once kept without a host.
+        [Theory]
+        [InlineData("")]
+        [InlineData("Host:\r\n")]
+        [InlineData("Host:   \r\n")]
+        public void MissingOrBlankHost_GivesWayToTheRequestTargetsHost(
             string hostHeader)
         {
             string request =
@@ -96,9 +129,9 @@ namespace XMAT.Tests
                 out int skipped);
 
             Assert.NotNull(record);
-            Assert.Equal(string.Empty, record.Host);
+            Assert.Equal("absolute.example.test", record.Host);
             Assert.Equal(string.Empty, record.Port);
-            Assert.Null(record.ActionableHost);
+            Assert.Equal("absolute.example.test", record.ActionableHost);
             Assert.Equal("/path", record.Path);
             Assert.Equal(0, skipped);
         }

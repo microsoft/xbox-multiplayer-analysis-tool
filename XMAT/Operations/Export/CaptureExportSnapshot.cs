@@ -42,7 +42,8 @@ namespace XMAT.Operations.Export
             string inputSha256,
             Func<IReadOnlyList<CaptureRowKey>, CancellationToken, CaptureExportChunk> readChunk,
             Action<string> validateDestination,
-            Action dispose = null)
+            Action dispose = null,
+            CaptureTextSource textSource = null)
         {
             CaptureFields = captureFields ?? throw new ArgumentNullException(nameof(captureFields));
             DeviceFields = deviceFields ?? throw new ArgumentNullException(nameof(deviceFields));
@@ -55,6 +56,7 @@ namespace XMAT.Operations.Export
             _readChunk = readChunk ?? throw new ArgumentNullException(nameof(readChunk));
             _validateDestination = validateDestination ?? (_ => { });
             _dispose = dispose;
+            TextSource = textSource;
         }
 
         public IReadOnlyList<SqLtSchemaColumn> CaptureFields { get; }
@@ -65,6 +67,7 @@ namespace XMAT.Operations.Export
         public string InputKind { get; }
         public SqLtFileIdentity? InputIdentity { get; }
         public string InputSha256 { get; }
+        public CaptureTextSource TextSource { get; }
 
         public CaptureExportChunk ReadChunk(
             IReadOnlyList<CaptureRowKey> keys,
@@ -183,7 +186,8 @@ namespace XMAT.Operations.Export
                 input.InputSha256,
                 ReadRows,
                 ValidateDestination,
-                input.Dispose);
+                input.Dispose,
+                input.TextSource);
         }
 
         public void Dispose()

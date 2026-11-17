@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -532,6 +533,110 @@ namespace XMAT.Tests.Cli
         [InlineData("NTFS", null, false)]
         public void IsSupportedStorage_IsOnlyLocalNtfs(string fileSystem, string devicePath, bool expected) =>
             Assert.Equal(expected, StorageAdmission.IsSupportedStorage(fileSystem, devicePath));
+
+        [Theory]
+        [InlineData("FAT32")]
+        [InlineData("ReFS")]
+        public void ProbeTarget_UsesInjectedHeldParentFactsWithoutCreatingAnything(
+            string fileSystem)
+        {
+            using var directory = new CliTestDirectory();
+            Assert.Null(
+                CliOutputFolder.CheckTarget(
+                    Path.Join(
+                        directory.Root,
+                        Results),
+                    out CliOutputTarget target));
+            Assert.Null(
+                CliOutputFolder.ProbeTarget(
+                    target));
+            bool inspectedHeldParent = false;
+
+            CliFailure failure =
+                CliOutputFolder.ProbeTarget(
+                    target,
+                    parent =>
+                    {
+                        Assert.False(
+                            parent.IsInvalid);
+                        inspectedHeldParent = true;
+                        return (
+                            FileSystemName: fileSystem,
+                            DevicePath:
+                                @"\Device\HarddiskVolume3\out");
+                    });
+
+            Assert.True(
+                inspectedHeldParent);
+            Assert.Equal(
+                (
+                    "cli.output.unprotected",
+                    CliExitCodes.Failed),
+                (
+                    failure?.Code,
+                    failure?.ExitCode));
+            Assert.Empty(
+                directory.Entries());
+        }
+
+        [Theory]
+        [InlineData("rename")]
+        [InlineData("delete")]
+        public void ReducedStagingDuplicateHasNoDeleteAccess(
+            string operation)
+        {
+            using var directory = new CliTestDirectory();
+            string targetPath =
+                Path.Join(
+                    directory.Root,
+                    Results);
+            Assert.Null(
+                CliOutputFolder.CheckTarget(
+                    targetPath,
+                    out CliOutputTarget target));
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    targetPath,
+                    "run");
+            using SafeFileHandle duplicate =
+                output.DuplicateStagingHandle();
+            IOException exception;
+            if (operation == "delete")
+            {
+                exception =
+                    Assert.Throws<IOException>(
+                        () => AnchoredHandles.MarkForDeletion(
+                            duplicate));
+            }
+            else
+            {
+                var parsed =
+                    new StorageTarget(
+                        target.Volume,
+                        target.Folders,
+                        target.Name);
+                Assert.Null(
+                    StorageAdmission.HoldParent(
+                        parsed,
+                        out StorageAnchor anchor));
+                using (anchor)
+                {
+                    exception =
+                        Assert.Throws<IOException>(
+                            () => AnchoredHandles.Rename(
+                                duplicate,
+                                anchor.Parent,
+                                "renamed-staging"));
+                }
+            }
+
+            Assert.Equal(
+                5,
+                Assert.IsType<Win32Exception>(
+                    exception.InnerException)
+                    .NativeErrorCode);
+            Assert.True(output.TryDiscard());
+        }
 
         private static void ConversionRace(bool symbolic, bool beforeCreating)
         {

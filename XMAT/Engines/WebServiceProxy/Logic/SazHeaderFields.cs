@@ -8,24 +8,26 @@ using System.Text;
 
 namespace XMAT.WebServiceCapture
 {
-    // The header fields of a SAZ message as the readers collect them: what WebHeaderCollection made of them, and also a
-    // name with an apostrophe, which HTTP allows and replay sends but WebHeaderCollection refuses. Repeated names, in any
-    // case, are one field under the first one's casing and position, with their values joined by a comma and no space,
-    // empty values included; a value is trimmed of tabs, line breaks and spaces. ToString gives the fields as
-    // WebHeaderCollection.ToString does: "Name: value" and CRLF for each, then CRLF. Lines are checked first
-    // (FiddlerSazHandler.IsValidHeaderLine).
+    // The header fields of a SAZ message as the readers collect them: the lines that WebHeaderCollection takes, and also a
+    // name with an apostrophe, which HTTP allows and replay sends but WebHeaderCollection refuses. Lines are checked first
+    // (FiddlerSazHandler.IsValidHeaderLine), and a value is trimmed of tabs, line breaks and spaces. ToString gives every
+    // field in the order it came, under its name as written: "Name: value" and CRLF for each, then CRLF. A repeated name
+    // keeps each of its lines, since joining them changes what some mean: a comma separates the values of most fields, but
+    // it is part of a Set-Cookie value (RFC 6265 3). The indexer and Count are a separate lookup view, as
+    // WebHeaderCollection gives one: a name in any case, with its values joined by a comma and no space.
     internal sealed class SazHeaderFields
     {
         private static readonly char[] TrimCharacters = { '\t', '\n', '\v', '\f', '\r', ' ' };
 
-        private readonly List<(string Name, List<string> Values)> _fields = new();
-        private readonly Dictionary<string, int> _positions = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<(string Name, string Value)> _fields = new();
+        private readonly Dictionary<string, List<string>> _values = new(StringComparer.OrdinalIgnoreCase);
 
-        internal int Count => _fields.Count;
+        // The number of names, in any case.
+        internal int Count => _values.Count;
 
         // The values of a name, in any case, joined by commas; null when there is none.
         internal string this[string name] =>
-            _positions.TryGetValue(name, out int position) ? string.Join(",", _fields[position].Values) : null;
+            _values.TryGetValue(name, out List<string> values) ? string.Join(",", values) : null;
 
         // A header line that IsValidHeaderLine accepted: the name before its first colon, the value after it, trimmed.
         internal void Add(string line)
@@ -39,14 +41,14 @@ namespace XMAT.WebServiceCapture
 
             string name = line[..colon];
             string value = line[(colon + 1)..].Trim(TrimCharacters);
-            if (_positions.TryGetValue(name, out int position))
+            _fields.Add((name, value));
+            if (_values.TryGetValue(name, out List<string> values))
             {
-                _fields[position].Values.Add(value);
+                values.Add(value);
                 return;
             }
 
-            _positions.Add(name, _fields.Count);
-            _fields.Add((name, new List<string> { value }));
+            _values.Add(name, new List<string> { value });
         }
 
         public override string ToString()
@@ -57,9 +59,9 @@ namespace XMAT.WebServiceCapture
             }
 
             var text = new StringBuilder();
-            foreach ((string name, List<string> values) in _fields)
+            foreach ((string name, string value) in _fields)
             {
-                text.Append(name).Append(": ").AppendJoin(',', values).Append("\r\n");
+                text.Append(name).Append(": ").Append(value).Append("\r\n");
             }
 
             return text.Append("\r\n").ToString();

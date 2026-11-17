@@ -152,6 +152,7 @@ namespace XMAT.WebServiceCapture
                     var rows = connections.Select(
                         connection => connection.ToDataTableValues(captureController.DeviceName, fields));
                     rowIds = importTable.ReplaceImportedRows(
+                        CaptureTextSource.Literal,
                         new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
                         rows);
                 }

@@ -12,13 +12,19 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataset : IDataset, IRawCaptureDataset, IDisposable
+    internal class SqLtDataset :
+        IDataset,
+        IRawCaptureDataset,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
         public IEnumerable<IFieldDefinition> FieldDefs { get { return GetFieldDefs(); } }
 
         public IEnumerable<IDataRecord> DataRecords { get { return GetDataRecords(); } }
 
         public IReadOnlyList<SqLtSchemaColumn> Columns { get; }
+
+        public CaptureTextSource CaptureTextSource { get; }
 
         public IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId)
         {
@@ -45,20 +51,32 @@ namespace XMAT.DataAbstractionLayer
                         _sourceTableName));
             _commandBuilder.Append(@" WHERE");
 
-            string whereValues = string.Join(" AND ", fieldNamesAndValues.Select(
-                (x) =>
-                {
-                    var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
-                    var fieldName = fieldDef.Name;
-                    var fieldValue = fieldDef.FieldValueAsString(x.Value);
-                    return " " +
-                        QuoteIdentifier(fieldName) +
+            FieldDefinition[] filterFields =
+                fieldNamesAndValues.Select(
+                    value =>
+                        (FieldDefinition)_fieldDefinitions[value.Name])
+                    .ToArray();
+            string[] parameters = filterFields.Select(
+                (_, index) => $"$value{index}").ToArray();
+            string whereValues = string.Join(
+                " AND ",
+                filterFields.Select(
+                    (field, index) =>
+                        " " +
+                        QuoteIdentifier(field.Name) +
                         " = " +
-                        fieldValue;
-                }));
+                        parameters[index]));
             _commandBuilder.Append(whereValues);
 
+            _commandInterface.Parameters.Clear();
             _commandInterface.CommandText = _commandBuilder.ToString();
+            for (int index = 0; index < filterFields.Length; index++)
+            {
+                _commandInterface.Parameters.AddWithValue(
+                    parameters[index],
+                    filterFields[index].ValueAsParameter(
+                        fieldNamesAndValues[index].Value));
+            }
 
             if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
             {
@@ -84,9 +102,17 @@ namespace XMAT.DataAbstractionLayer
                 .Append(
                     QuoteIdentifier(
                         _sourceTableName));
-            _commandBuilder.Append($" WHERE id >= {firstRowId} LIMIT {limit}");
+            _commandBuilder.Append(
+                " WHERE id >= $firstRowId LIMIT $limit");
 
+            _commandInterface.Parameters.Clear();
             _commandInterface.CommandText = _commandBuilder.ToString();
+            _commandInterface.Parameters.AddWithValue(
+                "$firstRowId",
+                firstRowId);
+            _commandInterface.Parameters.AddWithValue(
+                "$limit",
+                limit);
             var dataReader = _commandInterface.ExecuteReader();
 
             return Track(dataReader);
@@ -96,8 +122,10 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string sourceTableName,
             IDictionary<string, IFieldDefinition> fieldsToInclude,
-            IReadOnlyList<SqLtSchemaColumn> columns)
+            IReadOnlyList<SqLtSchemaColumn> columns,
+            CaptureTextSource captureTextSource)
         {
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             _sourceTableName = sourceTableName;
             _commandInterface = new SqliteCommand();
             _commandInterface.Connection = connection;
@@ -120,6 +148,7 @@ namespace XMAT.DataAbstractionLayer
                 .Where(column => column.DeclaredType == SqLtDeclaredType.None)
                 .Select(column => column.Name)
                 .ToHashSet(StringComparer.Ordinal);
+            CaptureTextSource = captureTextSource;
         }
 
         private IEnumerable<IFieldDefinition> GetFieldDefs()
@@ -145,6 +174,7 @@ namespace XMAT.DataAbstractionLayer
                     QuoteIdentifier(
                         _sourceTableName));
 
+            _commandInterface.Parameters.Clear();
             _commandInterface.CommandText = _commandBuilder.ToString();
             var dataReader = _commandInterface.ExecuteReader();
 
@@ -215,6 +245,7 @@ namespace XMAT.DataAbstractionLayer
                 _untypedColumns,
                 dataReader,
                 null,
+                CaptureTextSource,
                 disposed =>
                 {
                     lock (_enumerablesLock)

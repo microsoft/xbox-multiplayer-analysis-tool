@@ -57,7 +57,7 @@ namespace XMAT.WebServiceCapture
         }
 
         // Avoid looping through Local PC capture, sharing cookies, or forwarding credentials via redirects.
-        // Certificate validation remains the platform default; response encodings stay available to inspectors.
+        // Certificates are validated with the replay policy (ReplayTls); response encodings stay available to inspectors.
         internal static SocketsHttpHandler CreateHandler() => ReplaySender.CreateHandler();
 
         // Creates the shared operation that every check and send goes through; tests observe it.

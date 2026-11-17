@@ -1275,8 +1275,9 @@ namespace XMAT.Tests
                 (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
             SazArchive.Write(original, new[] { source });
             var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
-            Assert.Contains("a=1,sid=", imported.RequestLineAndHeaders);
-            Assert.Contains("Path=/,sid=", imported.ResponseLineAndHeaders);
+            Assert.Contains("\r\nCookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n", imported.RequestLineAndHeaders);
+            Assert.Contains(
+                "\r\nSet-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY", imported.ResponseLineAndHeaders);
             var evidence = ExportRecords(imported);
             using var response = JsonDocument.Parse(Body(evidence));
 

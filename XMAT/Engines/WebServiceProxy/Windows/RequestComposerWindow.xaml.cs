@@ -15,6 +15,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.Operations.Storage;
@@ -785,10 +786,10 @@ namespace XMAT.WebServiceCapture
 
         // Why the operation refused a run: what the composer says itself about Fiddler's control headers, the transport
         // options, Upstream proxy's included, a client certificate (ClientCertificateRefusalKey), Windows authentication
-        // (WindowsAuthRefusalKey) and a part that a request file left out; for a sequence whose request cannot be built, what
-        // building it with the widest number says, as a single send says it; otherwise the operation's message, such as a
-        // run that is too large. Building the widest request parses it, so this runs off the UI thread only (Previewed,
-        // RunRefusalText).
+        // (WindowsAuthRefusalKey), stored text from a capture without the text-format marker, as Edit and resend refuses
+        // it, and a part that a request file left out; for a sequence whose request cannot be built, what building it with
+        // the widest number says, as a single send says it; otherwise the operation's message, such as a run that is too
+        // large. Building the widest request parses it, so this runs off the UI thread only (Previewed, RunRefusalText).
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
             string explained = diagnostic?.Code switch
@@ -799,6 +800,7 @@ namespace XMAT.WebServiceCapture
                 ReplayOperation.ConnectToDeniedCode => "COMPOSER_CONNECT_TO_DENIED",
                 ReplayOperation.ProxyConnectToCode => "COMPOSER_PROXY_CONNECT_TO",
                 ReplayOperation.ProxyPolicyCode => "COMPOSER_PROXY_POLICY",
+                ReplayOperation.StoredTextAmbiguousCode => "REPLAY_CAPTURE_TEXT_AMBIGUOUS",
                 _ => ClientCertificateRefusalKey(diagnostic?.Code) ?? WindowsAuthRefusalKey(diagnostic?.Code),
             };
             if (explained != null)
@@ -2125,6 +2127,8 @@ namespace XMAT.WebServiceCapture
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
+            if (RefusesStoredText(_draft.CaptureTextSource, ReplayOperation.StoredTextAmbiguousExportCode))
+                return;
 
             UpdateDraft();
             RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
@@ -2358,6 +2362,9 @@ namespace XMAT.WebServiceCapture
                 StatusText.Text = Localization.GetLocalizedString("COMPOSER_DROP_UNSUPPORTED");
                 return false;
             }
+
+            if (RefusesStoredText(session.Capture.CaptureTextSource, ReplayOperation.StoredTextAmbiguousCode))
+                return false;
 
             RequestReplayDraft draft;
             try
@@ -2746,6 +2753,8 @@ namespace XMAT.WebServiceCapture
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
+            if (RefusesStoredText(_draft.CaptureTextSource, ReplayOperation.StoredTextAmbiguousExportCode))
+                return;
             if (!TryFreezeForCurl(
                 copying: true,
                 out RequestReplayDraft draft,
@@ -2859,6 +2868,8 @@ namespace XMAT.WebServiceCapture
         internal async Task SaveCurlScriptAsync()
         {
             if (_state != ComposerState.Idle || _closed)
+                return;
+            if (RefusesStoredText(_draft.CaptureTextSource, ReplayOperation.StoredTextAmbiguousExportCode))
                 return;
             if (!TryFreezeForCurl(
                 copying: false,
@@ -3106,6 +3117,26 @@ namespace XMAT.WebServiceCapture
         private void ShowError(Exception exception) => StatusText.Text = ErrorText(exception.Message);
 
         private static string ErrorText(string message) => Localization.GetLocalizedString("COMPOSER_ERROR", message);
+
+        // Until the composer asks for a decision bound to a capture's own file, a request whose stored text
+        // comes from an XMAT capture without the text-format marker is refused: a drop of one, before anything is loaded or
+        // asked (replay.capture-text.ambiguous), and Save request as and both cURL exports of one in the editors, before
+        // anything is asked, prepared, copied or written (capture.text.ambiguous-export). A source that is unknown counts
+        // as unmarked. True, with the reason in the status, when refused; nothing else changes.
+        private bool RefusesStoredText(CaptureTextSource source, string code)
+        {
+            if (source?.Semantics == CaptureTextSemantics.Literal)
+                return false;
+            StatusText.Text = StoredTextRefusalText(code);
+            return true;
+        }
+
+        // The words of that refusal for a replay path (ReplayOperation.StoredTextAmbiguousCode) or for saving or exporting
+        // (ReplayOperation.StoredTextAmbiguousExportCode): they name only a marked copy, never the command line's flag.
+        internal static string StoredTextRefusalText(string code) => Localization.GetLocalizedString(
+            code == ReplayOperation.StoredTextAmbiguousExportCode
+                ? "COMPOSER_EXPORT_TEXT_AMBIGUOUS"
+                : "REPLAY_CAPTURE_TEXT_AMBIGUOUS");
 
         private static bool IsInputError(Exception exception) =>
             exception is ArgumentException or FormatException or InvalidOperationException or NotSupportedException;
