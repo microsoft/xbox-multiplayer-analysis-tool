@@ -9,6 +9,8 @@
     <IsTestProject>true</IsTestProject>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <!-- Every run takes these settings, including CI's and Visual Studio's: the test host renders at 96 DPI. -->
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)XMAT.Tests.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>

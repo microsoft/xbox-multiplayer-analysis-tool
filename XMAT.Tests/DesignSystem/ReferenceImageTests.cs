@@ -126,9 +126,10 @@ namespace XMAT.Tests.DesignSystem
             return look;
         }
 
-        // ELEMENT laid out on its own at 96 DPI, on BACKGROUND. An element outside a window rounds its layout to the
-        // system DPI, which follows the scale of the primary display when Windows was signed in to, so the picture sets
-        // the element's DPI to the bitmap's instead; the pictures are then the same on any machine.
+        // ELEMENT laid out on its own at 96 DPI, on BACKGROUND. The test host runs without DPI awareness
+        // (XMAT.Tests.runsettings), so Windows gives it a system DPI of 96 whatever scale it was signed in with; text
+        // measured at another scale would make pages a few pixels taller or shorter. The element's DPI is also set to
+        // the bitmap's, so the pictures are the same on any machine.
         private static BitmapSource Capture(FrameworkElement element, Brush background)
         {
             VisualTreeHelper.SetRootDpi(element, new DpiScale(1, 1));
