@@ -147,6 +147,46 @@ namespace XMAT.Tests
             });
         }
 
+        // What's shown fills the overview: the requests, the status and the busiest hosts share its width in equal columns,
+        // with the hosts kept clear of the hide button, and the line, the status bar and the host bars stretch to fill
+        // them. When an equal share is too narrow for a column, that column keeps its width and the others share the rest.
+        [Fact]
+        public void WideWidths_ShareTheWidthInEqualColumns_AndTheChartsStretch()
+        {
+            _application.Run(window =>
+            {
+                window.Width = 1600;
+                TrafficOverview overview = Show(window, SampleRows(), 1400);
+                TrafficOverviewPanel cells = overview.Cells;
+                Assert.Equal(TrafficOverviewReduction.None, cells.Reduction);
+                Rect Requests() => Rect.Union(Bounds(overview.RequestsCell, cells), Bounds(overview.RequestsLineCell, cells));
+                Assert.Equal(Requests().Width, Bounds(overview.StatusChart, cells).Width, 1);
+                Assert.Equal(Requests().Width, Bounds(overview.HostsCell, cells).Width, 1);
+                Assert.Equal(cells.ActualWidth - cells.HostsReserve, Bounds(overview.HostsCell, cells).Right, 1);
+                Assert.Equal(overview.RequestsLineCell.ActualWidth, overview.Sparkline.ActualWidth, 1);
+                Assert.Equal(overview.StatusChart.ActualWidth, overview.StatusBar.ActualWidth, 1);
+                Assert.True(overview.Sparkline.ActualWidth > 240);
+                Border[] bars = Descendants(overview.HostList).OfType<Border>().Where(border => border.Height == 4).ToArray();
+                Assert.Equal(3, bars.Length);
+                Assert.All(bars, bar => Assert.True(bar.ActualWidth > 160, $"A host bar is {bar.ActualWidth}px long."));
+
+                double requests = overview.RequestsCell.DesiredSize.Width + overview.RequestsLineCell.DesiredSize.Width;
+                double status = overview.StatusChart.DesiredSize.Width;
+                double others = Math.Max(requests, overview.HostsCell.DesiredSize.Width) + 10;
+                Assert.True(others < status, "The sample's status legend makes the status the widest column.");
+                double dividers = cells.Children.Cast<UIElement>()
+                    .Where(child => TrafficOverviewPanel.GetColumn(child) < 0).Sum(child => child.DesiredSize.Width);
+                double around = ((FrameworkElement)overview.Parent).Width - cells.ActualWidth;
+                ((FrameworkElement)overview.Parent).Width = around + dividers + cells.HostsReserve + status + 2 * others;
+                WpfTestHost.Pump();
+                Assert.Equal(TrafficOverviewReduction.None, cells.Reduction);
+                Assert.Equal(status, Bounds(overview.StatusChart, cells).Width, 1);
+                Assert.Equal(others, Requests().Width, 1);
+                Assert.Equal(others, Bounds(overview.HostsCell, cells).Width, 1);
+                Assert.Equal(cells.ActualWidth - cells.HostsReserve, Bounds(overview.HostsCell, cells).Right, 1);
+            });
+        }
+
         [Fact]
         public void SelectingAStatusClassOrAHost_RequestsAFilter_FromTheMouseOrTheKeyboard()
         {

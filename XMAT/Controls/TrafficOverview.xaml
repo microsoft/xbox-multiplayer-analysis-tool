@@ -56,7 +56,7 @@
                 <local:TrafficOverviewPanel x:Name="Cells" Style="{DynamicResource TrafficOverviewCellsStyle}"
                                             Grid.IsSharedSizeScope="True">
                     <!-- Requests: the count. Screen readers read the cell as one line from the count. -->
-                    <Grid x:Name="RequestsCell" VerticalAlignment="Top">
+                    <Grid x:Name="RequestsCell" local:TrafficOverviewPanel.Column="0" VerticalAlignment="Top">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
                             <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
@@ -71,8 +71,10 @@
                                    Text="{Binding TotalText}" AutomationProperties.Name="{Binding RequestsName}"/>
                     </Grid>
                     <!-- Requests per second over the capture, with the rate in the last second above the line's end while
-                         capturing. It is the last to go, when even the status as text doesn't fit. -->
-                    <Grid x:Name="RequestsLineCell" local:TrafficOverviewPanel.Cell="RequestsLine" VerticalAlignment="Top">
+                         capturing. It is the last to go, when even the status as text doesn't fit. The line stretches to
+                         fill the column. -->
+                    <Grid x:Name="RequestsLineCell" local:TrafficOverviewPanel.Cell="RequestsLine"
+                          local:TrafficOverviewPanel.Column="0" VerticalAlignment="Top">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
                             <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
@@ -88,8 +90,9 @@
                     </Grid>
                     <Border Style="{DynamicResource TrafficOverviewDividerStyle}"/>
 
-                    <!-- Status: a bar of the status classes over a legend of their counts. -->
-                    <StackPanel x:Name="StatusChart" local:TrafficOverviewPanel.Cell="Chart" VerticalAlignment="Top">
+                    <!-- Status: a bar of the status classes, as wide as the column, over a legend of their counts. -->
+                    <StackPanel x:Name="StatusChart" local:TrafficOverviewPanel.Cell="Chart" local:TrafficOverviewPanel.Column="1"
+                                VerticalAlignment="Top">
                         <TextBlock x:Name="StatusLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
                         <local:TrafficStatusBar x:Name="StatusBar" Style="{DynamicResource TrafficOverviewStatusBarStyle}"
                                                 Counts="{Binding ClassCounts}"/>
@@ -102,7 +105,8 @@
                     </StackPanel>
 
                     <!-- The same without No status, which leaves first to make room for the busiest hosts. -->
-                    <StackPanel x:Name="CompactChart" local:TrafficOverviewPanel.Cell="CompactChart" VerticalAlignment="Top">
+                    <StackPanel x:Name="CompactChart" local:TrafficOverviewPanel.Cell="CompactChart"
+                                local:TrafficOverviewPanel.Column="1" VerticalAlignment="Top">
                         <TextBlock x:Name="CompactStatusLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
                         <local:TrafficStatusBar x:Name="CompactBar" Style="{DynamicResource TrafficOverviewStatusBarStyle}"
                                                 Counts="{Binding CompactClassCounts}"/>
@@ -114,7 +118,8 @@
                     </StackPanel>
 
                     <!-- At narrow widths the status is one line of text: successes and errors. -->
-                    <StackPanel x:Name="StatusTextCell" local:TrafficOverviewPanel.Cell="Text" VerticalAlignment="Top">
+                    <StackPanel x:Name="StatusTextCell" local:TrafficOverviewPanel.Cell="Text"
+                                local:TrafficOverviewPanel.Column="1" VerticalAlignment="Top">
                         <TextBlock x:Name="StatusTextLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
                         <ItemsControl x:Name="StatusText" Style="{DynamicResource TrafficOverviewStatusTextStyle}"
                                       Focusable="False" KeyboardNavigation.TabNavigation="Once"
@@ -123,16 +128,16 @@
                                       ItemTemplateSelector="{StaticResource TextTemplates}"/>
                     </StackPanel>
 
-                    <!-- The three busiest hosts, each with a bar in proportion to the busiest. -->
+                    <!-- The three busiest hosts, each with a bar in proportion to the busiest, as wide as the column allows. -->
                     <Border local:TrafficOverviewPanel.Cell="Hosts" Style="{DynamicResource TrafficOverviewDividerStyle}"/>
-                    <StackPanel x:Name="HostsCell" local:TrafficOverviewPanel.Cell="Hosts" Orientation="Horizontal"
-                                VerticalAlignment="Top">
+                    <DockPanel x:Name="HostsCell" local:TrafficOverviewPanel.Cell="Hosts" local:TrafficOverviewPanel.Column="2"
+                               VerticalAlignment="Top">
                         <TextBlock x:Name="HostsLabel" Style="{DynamicResource TrafficOverviewHostsLabelStyle}"/>
                         <ItemsControl x:Name="HostList" Grid.IsSharedSizeScope="True"
                                       Focusable="False" KeyboardNavigation.TabNavigation="Once"
                                       KeyboardNavigation.DirectionalNavigation="Cycle"
                                       ItemsSource="{Binding HostParts}" ItemTemplate="{StaticResource HostButton}"/>
-                    </StackPanel>
+                    </DockPanel>
                 </local:TrafficOverviewPanel>
 
                 <Button x:Name="HideButton" Click="Hide_Click" Style="{DynamicResource TrafficOverviewHideButtonStyle}"/>

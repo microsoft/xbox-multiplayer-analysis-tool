@@ -1,8 +1,9 @@
 <!-- The traffic overview above the capture timeline (Controls/TrafficOverview.xaml), as designed in G11 "Traffic overview
-     while capturing": a 56px well in the text area color; 11px labels, a 16px total and a 12px rate; a 140x28 line of
-     requests per second; a 180x8 status bar in the timeline's status colors over a legend of counts; and the three busiest
-     hosts with 60px bars. Every color is a theme brush, so Light, Dark and High Contrast apply. Only the new look merges
-     this dictionary; the original look has no overview. -->
+     while capturing": a 56px well in the text area color; 11px labels, a 16px total and a 12px rate; a line of requests
+     per second at least 140x28; a status bar at least 180x8 in the timeline's status colors over a legend of counts; and
+     the three busiest hosts with bars at least 60px long. The requests, the status and the hosts share the well's width
+     in equal columns where they fit, and the line and bars stretch to fill theirs. Every color is a theme brush, so
+     Light, Dark and High Contrast apply. Only the new look merges this dictionary; the original look has no overview. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib"
@@ -30,11 +31,11 @@
         <Setter Property="MinHeight" Value="56"/>
     </Style>
 
-    <!-- The cells sit 12px from the sides and 5px from the top and bottom; the busiest hosts keep clear of the hide
-         button in the corner. -->
+    <!-- The cells sit 12px from the sides and 5px from the top and bottom; the busiest hosts keep 8px clear of the hide
+         button in the corner, which reaches 8px into the cells. -->
     <Style x:Key="TrafficOverviewCellsStyle" TargetType="local:TrafficOverviewPanel">
         <Setter Property="Margin" Value="12,5"/>
-        <Setter Property="HostsReserve" Value="8"/>
+        <Setter Property="HostsReserve" Value="16"/>
         <Setter Property="ClipToBounds" Value="True"/>
     </Style>
 
@@ -74,7 +75,7 @@
     </Style>
 
     <Style x:Key="TrafficOverviewSparklineStyle" TargetType="local:TrafficSparkline">
-        <Setter Property="Width" Value="140"/>
+        <Setter Property="MinWidth" Value="140"/>
         <Setter Property="Height" Value="28"/>
         <Setter Property="LineBrush" Value="{DynamicResource AccentBrush}"/>
         <Setter Property="IsHitTestVisible" Value="False"/>
@@ -91,10 +92,9 @@
     <!-- The status bar, 4px below its label and above its legend. Its tooltip opens 23px below it, 4px under the legend
          (19px). -->
     <Style x:Key="TrafficOverviewStatusBarStyle" TargetType="local:TrafficStatusBar">
-        <Setter Property="Width" Value="180"/>
+        <Setter Property="MinWidth" Value="180"/>
         <Setter Property="Height" Value="8"/>
         <Setter Property="Margin" Value="0,4"/>
-        <Setter Property="HorizontalAlignment" Value="Left"/>
         <Setter Property="ToolTipOffset" Value="23"/>
         <Setter Property="SuccessBrush" Value="{DynamicResource SuccessFillBrush}"/>
         <Setter Property="RedirectBrush" Value="{DynamicResource InfoFillBrush}"/>
@@ -223,7 +223,8 @@
         </Setter>
     </Style>
 
-    <!-- A busiest host: its name, a 4px bar against the busiest host and its count, in columns the three rows share. -->
+    <!-- A busiest host: its name, a 4px bar against the busiest host and its count, in columns the three rows share. The
+         bar takes the row's spare width. -->
     <Style x:Key="TrafficOverviewHostItemStyle" TargetType="Button">
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewLabelFontSize}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
@@ -236,14 +237,14 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" SharedSizeGroup="TrafficOverviewHostName"/>
                             <ColumnDefinition Width="6"/>
-                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*" MinWidth="60"/>
                             <ColumnDefinition Width="6"/>
                             <ColumnDefinition Width="Auto" SharedSizeGroup="TrafficOverviewHostCount"/>
                         </Grid.ColumnDefinitions>
                         <Border x:Name="Hover" Grid.ColumnSpan="5" Margin="-2,0" CornerRadius="2"/>
                         <TextBlock Text="{Binding Label}" Foreground="{TemplateBinding Foreground}" MaxWidth="120"
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                        <Border Grid.Column="2" Width="60" Height="4" CornerRadius="1" HorizontalAlignment="Left"
+                        <Border Grid.Column="2" Height="4" CornerRadius="1"
                                 VerticalAlignment="Center" Background="{DynamicResource ColumnHeaderDividerBrush}"
                                 RenderTransformOrigin="0,0.5">
                             <Border.RenderTransform>

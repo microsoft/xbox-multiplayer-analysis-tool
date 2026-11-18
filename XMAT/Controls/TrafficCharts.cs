@@ -413,12 +413,19 @@ namespace XMAT
     // Lays the traffic overview's cells side by side and drops what doesn't fit: first No status leaves the status chart,
     // then the busiest hosts go, then the status chart gives way to the status as text, and last the requests line goes
     // before the status is cut off. A dropped cell is hidden rather than collapsed, so it is still measured and returns as
-    // soon as it fits; hidden cells take no room, focus or clicks.
+    // soon as it fits; hidden cells take no room, focus or clicks. What's shown fills the width: the columns (Column) share
+    // it as equally as their cells allow, and each column's last shown cell, whose chart stretches, takes its extra width.
     public sealed class TrafficOverviewPanel : Panel
     {
         public static readonly DependencyProperty CellProperty = DependencyProperty.RegisterAttached(
             "Cell", typeof(TrafficOverviewCell), typeof(TrafficOverviewPanel),
             new FrameworkPropertyMetadata(TrafficOverviewCell.Always, FrameworkPropertyMetadataOptions.AffectsParentMeasure));
+
+        // The column a cell is in, counted from 0 at the left: the requests, the status and the busiest hosts. The
+        // dividers between them are in none (-1) and keep their width.
+        public static readonly DependencyProperty ColumnProperty = DependencyProperty.RegisterAttached(
+            "Column", typeof(int), typeof(TrafficOverviewPanel),
+            new FrameworkPropertyMetadata(-1, FrameworkPropertyMetadataOptions.AffectsParentArrange));
 
         // Room kept free at the right while the busiest hosts are shown, whose first line would otherwise run under a
         // button in the corner.
@@ -435,6 +442,10 @@ namespace XMAT
         public static TrafficOverviewCell GetCell(UIElement element) => (TrafficOverviewCell)element.GetValue(CellProperty);
 
         public static void SetCell(UIElement element, TrafficOverviewCell value) => element.SetValue(CellProperty, value);
+
+        public static int GetColumn(UIElement element) => (int)element.GetValue(ColumnProperty);
+
+        public static void SetColumn(UIElement element, int value) => element.SetValue(ColumnProperty, value);
 
         public double HostsReserve
         {
@@ -513,13 +524,15 @@ namespace XMAT
 
         protected override Size ArrangeOverride(Size finalSize)
         {
+            double[] widths = Widths(finalSize.Width);
             double x = 0;
-            foreach (UIElement child in InternalChildren)
+            for (int index = 0; index < InternalChildren.Count; index++)
             {
+                UIElement child = InternalChildren[index];
                 if (child.Visibility == Visibility.Visible)
                 {
-                    child.Arrange(new Rect(x, 0, child.DesiredSize.Width, finalSize.Height));
-                    x += child.DesiredSize.Width;
+                    child.Arrange(new Rect(x, 0, widths[index], finalSize.Height));
+                    x += widths[index];
                 }
                 else
                 {
@@ -528,6 +541,74 @@ namespace XMAT
             }
 
             return finalSize;
+        }
+
+        // The width of each shown child in WIDTH. The dividers keep their widths, and the columns share the rest, less the
+        // room kept for the hide button while the hosts show, as equally as their cells allow: a column wider than an equal
+        // share keeps its width and the others share what's left. A column's extra width goes to its last shown cell.
+        private double[] Widths(double width)
+        {
+            UIElementCollection children = InternalChildren;
+            var widths = new double[children.Count];
+            var natural = new double[children.Count];
+            var last = new int[children.Count];
+            Array.Fill(last, -1);
+            double room = width;
+            bool hostsShown = false;
+            for (int index = 0; index < children.Count; index++)
+            {
+                UIElement child = children[index];
+                if (child.Visibility != Visibility.Visible)
+                {
+                    continue;
+                }
+
+                widths[index] = child.DesiredSize.Width;
+                hostsShown |= GetCell(child) == TrafficOverviewCell.Hosts;
+                int column = GetColumn(child);
+                if (column >= 0 && column < children.Count)
+                {
+                    natural[column] += widths[index];
+                    last[column] = index;
+                }
+                else
+                {
+                    room -= widths[index];
+                }
+            }
+
+            room -= hostsShown ? HostsReserve : 0;
+            var open = new List<int>();
+            for (int column = 0; column < children.Count; column++)
+            {
+                if (last[column] >= 0)
+                {
+                    open.Add(column);
+                }
+            }
+
+            while (open.Count > 0)
+            {
+                double share = room / open.Count;
+                int[] wide = open.Where(column => natural[column] > share).ToArray();
+                if (wide.Length == 0)
+                {
+                    break;
+                }
+
+                foreach (int column in wide)
+                {
+                    room -= natural[column];
+                    open.Remove(column);
+                }
+            }
+
+            foreach (int column in open)
+            {
+                widths[last[column]] += room / open.Count - natural[column];
+            }
+
+            return widths;
         }
     }
 
