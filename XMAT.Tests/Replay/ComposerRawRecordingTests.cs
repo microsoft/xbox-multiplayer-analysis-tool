@@ -226,8 +226,9 @@ namespace XMAT.Tests.Replay
         // the script editor's type list and the scripts' models, which make the Description, Display and DefaultValue
         // attributes of the script API's own types, properties and events to show their names, descriptions and default
         // scripts (XMAT.Scripting.ScriptTypeCollection, XMAT.Scripting.ScriptModel): those are the System.ComponentModel
-        // attributes, which keep their text, since the product declares no attribute that derives from them. None of them
-        // reaches a command.
+        // attributes, which keep their text, since the product declares no attribute that derives from them. The generated
+        // telemetry JSON factories construct only their own generic converter types; their cache constructs converter type
+        // parameters. None of these reaches a command.
         private static readonly HashSet<string> ReviewedReflectionTypes = new(StringComparer.Ordinal)
         {
             "GDKXHelper",
@@ -238,6 +239,9 @@ namespace XMAT.Tests.Replay
             "XMAT.Scripting.ScriptHost",
             "XMAT.Scripting.ScriptTypeCollection",
             "XMAT.Scripting.ScriptModel",
+            "Microsoft.Gaming.Tooling.XMAT.TelemetryEventJsonConverterFactory",
+            "Microsoft.Gaming.Tooling.XMAT.TelemetryObjectConverterFactory",
+            "Microsoft.Gaming.Tooling.XMAT.TelemetryJson+Cache`1",
         };
 
         // This class's methods as OperandUse names their users, for its reflection controls (ReflectionControlAccessor,
