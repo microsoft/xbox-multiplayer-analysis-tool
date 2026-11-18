@@ -86,7 +86,7 @@ namespace XMAT.Tests
                 WpfTestHost.Complete(queue.CompleteAndDrainAsync(), TimeSpan.FromSeconds(5));
 
                 WebSocketMessageModel message = Assert.Single(controller.WebSocketMessages);
-                Assert.Equal("new", message.PayloadText);
+                Assert.Equal("new", System.Text.Encoding.UTF8.GetString(message.Payload));
                 Assert.NotEqual(default, message.RowKey);
                 Assert.NotEqual(oldKey.Generation, message.RowKey.Generation);
             });

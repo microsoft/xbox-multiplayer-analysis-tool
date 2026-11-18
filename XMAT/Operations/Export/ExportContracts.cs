@@ -112,6 +112,10 @@ namespace XMAT.Operations.Export
         SqLtFileIdentity? InputIdentity { get; }
         string InputSha256 { get; }
 
+        // How the snapshot's stored text reads: Literal for live and marked captures, AmbiguousUnmarked for an XMAT
+        // capture without the text-format marker. Null counts as unknown.
+        CaptureTextSource TextSource { get; }
+
         CaptureExportChunk ReadChunk(
             IReadOnlyList<CaptureRowKey> keys,
             CancellationToken cancellationToken);
@@ -186,6 +190,9 @@ namespace XMAT.Operations.Export
         internal const string FormatMismatch = "export.output.format-mismatch";
         internal const string SanitizerFailed = "export.sanitize.failed";
         internal const string WriteFailed = "export.write.failed";
+
+        // A sanitized archive needs text whose meaning is known: an unmarked XMAT capture is refused, nothing written.
+        internal const string TextAmbiguous = "capture.text.ambiguous-export";
     }
 
     // Only expected input, destination-protection, sanitizer, and write failures use this type. Cancellation and

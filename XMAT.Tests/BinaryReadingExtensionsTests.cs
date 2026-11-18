@@ -145,6 +145,24 @@ namespace XMAT.Tests
 
         #region BinaryReader extensions
 
+        // Every reader of lines decodes them as ASCII, except the SAZ reader, which gives its encoding (Latin-1) to keep
+        // every byte of a head.
+        [Fact]
+        public void ReadLine_DecodesAscii_UnlessGivenAnEncoding()
+        {
+            byte[] data = { (byte)'c', 0xE9, 0xFF, (byte)'\r', (byte)'\n', (byte)'x' };
+            using (var reader = new BinaryReader(new MemoryStream(data)))
+            {
+                Assert.Equal("c??", reader.ReadLine());
+            }
+
+            using (var reader = new BinaryReader(new MemoryStream(data)))
+            {
+                Assert.Equal("c\u00e9\u00ff", reader.ReadLine(100, Encoding.Latin1, out int bytesRead));
+                Assert.Equal(5, bytesRead);
+            }
+        }
+
         [Fact]
         public void ReadLine_ReadsUpToNewline()
         {
@@ -338,6 +356,7 @@ namespace XMAT.Tests
                     {
                         string line = reader.ReadLine(
                             maxBytes,
+                            Encoding.ASCII,
                             out int bytesRead);
                         transcript.Add($"{line}|{bytesRead}");
                     }

@@ -8,10 +8,6 @@
              x:Name="Root"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="800">
-    <UserControl.Resources>
-        <local:JsonConverter x:Key="JsonConverter"/>
-    </UserControl.Resources>
-
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="{app:Look New=Auto, Original=30}"/>
@@ -82,21 +78,21 @@
                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                           ResizeDirection="{app:Look New=Rows, Original=Columns}"/>
 
+            <!-- The Text, JSON and Hex tabs show one preview of the selected message, made in the background
+                 (WebSocketMessagesView.xaml.cs); what it says about the payload is in the message bar, apart from it. -->
             <Grid Grid.Row="{app:Look New=2, Original=0}" Grid.Column="{app:Look New=0, Original=2}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock x:Name="PayloadNotice" Grid.Row="0" Style="{DynamicResource NoticeTextStyle}"
-                           Text="{Binding SelectedItem.PayloadNotice, ElementName=MessagesGrid}"
-                           Foreground="{DynamicResource WarningTextBrush}"
-                           Margin="{app:Look New='0,0,0,8', Original='6'}"/>
+                <TextBlock x:Name="PreviewMessage" Grid.Row="0" Style="{DynamicResource NoticeTextStyle}"
+                           Foreground="{DynamicResource WarningTextBrush}" TextWrapping="Wrap"
+                           Margin="{app:Look New='0,0,0,8', Original='6'}" Visibility="Collapsed"/>
                 <TabControl Grid.Row="1" Style="{DynamicResource FormatTabControlStyle}">
                     <TabItem Header="Text" Style="{DynamicResource FormatTabItemStyle}">
                         <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
-                            <TextBox Style="{DynamicResource InspectorTextBoxStyle}"
-                                     Text="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Mode=OneWay}"
-                                     IsReadOnly="True" TextWrapping="Wrap"
+                            <TextBox x:Name="PayloadTextBox" Style="{DynamicResource InspectorTextBoxStyle}"
+                                     IsReadOnly="True" TextWrapping="NoWrap"
                                      FontFamily="Consolas"
                                      VerticalScrollBarVisibility="Auto"
                                      HorizontalScrollBarVisibility="Auto"/>
@@ -104,8 +100,11 @@
                     </TabItem>
                     <TabItem Header="JSON" Style="{DynamicResource FormatTabItemStyle}">
                         <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
-                            <TreeView x:Name="MessageJsonTree" Style="{DynamicResource InspectorTreeViewStyle}"
-                                      ItemsSource="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Converter={StaticResource JsonConverter}}">
+                            <DockPanel>
+                                <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap"
+                                           FontStyle="Italic" Visibility="Collapsed"/>
+                                <TreeView x:Name="PayloadJsonTree" Style="{DynamicResource InspectorTreeViewStyle}"
+                                          VirtualizingPanel.IsVirtualizing="True">
                                 <TreeView.ItemTemplate>
                                     <HierarchicalDataTemplate DataType="{x:Type local:JsonTreeViewItem}"
                                                               ItemsSource="{Binding JsonTreeViewItems}">
@@ -118,15 +117,16 @@
                                     </Style>
                                 </TreeView.ItemContainerStyle>
                             </TreeView>
+                            </DockPanel>
                         </ContentControl>
                     </TabItem>
                     <TabItem Header="Hex" Style="{DynamicResource FormatTabItemStyle}">
                         <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
-                            <TextBox Style="{DynamicResource InspectorTextBoxStyle}"
-                                     Text="{Binding SelectedItem.PayloadHex, ElementName=MessagesGrid, Mode=OneWay}"
-                                     IsReadOnly="True" TextWrapping="Wrap"
+                            <TextBox x:Name="PayloadHexBox" Style="{DynamicResource InspectorTextBoxStyle}"
+                                     IsReadOnly="True" TextWrapping="NoWrap"
                                      FontFamily="Consolas"
-                                     VerticalScrollBarVisibility="Auto"/>
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"/>
                         </ContentControl>
                     </TabItem>
                 </TabControl>

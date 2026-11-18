@@ -512,7 +512,8 @@ namespace XMAT.WebServiceCapture
                     {
                         (dataset as IDisposable)?.Dispose();
                     }
-                });
+                },
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(dataset));
         }
 
         private CaptureRowKey EnsureRowKey(ProxyConnectionModel model)
@@ -571,6 +572,12 @@ namespace XMAT.WebServiceCapture
         private long _retirementEpoch;
         private long _loadedIncarnation;
         private bool _isTransitioning;
+
+        internal CaptureTextSource ExportTextSource =>
+            global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(
+                _captureDataSource == CaptureDataSource.LoadedDataset
+                    ? _loadedCaptureDataset
+                    : _dataTable);
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;

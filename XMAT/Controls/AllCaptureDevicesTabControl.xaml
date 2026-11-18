@@ -12,6 +12,11 @@
                  >
     <UserControl.CommandBindings>
             <CommandBinding Command="Close" Executed="TabClose_Executed" CanExecute="TabClose_CanExecute"/>
+            <!-- The new look moves a capture tab one place (AllCaptureDevicesTabControl.Reorder.cs). -->
+            <CommandBinding Command="{x:Static local:AllCaptureDevicesTabControl.MoveTabLeft}"
+                            Executed="MoveTabLeft_Executed" CanExecute="MoveTabLeft_CanExecute"/>
+            <CommandBinding Command="{x:Static local:AllCaptureDevicesTabControl.MoveTabRight}"
+                            Executed="MoveTabRight_Executed" CanExecute="MoveTabRight_CanExecute"/>
     </UserControl.CommandBindings>
     <UserControl.Resources>
         <DataTemplate x:Key="WebProxyTemplate">

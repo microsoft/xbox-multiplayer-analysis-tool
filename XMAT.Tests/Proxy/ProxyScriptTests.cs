@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -42,6 +43,438 @@ namespace XMAT.Tests.Proxy
 
             Assert.Empty(origin.Requests);
             Assert.IsAssignableFrom<HttpRequestException>(failure);
+        }
+
+        [Theory]
+        [InlineData("http11", 0, false)]
+        [InlineData("http11", 2, false)]
+        [InlineData("http11", 5, false)]
+        [InlineData("http11", 29, false)]
+        [InlineData("https11", 0, false)]
+        [InlineData("https11", 2, false)]
+        [InlineData("https11", 5, false)]
+        [InlineData("https11", 29, false)]
+        [InlineData("https2", 0, false)]
+        [InlineData("https2", 2, false)]
+        [InlineData("https2", 5, false)]
+        [InlineData("https2", 29, false)]
+        [InlineData("http11", 0, true)]
+        [InlineData("http11", 2, true)]
+        [InlineData("http11", 5, true)]
+        [InlineData("http11", 29, true)]
+        public async Task WebRequestScript_EditedBody_ReachesOriginWithCorrectFraming(
+            string protocol,
+            int editedLength,
+            bool chunked)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: protocol != "http11");
+            await using var capture = await ScriptedCapture.StartAsync();
+            byte[] editedBody = Enumerable.Range(0, editedLength)
+                .Select(index => (byte)(index * 31 + 7)).ToArray();
+            await capture.EnableScriptAsync(
+                WebServiceCaptureScriptableEventType.WebRequest,
+                "if (Params.Request.Method == \"POST\") { " +
+                $"Params.Request.BodyBytes = System.Convert.FromBase64String(\"{Convert.ToBase64String(editedBody)}\"); }}");
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/edited-body"))
+            {
+                Version = protocol == "https2" ? HttpVersion.Version20 : HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new ByteArrayContent("short"u8.ToArray())
+            };
+            request.Content.Headers.ContentType = new("application/octet-stream");
+            request.Headers.TransferEncodingChunked = chunked;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request, timeout.Token);
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(request.Version, response.Version);
+            ObservedRequest received = Assert.Single(origin.Requests);
+            Assert.Equal(editedBody, received.Body);
+            Assert.Equal("application/octet-stream", received.Headers["Content-Type"]);
+            Assert.Equal(editedLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                received.Headers["Content-Length"]);
+            Assert.False(received.Headers.ContainsKey("Transfer-Encoding"));
+            IDataRecord row = capture.CapturedRow("POST");
+            Assert.Equal(editedBody, Convert.FromBase64String(
+                row.Str(WebServiceCaptureMethod.FieldKey_RequestBody)));
+            string capturedHeaders = row.Str(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders);
+            if (chunked)
+            {
+                Assert.DoesNotContain("Transfer-Encoding:", capturedHeaders, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("Content-Length:", capturedHeaders, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                // Capture keeps the client's framing headers, as on the HTTPS path.
+                Assert.Contains("Content-Length: 5", capturedHeaders, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_SlowBodyBeyondKestrelGrace_IsForwarded(string protocol)
+        {
+            var policy = ProxyRequestReadPolicy.Default with
+            {
+                BodyInactivityTimeout = TimeSpan.FromSeconds(8),
+                BodyTotalTimeout = TimeSpan.FromSeconds(12),
+            };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(requestPolicy: policy);
+            byte[] body = "slow-upload-payload"u8.ToArray();
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/slow-body"))
+            {
+                Version = protocol == "https2" ? HttpVersion.Version20 : HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new DelayedBodyContent(
+                    body,
+                    chunkSize: body.Length,
+                    initialDelay: TimeSpan.FromSeconds(6),
+                    interChunkDelay: TimeSpan.Zero)
+            };
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(15));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(request.Version, response.Version);
+            Assert.Equal(body, Assert.Single(origin.Requests).Body);
+            Assert.Equal(body, Assert.Single(capture.CapturedRequests, item => item.Method == "POST").BodyBytes);
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_BodyInactivityTimeout_Returns408AndLogsLimit(string protocol)
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var policy = ProxyRequestReadPolicy.Default with
+            {
+                BodyInactivityTimeout = TimeSpan.FromMilliseconds(350),
+                BodyTotalTimeout = TimeSpan.FromSeconds(3),
+            };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(
+                requestPolicy: policy,
+                logObserver: (_, _, message) => logs.Enqueue(message));
+            if (protocol == "https11")
+            {
+                string responseHead = await SendHttps11PartialBodyAsync(
+                    capture.ProxyPort,
+                    origin.Port,
+                    "incomplete"u8.ToArray(),
+                    bodyBytesToSend: 1,
+                    delayBetweenBytes: TimeSpan.Zero);
+                Assert.StartsWith(
+                    "HTTP/1.1 408 Request Timeout\r\n",
+                    responseHead,
+                    StringComparison.Ordinal);
+                await capture.DrainCallbacksAsync();
+                await WaitForAsync(() => !logs.IsEmpty);
+                Assert.Empty(origin.Requests);
+                Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+                Assert.Contains("request-body inactivity limit", Assert.Single(logs), StringComparison.Ordinal);
+                return;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/idle-timeout"))
+            {
+                Version = HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new DelayedBodyContent(
+                    "incomplete"u8.ToArray(),
+                    chunkSize: 1,
+                    initialDelay: TimeSpan.Zero,
+                    interChunkDelay: TimeSpan.FromSeconds(1))
+            };
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.RequestTimeout, response.StatusCode);
+            Assert.Empty(origin.Requests);
+            Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+            string log = Assert.Single(logs);
+            Assert.Contains("request-body inactivity limit", log, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_BodyTotalTimeout_Returns408DespiteProgress(string protocol)
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var policy = ProxyRequestReadPolicy.Default with
+            {
+                BodyInactivityTimeout = TimeSpan.FromMilliseconds(500),
+                BodyTotalTimeout = TimeSpan.FromMilliseconds(800),
+            };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(
+                requestPolicy: policy,
+                logObserver: (_, _, message) => logs.Enqueue(message));
+            if (protocol == "https11")
+            {
+                string responseHead = await SendHttps11PartialBodyAsync(
+                    capture.ProxyPort,
+                    origin.Port,
+                    "slow-trickle"u8.ToArray(),
+                    bodyBytesToSend: 6,
+                    delayBetweenBytes: TimeSpan.FromMilliseconds(100));
+                Assert.StartsWith(
+                    "HTTP/1.1 408 Request Timeout\r\n",
+                    responseHead,
+                    StringComparison.Ordinal);
+                await capture.DrainCallbacksAsync();
+                await WaitForAsync(() => !logs.IsEmpty);
+                Assert.Empty(origin.Requests);
+                Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+                Assert.Contains("total request-body time limit", Assert.Single(logs), StringComparison.Ordinal);
+                return;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/total-timeout"))
+            {
+                Version = HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new DelayedBodyContent(
+                    "slow-trickle"u8.ToArray(),
+                    chunkSize: 1,
+                    initialDelay: TimeSpan.Zero,
+                    interChunkDelay: TimeSpan.FromMilliseconds(100))
+            };
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.RequestTimeout, response.StatusCode);
+            Assert.Empty(origin.Requests);
+            Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+            string log = Assert.Single(logs);
+            Assert.Contains("total request-body time limit", log, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task InterceptedHttps2_ConcurrentBodies_EnforcesAggregateBudgetAndReleasesReservation()
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            byte[] body = Enumerable.Range(0, 512)
+                .Select(index => (byte)(index % 251))
+                .ToArray();
+            var policy = ProxyRequestReadPolicy.Default with
+            {
+                MaxBodyBytes = body.Length,
+                MaxAggregateBufferedBytes = 64 * 1024,
+            };
+            var budget = new ProxyRequestBufferBudget(
+                policy with { MaxAggregateBufferedBytes = 24 * 1024 });
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(
+                requestPolicy: policy,
+                requestBufferBudget: budget,
+                logObserver: (_, _, message) => logs.Enqueue(message));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var heldContent = new GatedBodyContent(body);
+            using var heldRequest = new HttpRequestMessage(
+                HttpMethod.Post,
+                origin.Url("/budget-accepted"))
+            {
+                Version = HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = heldContent,
+            };
+            Task<HttpResponseMessage> heldResponseTask =
+                capture.Client.SendAsync(heldRequest, timeout.Token);
+
+            long heldReservation;
+            try
+            {
+                await heldContent.FirstByteWritten.WaitAsync(timeout.Token);
+                await WaitForAsync(
+                    () => budget.ReservedBytes > 0,
+                    TimeSpan.FromSeconds(5));
+                heldReservation = budget.ReservedBytes;
+                Assert.False(heldResponseTask.IsCompleted);
+                // H2 staging retains its read buffer plus up to three body-sized copies.
+                Assert.InRange(
+                    checked(heldReservation + (body.LongLength * 3)),
+                    1L,
+                    budget.MaximumBytes);
+                Assert.True(
+                    checked(heldReservation * 2) > budget.MaximumBytes);
+
+                using var competingRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    origin.Url("/budget-rejected"))
+                {
+                    Version = HttpVersion.Version20,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                    Content = new ByteArrayContent(body),
+                };
+                using HttpResponseMessage competingResponse =
+                    await capture.Client.SendAsync(competingRequest, timeout.Token);
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, competingResponse.StatusCode);
+                Assert.Equal(HttpVersion.Version20, competingResponse.Version);
+            }
+            finally
+            {
+                heldContent.Release();
+            }
+
+            using HttpResponseMessage heldResponse =
+                await heldResponseTask.WaitAsync(timeout.Token);
+            await capture.DrainCallbacksAsync();
+            await WaitForAsync(() => budget.ReservedBytes == 0);
+            await WaitForAsync(() => !logs.IsEmpty);
+
+            Assert.Equal(HttpStatusCode.OK, heldResponse.StatusCode);
+            Assert.Equal(HttpVersion.Version20, heldResponse.Version);
+            Assert.True(budget.MaximumBytes < policy.MaxAggregateBufferedBytes);
+            Assert.Equal(1L, budget.RejectedReservations);
+            Assert.InRange(budget.PeakReservedBytes, heldReservation, budget.MaximumBytes);
+            Assert.Equal(0L, budget.ReservedBytes);
+            Assert.Contains(
+                $"the {budget.MaximumBytes} byte aggregate request-buffer budget",
+                Assert.Single(logs),
+                StringComparison.Ordinal);
+            ObservedRequest forwarded = Assert.Single(origin.Requests);
+            Assert.Equal("/budget-accepted", forwarded.Path);
+            Assert.Equal(body, forwarded.Body);
+            ClientRequest captured = Assert.Single(
+                capture.CapturedRequests,
+                item => item.Method == "POST");
+            Assert.Equal("/budget-accepted", captured.Path);
+            Assert.Equal("HTTP/2", captured.Version);
+            Assert.Equal(body, captured.BodyBytes);
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_OversizedBody_Returns413AndLogsLimit(string protocol)
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var policy = ProxyRequestReadPolicy.Default with { MaxBodyBytes = 16 };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(
+                requestPolicy: policy,
+                logObserver: (_, _, message) => logs.Enqueue(message));
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/oversized"))
+            {
+                Version = protocol == "https2" ? HttpVersion.Version20 : HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new ByteArrayContent(new byte[17])
+            };
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(413, (int)response.StatusCode);
+            Assert.Empty(origin.Requests);
+            Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+            string log = Assert.Single(logs);
+            Assert.Contains("request-body size limit", log, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_BodyAtLimit_IsForwarded(string protocol)
+        {
+            const int maxBodyBytes = 16;
+            byte[] body = Enumerable.Range(0, maxBodyBytes)
+                .Select(index => (byte)index)
+                .ToArray();
+            var policy = ProxyRequestReadPolicy.Default with { MaxBodyBytes = maxBodyBytes };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(requestPolicy: policy);
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/at-limit"))
+            {
+                Version = protocol == "https2" ? HttpVersion.Version20 : HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new ByteArrayContent(body),
+            };
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(body, Assert.Single(origin.Requests).Body);
+            Assert.Equal(
+                body,
+                Assert.Single(capture.CapturedRequests, item => item.Method == "POST").BodyBytes);
+        }
+
+        [Theory]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task InterceptedHttps_StreamedBodyOverLimit_Returns413(string protocol)
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var policy = ProxyRequestReadPolicy.Default with { MaxBodyBytes = 16 };
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync(
+                requestPolicy: policy,
+                logObserver: (_, _, message) => logs.Enqueue(message));
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/streamed-oversized"))
+            {
+                Version = protocol == "https2" ? HttpVersion.Version20 : HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new UnknownLengthBodyContent(
+                    new byte[17],
+                    firstChunkSize: 16,
+                    interChunkDelay: TimeSpan.FromMilliseconds(25))
+            };
+            Assert.Null(request.Content.Headers.ContentLength);
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(413, (int)response.StatusCode);
+            Assert.Empty(origin.Requests);
+            Assert.DoesNotContain(capture.CapturedRequests, item => item.Method == "POST");
+            Assert.Contains("request-body size limit", Assert.Single(logs), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task InterceptedHttps_ExpectContinueAndCompressedBody_ArePreserved()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            byte[] originalBody = Enumerable.Repeat((byte)'x', 4096).ToArray();
+            byte[] compressedBody;
+            using (var buffer = new MemoryStream())
+            {
+                using (var gzip = new GZipStream(buffer, CompressionLevel.Fastest, leaveOpen: true))
+                    gzip.Write(originalBody);
+                compressedBody = buffer.ToArray();
+            }
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin.Url("/expect-gzip"))
+            {
+                Content = new ByteArrayContent(compressedBody)
+            };
+            request.Content.Headers.ContentEncoding.Add("gzip");
+            request.Headers.ExpectContinue = true;
+
+            using HttpResponseMessage response = await capture.Client.SendAsync(request)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            ObservedRequest received = Assert.Single(origin.Requests);
+            Assert.Equal("gzip", received.Headers["Content-Encoding"]);
+            Assert.Equal(originalBody, Decompress(received.Body));
+            Assert.Equal(compressedBody, Assert.Single(
+                capture.CapturedRequests,
+                item => item.Method == "POST").BodyBytes);
         }
 
         [Theory]
@@ -925,6 +1358,193 @@ namespace XMAT.Tests.Proxy
             }
         }
 
+        private static byte[] Decompress(byte[] body)
+        {
+            using var input = new MemoryStream(body);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            gzip.CopyTo(output);
+            return output.ToArray();
+        }
+
+        private static async Task<string> SendHttps11PartialBodyAsync(
+            int proxyPort,
+            int originPort,
+            byte[] body,
+            int bodyBytesToSend,
+            TimeSpan delayBetweenBytes)
+        {
+            Assert.InRange(bodyBytesToSend, 1, body.Length - 1);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, proxyPort, timeout.Token);
+            NetworkStream network = client.GetStream();
+            const string targetHost = "127.0.0.1";
+            string authority = $"{targetHost}:{originPort}";
+            await network.WriteAsync(
+                Encoding.ASCII.GetBytes($"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"),
+                timeout.Token);
+            string connectResponse = await ReadHeadAsync(network, timeout.Token);
+            Assert.StartsWith("HTTP/1.1 200 ", connectResponse, StringComparison.Ordinal);
+
+            using var tls = new System.Net.Security.SslStream(network, leaveInnerStreamOpen: false, (_, _, _, _) => true);
+            await tls.AuthenticateAsClientAsync(new System.Net.Security.SslClientAuthenticationOptions
+            {
+                TargetHost = targetHost,
+                ApplicationProtocols = [System.Net.Security.SslApplicationProtocol.Http11],
+                EnabledSslProtocols = System.Security.Authentication.SslProtocols.None,
+            }, timeout.Token);
+            Assert.True(tls.IsAuthenticated);
+            Assert.Equal(
+                System.Net.Security.SslApplicationProtocol.Http11,
+                tls.NegotiatedApplicationProtocol);
+            await tls.WriteAsync(
+                Encoding.ASCII.GetBytes(
+                    $"POST /incomplete HTTP/1.1\r\nHost: {authority}\r\n" +
+                    $"Content-Length: {body.Length}\r\nConnection: close\r\n\r\n"),
+                timeout.Token);
+
+            for (int index = 0; index < bodyBytesToSend; index++)
+            {
+                await tls.WriteAsync(body.AsMemory(index, 1), timeout.Token);
+                await tls.FlushAsync(timeout.Token);
+                if (index + 1 < bodyBytesToSend && delayBetweenBytes > TimeSpan.Zero)
+                    await Task.Delay(delayBetweenBytes, timeout.Token);
+            }
+
+            return await ReadHeadAsync(tls, timeout.Token);
+        }
+
+        private static async Task<string> ReadHeadAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            const int maximumHeadBytes = 16 * 1024;
+            byte[] header = new byte[maximumHeadBytes];
+            int length = 0;
+            while (length < header.Length)
+            {
+                int searchStart = Math.Max(0, length - 3);
+                int read = await stream.ReadAsync(
+                    header.AsMemory(length),
+                    cancellationToken);
+                if (read == 0)
+                {
+                    throw new EndOfStreamException(
+                        "The HTTP response ended before its header block was complete.");
+                }
+                length += read;
+                for (int index = searchStart; index <= length - 4; index++)
+                {
+                    if (header[index] == '\r' &&
+                        header[index + 1] == '\n' &&
+                        header[index + 2] == '\r' &&
+                        header[index + 3] == '\n')
+                    {
+                        return Encoding.ASCII.GetString(header, 0, index + 4);
+                    }
+                }
+            }
+            throw new InvalidDataException(
+                $"The HTTP response header exceeded {maximumHeadBytes} bytes.");
+        }
+
+        private sealed class DelayedBodyContent(
+            byte[] body,
+            int chunkSize,
+            TimeSpan initialDelay,
+            TimeSpan interChunkDelay) : HttpContent
+        {
+            protected override bool TryComputeLength(out long length)
+            {
+                length = body.Length;
+                return true;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override async Task SerializeToStreamAsync(
+                Stream stream,
+                TransportContext context,
+                CancellationToken cancellationToken)
+            {
+                if (initialDelay > TimeSpan.Zero)
+                    await Task.Delay(initialDelay, cancellationToken);
+
+                for (int offset = 0; offset < body.Length; offset += chunkSize)
+                {
+                    int count = Math.Min(chunkSize, body.Length - offset);
+                    await stream.WriteAsync(body.AsMemory(offset, count), cancellationToken);
+                    await stream.FlushAsync(cancellationToken);
+                    if (offset + count < body.Length && interChunkDelay > TimeSpan.Zero)
+                        await Task.Delay(interChunkDelay, cancellationToken);
+                }
+            }
+        }
+
+        private sealed class GatedBodyContent(byte[] body) : HttpContent
+        {
+            private readonly TaskCompletionSource _firstByteWritten =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _release =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            internal Task FirstByteWritten => _firstByteWritten.Task;
+
+            internal void Release() =>
+                _release.TrySetResult();
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = body.Length;
+                return true;
+            }
+
+            protected override Task SerializeToStreamAsync(
+                Stream stream,
+                TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override async Task SerializeToStreamAsync(
+                Stream stream,
+                TransportContext context,
+                CancellationToken cancellationToken)
+            {
+                await stream.WriteAsync(body.AsMemory(0, 1), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                _firstByteWritten.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+                await stream.WriteAsync(body.AsMemory(1), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+        }
+
+        private sealed class UnknownLengthBodyContent(
+            byte[] body,
+            int firstChunkSize,
+            TimeSpan interChunkDelay) : HttpContent
+        {
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return false;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override async Task SerializeToStreamAsync(
+                Stream stream,
+                TransportContext context,
+                CancellationToken cancellationToken)
+            {
+                await stream.WriteAsync(body.AsMemory(0, firstChunkSize), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                await Task.Delay(interChunkDelay, cancellationToken);
+                await stream.WriteAsync(body.AsMemory(firstChunkSize), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+        }
+
         // Attaches a capture controller's policy hooks to the in-process proxy with an
         // in-memory capture table.
         private sealed class ScriptedCapture : IAsyncDisposable
@@ -943,6 +1563,7 @@ namespace XMAT.Tests.Proxy
             public int ProxyPort => _proxy.Port;
             public int CapturedRecordCount => _table.Dataset.DataRecords.Count();
             public IReadOnlyCollection<ServerResponse> ObservedResponses => _proxy.CapturedResponses;
+            public IReadOnlyCollection<ClientRequest> CapturedRequests => _proxy.CapturedRequests;
 
             private ScriptedCapture(
                 ProxyTestHarness proxy,
@@ -962,7 +1583,10 @@ namespace XMAT.Tests.Proxy
             }
 
             public static async Task<ScriptedCapture> StartAsync(
-                TimeSpan? scriptExecutionDeadline = null)
+                TimeSpan? scriptExecutionDeadline = null,
+                ProxyRequestReadPolicy requestPolicy = null,
+                ProxyRequestBufferBudget requestBufferBudget = null,
+                Action<int, LogLevel, string> logObserver = null)
             {
                 var controller = new WebServiceDeviceCaptureController(
                     "script-test",
@@ -985,7 +1609,10 @@ namespace XMAT.Tests.Proxy
                     .GetField("_captureCallbackCancellationTokenSource", PrivateInstance)
                     .SetValue(controller, captureCancellation);
 
-                ProxyTestHarness proxy = await ProxyTestHarness.StartAsync();
+                ProxyTestHarness proxy = await ProxyTestHarness.StartAsync(
+                    requestPolicy: requestPolicy,
+                    requestBufferBudget: requestBufferBudget,
+                    logObserver: logObserver);
                 typeof(WebServiceDeviceCaptureController)
                     .GetField("_webProxy", PrivateInstance)
                     .SetValue(controller, proxy.Proxy);
@@ -1041,11 +1668,13 @@ namespace XMAT.Tests.Proxy
             public Task DrainCallbacksAsync() =>
                 _callbacks.StopAcceptingAndWaitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            public string CapturedStatus(string method) =>
+            public IDataRecord CapturedRow(string method) =>
                 Assert.Single(
                     _table.Dataset.DataRecords,
-                    record => record.Str(WebServiceCaptureMethod.FieldKey_RequestMethod) == method)
-                .Str(WebServiceCaptureMethod.FieldKey_RequestStatus);
+                    record => record.Str(WebServiceCaptureMethod.FieldKey_RequestMethod) == method);
+
+            public string CapturedStatus(string method) =>
+                CapturedRow(method).Str(WebServiceCaptureMethod.FieldKey_RequestStatus);
 
             public void BreakCaptureTable()
             {

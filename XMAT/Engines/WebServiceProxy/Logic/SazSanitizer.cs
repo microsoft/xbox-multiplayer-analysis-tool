@@ -16,6 +16,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
+using XMAT.Operations.Privacy;
 
 namespace XMAT.WebServiceCapture
 {
@@ -76,18 +77,6 @@ namespace XMAT.WebServiceCapture
             @"(?<prefix>/(?:token|secret|password|api[-_]?key|session[-_]?id)/)[^/?#]+",
             PatternOptions | RegexOptions.IgnoreCase, PatternTimeout);
         private static readonly Regex ParameterSeparator = new(@"([&;])", PatternOptions, PatternTimeout);
-        private static readonly string[] SensitiveNames =
-        {
-            "authorization", "authenticate", "authentication", "cookie", "password", "passwd", "passphrase", "secret", "token",
-            "credential", "apikey", "subscriptionkey", "accountkey", "accesskey", "privatekey",
-            "sharedkey", "functionkey", "functionskey", "encryptionkey", "connectionstring", "signature", "sessionid", "userid", "username",
-            "email", "xuid", "gamertag", "deviceid", "codeverifier", "codechallenge", "authcode",
-            "passcode", "securitycode", "verificationcode", "ticket", "devicecode", "usercode", "gamedisplayname", "appdisplayname"
-        };
-        private static readonly HashSet<string> SensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "Forwarded", "X-Forwarded-For", "X-Real-IP", "X-Client-IP", "X-MS-Client-Principal"
-        };
         private static readonly HashSet<string> PrivateJwkMembers = new(StringComparer.OrdinalIgnoreCase)
         {
             "d", "p", "q", "dp", "dq", "qi", "oth", "k"
@@ -336,7 +325,7 @@ namespace XMAT.WebServiceCapture
                 }
                 var rawValue = header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) && contentType != null
                     ? contentType : header.Value;
-                var sensitive = IsSensitiveName(header.Key) || SensitiveHeaders.Contains(header.Key);
+                var sensitive = SecretNames.IsSensitiveHeaderName(header.Key);
                 if (_discovering && sensitive)
                 {
                     RememberHeaderValue(header.Key, rawValue);
@@ -591,60 +580,7 @@ namespace XMAT.WebServiceCapture
                 return body;
             }
 
-            using var output = new MemoryStream();
-            var position = 0;
-            while (true)
-            {
-                SpendWork(1);
-                var lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                if (lineEnd < 0 || lineEnd > 8192)
-                {
-                    throw new InvalidDataException();
-                }
-                var line = Encoding.ASCII.GetString(body, position, lineEnd);
-                position += lineEnd + 2;
-                extension = line.IndexOf(';');
-                sizeText = extension < 0 ? line : line.Substring(0, extension);
-                if (!int.TryParse(sizeText, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var size) ||
-                    size < 0 || size > body.Length - position)
-                {
-                    throw new InvalidDataException();
-                }
-                if (size == 0)
-                {
-                    while (true)
-                    {
-                        SpendWork(1);
-                        lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                        if (lineEnd < 0 || lineEnd > 8192)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        if (lineEnd == 0)
-                        {
-                            if (position + 2 != body.Length)
-                            {
-                                throw new InvalidDataException();
-                            }
-                            return output.ToArray();
-                        }
-                        var trailer = body.AsSpan(position, lineEnd);
-                        if (trailer.IndexOf((byte)':') <= 0)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        position += lineEnd + 2;
-                    }
-                }
-                if (output.Length + size > MaximumBodyBytes || position + size + 2 > body.Length ||
-                    body[position + size] != 13 || body[position + size + 1] != 10)
-                {
-                    throw new InvalidDataException();
-                }
-                SpendWork(size);
-                output.Write(body, position, size);
-                position += size + 2;
-            }
+            return ChunkedBodyDecoder.Decode(body, MaximumBodyBytes, SpendWork);
         }
 
         private bool HasChunkFraming(ReadOnlySpan<byte> body)
@@ -1145,7 +1081,7 @@ namespace XMAT.WebServiceCapture
         private static bool IsSchemaName(string name)
         {
             var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-            return SchemaNames.Contains(normalized) || SensitiveNames.Contains(normalized, StringComparer.Ordinal) ||
+            return SchemaNames.Contains(normalized) || SecretNames.SensitiveNames.Contains(normalized, StringComparer.Ordinal) ||
                 normalized is "id" or "data" or "members" or "value" or "values" or "type" or "name" or "key" or "keys" or
                     "auth" or "sig" or "sas" or "pwd" or "user" or "otp" or "pin" or "nonce";
         }
@@ -1935,14 +1871,7 @@ namespace XMAT.WebServiceCapture
                 attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase) &&
                 attribute.Value.Trim().Equals("password", StringComparison.OrdinalIgnoreCase));
 
-        private static bool IsSensitiveName(string name)
-        {
-            var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-            return normalized is "key" or "keys" or "auth" or "sig" or "sas" or "pwd" or "user" or
-                "otp" or "pin" or "nonce" or "assertion" or "samlresponse" or "samlrequest" or "gtg" or "xid" ||
-                normalized.EndsWith("auth", StringComparison.Ordinal) ||
-                SensitiveNames.Any(normalized.Contains);
-        }
+        private static bool IsSensitiveName(string name) => SecretNames.IsSensitiveName(name);
 
         private static bool IsHeaderNameCharacter(char character) =>
             char.IsAsciiLetterOrDigit(character) || "!#$%&'*+-.^_`|~".Contains(character);

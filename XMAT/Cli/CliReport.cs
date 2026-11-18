@@ -6,10 +6,12 @@ using System;
 using System.Collections.Generic;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
 {
@@ -31,6 +33,13 @@ namespace XMAT.Cli
 
     internal sealed record CliCheck(string Id, bool Passed, string Code = null);
 
+    // The storedText that a replay, save-request or curl summary reports for an input without stored text to classify: a
+    // request file or a --url request (Q).
+    internal static class CliStoredText
+    {
+        internal static StoredTextSummary NotApplicable { get; } = new("notApplicable", "notNeeded");
+    }
+
     // The allow-listed results of an analysis, copied from AnalysisSummary; never AnalysisResult.Legacy.
     internal sealed class CliAnalysisReport
     {
@@ -40,6 +49,8 @@ namespace XMAT.Cli
 
         // The effective limits of the run, once its command line was valid.
         internal CliLimits Limits { get; set; }
+
+        internal StoredTextSummary StoredText { get; set; }
 
         internal IReadOnlyList<DeviceSummary> Devices { get; set; } = Array.Empty<DeviceSummary>();
 
@@ -78,6 +89,21 @@ namespace XMAT.Cli
         };
     }
 
+    internal sealed class CliMarkCaptureTextReport
+    {
+        internal CaptureTextInterpretation Interpretation { get; set; }
+
+        internal int MaxInputMib { get; set; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        internal string OutputSha256 { get; set; }
+
+        internal MarkCaptureTextCounts Counts { get; set; }
+    }
+
     internal sealed class CliDoctorReport
     {
         internal CliDoctorReport(string target)
@@ -95,6 +121,111 @@ namespace XMAT.Cli
 
         internal string Architecture { get; set; }
     }
+
+    // The allow-listed results of a replay or compose run: numbers, ordinal ids, outcomes and codes from
+    // ReplayItemResult, and the run's options without the URL, method, headers or body file it was given.
+    internal sealed class CliReplayReport
+    {
+        internal CliReplayReport(CliReplay options, CliLimits limits)
+        {
+            Options = options ?? CliReplay.Default;
+            Limits = limits;
+            HttpVersion = CliReplayCommand.RequestedHttpVersion(Options, file: null);
+        }
+
+        internal CliReplay Options { get; }
+
+        // The input limits of a replay run; null for compose.
+        internal CliLimits Limits { get; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        // The HTTP version that the run asks for (CliReplayCommand.RequestedHttpVersion): the options', and, once a request
+        // file was read, the file's unless --http-version says otherwise.
+        internal ReplayHttpVersion HttpVersion { get; set; }
+
+        // How a replay run used its capture's stored text (ReplayResult.StoredText), once it sent; null for compose.
+        internal StoredTextSummary StoredText { get; set; }
+
+        internal IReadOnlyList<ReplayItemResult> Items { get; set; } = Array.Empty<ReplayItemResult>();
+
+        // With --verify-diff, the state of each send's verification detail by send id, for each diff.json written. Only the
+        // state: the details themselves are in the files.
+        internal Dictionary<int, VerifyDiffState> Details { get; } = new();
+    }
+
+    // The allow-listed results of save-request: the source's kind and hash, its limits for a capture, and for each saved
+    // request its ordinal id, where it came from, its profile, what its file leaves out and how many recognized secret names
+    // and body bytes it keeps. Never a name, value, URL or body.
+    internal sealed class CliSaveRequestReport
+    {
+        internal CliSaveRequestReport(CliReplay options, CliLimits limits)
+        {
+            Options = options ?? CliReplay.Default;
+            Limits = limits;
+        }
+
+        internal CliReplay Options { get; }
+
+        // The input limits when the source is a capture file; null otherwise.
+        internal CliLimits Limits { get; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        // How the run used its source's stored text, once the requests were prepared (ReplayExport.StoredText, or
+        // CliStoredText.NotApplicable for a request file or a --url request).
+        internal StoredTextSummary StoredText { get; set; }
+
+        internal List<CliSavedRequest> Requests { get; } = new();
+    }
+
+    internal sealed record CliSavedRequest(
+        int Id,
+        string DeviceId,
+        long? RequestNumber,
+        string Profile,
+        IReadOnlyList<string> Omitted,
+        RequestFileRecognized Recognized);
+
+    // The allow-listed results of curl: the source's kind and hash, its limits for a capture, and for each script its
+    // ordinal id, where its request came from, the size of its body, the HTTP version that it asks for, whether it needs a
+    // curl.exe with Unicode, and how many recognized secret names it holds. Never a name, value, URL or body.
+    internal sealed class CliCurlReport
+    {
+        internal CliCurlReport(CliReplay options, CliLimits limits)
+        {
+            Options = options ?? CliReplay.Default;
+            Limits = limits;
+        }
+
+        internal CliReplay Options { get; }
+
+        // The input limits when the source is a capture file; null otherwise.
+        internal CliLimits Limits { get; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        // How the run used its source's stored text, once the requests were prepared (ReplayExport.StoredText, or
+        // CliStoredText.NotApplicable for a request file or a --url request).
+        internal StoredTextSummary StoredText { get; set; }
+
+        internal List<CliCurlScript> Scripts { get; } = new();
+    }
+
+    internal sealed record CliCurlScript(
+        int Id,
+        string DeviceId,
+        long? RequestNumber,
+        long BodyBytes,
+        ReplayHttpVersion HttpVersion,
+        bool UnicodeCurl,
+        RequestFileRecognized Recognized);
 
     // Everything one xmat run reports: the JSON document on standard output (CliJson) and the text on standard error.
     internal sealed class CliReport
@@ -134,7 +265,15 @@ namespace XMAT.Cli
 
         internal CliExportReport Export { get; set; }
 
+        internal CliReplayReport Replay { get; set; }
+
+        internal CliSaveRequestReport SaveRequest { get; set; }
+
+        internal CliCurlReport Curl { get; set; }
+
         internal CliDoctorReport Doctor { get; set; }
+
+        internal CliMarkCaptureTextReport MarkCaptureText { get; set; }
 
         internal IReadOnlyList<CliCommandHelp> Commands { get; set; }
 
@@ -208,8 +347,8 @@ namespace XMAT.Cli
             return report;
         }
 
-        // parsed is null when the error happened while the command line was parsed. An analyze run whose command line
-        // was valid still reports its effective limits, as every other analyze failure does.
+        // parsed is null when the error happened while the command line was parsed. A parsed command keeps its public
+        // option fields even when an internal failure prevented the command adapter from constructing its full report.
         internal static CliReport ForInternalError(string runId, CliParseResult parsed, Exception exception)
         {
             var report = new CliReport(parsed?.Command, runId);
@@ -224,6 +363,22 @@ namespace XMAT.Cli
             else if (parsed is { Succeeded: true, Request.Command: CliCommands.Export })
             {
                 report.Export = CliExportReport.From(parsed.Request);
+            }
+            else if (parsed is
+                {
+                    Succeeded: true,
+                    Request.Command:
+                        CliCommands.MarkCaptureText,
+                })
+            {
+                report.MarkCaptureText =
+                    new CliMarkCaptureTextReport
+                    {
+                        Interpretation =
+                            parsed.Request.Interpretation.Value,
+                        MaxInputMib =
+                            parsed.Request.MaxInputMib,
+                    };
             }
 
             report.Fail(CliExitCodes.Internal, "cli.internal", "xmat stopped because of an internal error.");

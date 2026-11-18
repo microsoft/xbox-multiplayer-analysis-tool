@@ -39,10 +39,22 @@ namespace XMAT.Cli
                 return report;
             }
 
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out string target);
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
             if (targetFailure != null)
             {
                 report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                return report;
+            }
+
+            targetFailure =
+                CliOutputFolder.ProbeTarget(
+                    target);
+            if (targetFailure != null)
+            {
+                report.Fail(
+                    targetFailure.ExitCode,
+                    targetFailure.Code,
+                    targetFailure.Message);
                 return report;
             }
 
@@ -55,7 +67,12 @@ namespace XMAT.Cli
             CliOutputFolder output;
             try
             {
-                output = CliOutputFolder.Reserve(target, runId);
+                CliFailure refused = CliOutputFolder.TryReserve(target, runId, out output);
+                if (refused != null)
+                {
+                    report.Fail(refused.ExitCode, refused.Code, refused.Message);
+                    return report;
+                }
             }
             catch (Exception ex) when (CliOutputFolder.IsFileSystemFailure(ex))
             {
@@ -66,12 +83,16 @@ namespace XMAT.Cli
                 return report;
             }
 
-            await CliStagedRun.CompleteAsync(
-                report,
-                output,
-                token => AnalyzeAsync(request, output, assets, report, token),
-                null,
-                cancellationToken).ConfigureAwait(false);
+            using (output)
+            {
+                await CliStagedRun.CompleteAsync(
+                    report,
+                    output,
+                    token => AnalyzeAsync(request, output, assets, report, token),
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             ProcessFilterScope scope = report.Analysis.ProcessScope;
             if (scope?.Counts != null && !ProcessFilter.IsEmpty(report.Analysis.ProcessFilter))
             {
@@ -171,6 +192,7 @@ namespace XMAT.Cli
             {
                 report.Analysis.InputKind = summary.InputKind;
                 report.Analysis.InputSha256 = summary.InputSha256;
+                report.Analysis.StoredText = summary.StoredText;
                 report.Analysis.Devices = summary.Devices ?? Array.Empty<DeviceSummary>();
                 report.Analysis.TotalCalls = summary.TotalCalls;
                 report.Analysis.TotalFindings = summary.TotalFindings;

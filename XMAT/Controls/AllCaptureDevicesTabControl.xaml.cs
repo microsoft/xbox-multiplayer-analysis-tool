@@ -5,7 +5,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Data;
 using System.Windows.Input;
 using XMAT.Models;
 using XMAT.NetworkTrace;
@@ -26,16 +25,22 @@ namespace XMAT
         }
 
         // Ctrl+F4 and Ctrl+W close the selected tab of TABS: the keyboard way to close a tab, since tab close buttons
-        // are not tab stops. The key bindings take the tabs directly, as a name lookup from a key binding fails.
+        // are not tab stops.
         internal static void AddCloseTabShortcuts(UIElement owner, Selector tabs)
         {
             foreach (Key key in new[] { Key.F4, Key.W })
             {
-                var shortcut = new KeyBinding(ApplicationCommands.Close, key, ModifierKeys.Control);
-                BindingOperations.SetBinding(shortcut, InputBinding.CommandParameterProperty,
-                    new Binding(nameof(Selector.SelectedItem)) { Source = tabs });
-                owner.InputBindings.Add(shortcut);
+                owner.InputBindings.Add(SelectedTabShortcut(ApplicationCommands.Close, key, ModifierKeys.Control, tabs));
             }
+        }
+
+        // A shortcut whose command takes the selected tab of TABS. The parameter is set as the selection changes rather
+        // than bound to it: nothing in the product binds a command's parameter in code (ComposerRawRecordingTests).
+        internal static KeyBinding SelectedTabShortcut(ICommand command, Key key, ModifierKeys modifiers, Selector tabs)
+        {
+            var shortcut = new KeyBinding(command, key, modifiers) { CommandParameter = tabs.SelectedItem };
+            tabs.SelectionChanged += (_, _) => shortcut.CommandParameter = tabs.SelectedItem;
+            return shortcut;
         }
 
         public static string ReadOnlyLabel

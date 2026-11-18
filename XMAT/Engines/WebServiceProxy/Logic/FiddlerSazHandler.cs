@@ -151,6 +151,7 @@ namespace XMAT.WebServiceCapture
             TimeSpan duration = TimeSpan.FromMilliseconds(0);
             string scheme = string.Empty;
             string hostAndPort = string.Empty;
+            string targetAuthority = null;
             string method = string.Empty;
             string call = string.Empty;
             string requestHeaders = string.Empty;
@@ -184,33 +185,24 @@ namespace XMAT.WebServiceCapture
                         // METHOD
                         method = firstLineSplit[0];
 
-                        // CALL & SCHEME
-                        if (method == "CONNECT")
+                        // CALL & SCHEME: an absolute http, https or ftp URL gives the scheme, the path and query, and the
+                        // authority, which takes precedence over the Host header (RFC 9112 3.2.2). Any other target, such as a
+                        // path, *, a CONNECT's authority, or what Uri reads as a file or UNC path, is kept as written, with an
+                        // unknown scheme rather than a guess.
+                        call = firstLineSplit[1];
+                        if (TryReadAbsoluteTarget(method, call, out Uri target, out targetAuthority))
                         {
-                            call = firstLineSplit[1];
-                            scheme = @"http";
-                        }
-                        else
-                        {
-                            if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
-                            {
-                                call = uri.LocalPath;
-                                scheme = uri.Scheme;
-                            }
-                            else
-                            {
-                                scheme = firstLineSplit[0];
-                                call = firstLineSplit[1];
-                            }
+                            call = target.PathAndQuery;
+                            scheme = target.Scheme;
                         }
                     }
 
-                    WebHeaderCollection reqHeaders = ReadHeaders(
+                    SazHeaderFields reqHeaders = ReadHeaders(
                         cFile,
                         ref requestHeaderBytes,
                         ref skippedMalformedHeaderLines);
 
-                    hostAndPort = reqHeaders["Host"];
+                    hostAndPort = targetAuthority ?? reqHeaders["Host"];
 
                     // REQUEST BODY
                     requestBody = cFile.ReadToEnd();
@@ -245,7 +237,7 @@ namespace XMAT.WebServiceCapture
                         status = firstLineSplit[1];
                     }
 
-                    WebHeaderCollection headers = ReadHeaders(
+                    SazHeaderFields headers = ReadHeaders(
                         sFile,
                         ref responseHeaderBytes,
                         ref skippedMalformedHeaderLines);
@@ -277,9 +269,22 @@ namespace XMAT.WebServiceCapture
 
                     XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
 
-                    requestTime = DateTime.Parse((string)sessionTimers.Attribute("ClientBeginRequest"));
+                    // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
+                    // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
+                    // the two instants, whatever their offsets, and the request time is the first one in local time. A
+                    // timer that was never set, or that names no instant this machine can show as a local time (ParseTimer),
+                    // is no time: the request time stays unknown, and the duration zero.
+                    DateTimeOffset? begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
+                    DateTimeOffset? done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
+                    if (begin != null)
+                    {
+                        requestTime = begin.Value.LocalDateTime;
+                    }
 
-                    DateTime endTime = DateTime.Parse((string)sessionTimers.Attribute("ClientDoneResponse"));
+                    if (begin != null && done != null)
+                    {
+                        duration = done.Value.UtcDateTime - begin.Value.UtcDateTime;
+                    }
 
                     var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
 
@@ -295,9 +300,14 @@ namespace XMAT.WebServiceCapture
                         {
                             if (!clientIPRead)
                             {
-                                // CLIENT IP
-                                clientIP = (string)flag.Attribute("V");
-                                clientIP = clientIP.Substring(clientIP.LastIndexOf(':') + 1);
+                                // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form
+                                // (::ffff:a.b.c.d) is kept as IPv4.
+                                clientIP = (string)flag.Attribute("V") ??
+                                    throw new FormatException("x-clientip has no value");
+                                if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
+                                {
+                                    clientIP = address.MapToIPv4().ToString();
+                                }
                                 clientIPRead = true;
                             }
                         }
@@ -329,15 +339,25 @@ namespace XMAT.WebServiceCapture
                     {
                         connectionId = exactConnection;
                     }
-                    if (TryReadTimestamp(xmatFlags.GetValueOrDefault(RequestTimestampFlag), out DateTime exactStart))
+                    // XMAT's flags keep full ticks where Fiddler's timers keep five digits of a second; the duration
+                    // is the time between the instants that the flags, or the timers without them, name.
+                    bool exactStartRead = TryReadTimestamp(
+                        xmatFlags.GetValueOrDefault(RequestTimestampFlag), out DateTime exactStart);
+                    bool exactEndRead = TryReadTimestamp(
+                        xmatFlags.GetValueOrDefault(ResponseTimestampFlag), out DateTime exactEnd);
+                    if (exactStartRead)
                     {
                         requestTime = exactStart;
                     }
-                    if (TryReadTimestamp(xmatFlags.GetValueOrDefault(ResponseTimestampFlag), out DateTime exactEnd))
+                    if (exactStartRead || exactEndRead)
                     {
-                        endTime = exactEnd;
+                        DateTime? start = exactStartRead ? exactStart.ToUniversalTime() : begin?.UtcDateTime;
+                        DateTime? end = exactEndRead ? exactEnd.ToUniversalTime() : done?.UtcDateTime;
+                        if (start != null && end != null)
+                        {
+                            duration = end.Value - start.Value;
+                        }
                     }
-                    duration = endTime - requestTime;
                     string exactScheme = xmatFlags.GetValueOrDefault(SchemeFlag);
                     scheme = Uri.CheckSchemeName(exactScheme) ? exactScheme : scheme;
                     string exactPath = xmatFlags.GetValueOrDefault(RequestPathFlag);
@@ -425,13 +445,85 @@ namespace XMAT.WebServiceCapture
             long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
 
         // XMAT stores times as round-trip strings (ProxyConnectionModel.ToDateTimeString); like a loaded capture, the
-        // model holds them as local time.
+        // model holds them as local time. The unknown time (UnknownTimeText) is no time, and neither is an instant that
+        // this machine cannot show as a local time (ParseTimer).
         private static bool TryReadTimestamp(string value, out DateTime timestamp)
         {
             bool valid = DateTime.TryParseExact(
-                value, "o", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime exact);
-            timestamp = valid ? exact.ToLocalTime() : DateTime.MinValue;
+                value, "o", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime exact)
+                && !(exact.Kind == DateTimeKind.Unspecified && exact == DateTime.MinValue);
+            DateTime utc = exact.Kind == DateTimeKind.Local
+                ? exact.ToUniversalTime()
+                : DateTime.SpecifyKind(exact, DateTimeKind.Utc);
+            DateTime local = utc.ToLocalTime();
+            valid = valid && local.ToUniversalTime() == utc;
+            timestamp = valid ? local : DateTime.MinValue;
             return valid;
+        }
+
+        // A request target in absolute form whose scheme makes a URL (UriUtils.IsUrlScheme), and its authority written as a
+        // Host header would be: the host as Uri reads it (a name in lower case, an IDN in punycode, an IPv4 address dotted,
+        // an IPv6 address canonical and in brackets, with its zone's lexical spelling kept), and the port only when it is
+        // not the scheme's default. User information is no part of it. A CONNECT's target is not one, nor is a target whose
+        // host is no host identity, has no IDN form, or whose port is outside 1-65535.
+        private static bool TryReadAbsoluteTarget(string method, string target, out Uri uri, out string authority)
+        {
+            authority = null;
+            if (method != "CONNECT" &&
+                StoredAuthority.TryParseAbsoluteTarget(target, out _, out _) &&
+                Uri.TryCreate(target, UriKind.Absolute, out uri) &&
+                UriUtils.IsUrlScheme(uri.Scheme) &&
+                TryGetHostText(uri, out string hostText))
+            {
+                string written;
+                if (uri.HostNameType == UriHostNameType.IPv6)
+                {
+                    written = "[" + hostText + "]";
+                }
+                else
+                {
+                    if (!HostAuthority.TryNormalizeHost(hostText, out string normalizedHost))
+                    {
+                        uri = null;
+                        return false;
+                    }
+
+                    written = normalizedHost;
+                }
+
+                if (!uri.IsDefaultPort)
+                {
+                    written += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
+                }
+
+                if (StoredAuthority.TryParse(written, out string storedHost, out int? storedPort))
+                {
+                    authority = StoredAuthority.Format(storedHost, storedPort);
+                    return true;
+                }
+            }
+
+            uri = null;
+            return false;
+        }
+
+        // The host text that Uri gives a host identity: an IPv4 address dotted, an IPv6 address with its zone, or a name in
+        // lower case and punycode. A name that Uri parses but whose IDN conversion fails, such as a label longer than 63
+        // characters in punycode, has none: Uri.IdnHost throws UriFormatException for it or, for a name that Uri keeps as a
+        // Basic host, gives it unconverted, which the caller's HostAuthority.TryNormalizeHost then refuses, as it refuses
+        // any name that is not in ASCII.
+        private static bool TryGetHostText(Uri uri, out string host)
+        {
+            try
+            {
+                host = uri.HostNameType == UriHostNameType.IPv6 ? uri.DnsSafeHost : uri.IdnHost;
+                return true;
+            }
+            catch (UriFormatException)
+            {
+                host = null;
+                return false;
+            }
         }
 
         public static ProxyConnectionsCollection ImportSazFile(
@@ -530,12 +622,12 @@ namespace XMAT.WebServiceCapture
                 new ImportedCaptureSource(sourcePath, sourceIdentity));
         }
 
-        private static WebHeaderCollection ReadHeaders(
+        private static SazHeaderFields ReadHeaders(
             BinaryReader reader,
             ref int rawHeaderBytes,
             ref int skippedMalformedHeaderLines)
         {
-            var headers = new WebHeaderCollection();
+            var headers = new SazHeaderFields();
             var headerLines = 0;
             while (true)
             {
@@ -550,7 +642,7 @@ namespace XMAT.WebServiceCapture
                 string line = ReadHeaderLine(
                     reader,
                     ref rawHeaderBytes);
-                if (string.IsNullOrWhiteSpace(line))
+                if (IsBlankHeadLine(line))
                 {
                     return headers;
                 }
@@ -563,6 +655,7 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Head lines are decoded as Latin-1, which keeps every byte: a byte from 0x80 to 0xFF is that character, never '?'.
         private static string ReadHeaderLine(
             BinaryReader reader,
             ref int rawHeaderBytes)
@@ -571,6 +664,7 @@ namespace XMAT.WebServiceCapture
             {
                 string line = reader.ReadLine(
                     MaxRawHeaderBytesPerMessage - rawHeaderBytes,
+                    Encoding.Latin1,
                     out int bytesRead);
                 rawHeaderBytes += bytesRead;
                 return line;
@@ -634,8 +728,24 @@ namespace XMAT.WebServiceCapture
             value == (byte)'\r' ||
             value == (byte)' ';
 
+        // The blank line that ends a head: empty, or only the ASCII whitespace that string.IsNullOrWhiteSpace saw when heads
+        // were read as ASCII. That method would also end a head at a line of 0x85 or 0xA0, which Latin-1 reads as U+0085 and
+        // U+00A0, and make the headers after that line part of the body.
+        private static bool IsBlankHeadLine(string line)
+        {
+            foreach (char value in line)
+            {
+                if (value is not ('\t' or '\n' or '\v' or '\f' or '\r' or ' '))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static void AddHeaderOrSkip(
-            WebHeaderCollection headers,
+            SazHeaderFields headers,
             string line,
             ref int skippedMalformedHeaderLines)
         {
@@ -645,17 +755,11 @@ namespace XMAT.WebServiceCapture
                 return;
             }
 
-            try
-            {
-                headers.Add(line);
-            }
-            catch (ArgumentException)
-            {
-                skippedMalformedHeaderLines++;
-            }
+            headers.Add(line);
         }
 
-        // Mirrors .NET 10 WebHeaderCollection.Add(string) validation without using exceptions for control flow.
+        // WebHeaderCollection.Add(string)'s rules, checked without exceptions, with one difference: a name may have an
+        // apostrophe, which HTTP allows (RFC 9110 tokens) and replay sends, so a request that XMAT sent reads back whole.
         internal static bool IsValidHeaderLine(string line)
         {
             if (string.IsNullOrEmpty(line))
@@ -740,8 +844,78 @@ namespace XMAT.WebServiceCapture
                 value < 127 &&
                 value is not (
                     '(' or ')' or '<' or '>' or '@' or ',' or ';' or
-                    ':' or '\\' or '"' or '\'' or '/' or '[' or ']' or
+                    ':' or '\\' or '"' or '/' or '[' or ']' or
                     '?' or '=' or '{' or '}');
+        }
+
+        // A timer as an instant, or null for one that names no time this machine can keep. A time without an offset that reads
+        // as DateTime.MinValue is the unknown time: Fiddler writes it for a timer that was never set, and XMAT's export for a
+        // time it does not know, so it reads back as unknown in any time zone. A time that names no instant is no time either:
+        // one whose UTC falls outside years 1 to 9999. DateTime reads such a time only in the time zones whose offset brings it
+        // back within those years, so it is found from its clock and its offset alone, and every zone reads it alike. So is an
+        // instant that this machine cannot show as a local time: the model keeps local times, and DateTime would move such a
+        // time to its first or last value, as it does the first hours of the year 1 west of UTC, so the request time and the
+        // end would no longer name the instants. Anything else that is not a time throws, as DateTime.Parse did.
+        private static DateTimeOffset? ParseTimer(string value)
+        {
+            bool isTime = DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime clock);
+            if (isTime && clock.Kind == DateTimeKind.Unspecified && clock == DateTime.MinValue)
+            {
+                return null;
+            }
+
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out DateTimeOffset instant))
+            {
+                return instant.LocalDateTime.ToUniversalTime() == instant.UtcDateTime ? instant : null;
+            }
+
+            if (isTime || NamesNoInstant(value))
+            {
+                return null;
+            }
+
+            // Throws the exception that the value is not a time, or ArgumentNullException without one.
+            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
+        }
+
+        // Whether the value is a clock and an offset whose UTC falls outside years 1 to 9999. The offset is the hours, and the
+        // minutes if any, after the value's last sign, at most 14 hours as DateTimeOffset allows; the clock is the time before
+        // it, which must have no offset of its own. Text that is no time in any zone is neither, so it still throws.
+        private static bool NamesNoInstant(string value)
+        {
+            ReadOnlySpan<char> text = value.AsSpan().Trim();
+            int sign = text.LastIndexOfAny('+', '-');
+            if (sign <= 0 ||
+                !TryReadOffset(text[(sign + 1)..], out TimeSpan offset) ||
+                !DateTime.TryParse(text[..sign], CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime clock) ||
+                clock.Kind != DateTimeKind.Unspecified)
+            {
+                return false;
+            }
+
+            long utc = text[sign] == '-' ? clock.Ticks + offset.Ticks : clock.Ticks - offset.Ticks;
+            return utc < DateTime.MinValue.Ticks || utc > DateTime.MaxValue.Ticks;
+        }
+
+        // An offset's hours as hh, with minutes as hhmm or hh:mm.
+        private static bool TryReadOffset(ReadOnlySpan<char> text, out TimeSpan offset)
+        {
+            offset = TimeSpan.Zero;
+            if (text.Length is not (2 or 4 or 5) || (text.Length == 5 && text[2] != ':'))
+            {
+                return false;
+            }
+
+            ReadOnlySpan<char> minutesText = text.Length == 2 ? "00" : text[^2..];
+            if (!int.TryParse(text[..2], NumberStyles.None, CultureInfo.InvariantCulture, out int hours) ||
+                !int.TryParse(minutesText, NumberStyles.None, CultureInfo.InvariantCulture, out int minutes) ||
+                minutes > 59)
+            {
+                return false;
+            }
+
+            offset = new TimeSpan(hours, minutes, 0);
+            return offset <= TimeSpan.FromHours(14);
         }
 
         private static bool IsHeaderValueTrimCharacter(char value) =>

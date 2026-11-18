@@ -92,6 +92,7 @@ namespace XMAT
             ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
             ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
+            ComposeRequest.Header = Localization.GetLocalizedString("COMPOSER_NEW_MENU");
 
             AppearanceMenu.Header = Localization.GetLocalizedString("EDIT_APPEARANCE");
             foreach (var item in ThemeMenuItems)
@@ -174,6 +175,12 @@ namespace XMAT
         private void ManageHostLists_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
+        }
+
+        // Each new request gets its own non-modal composer, like Edit and resend; its sends are recorded in the Replays tab.
+        private void ComposeRequest_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            RequestComposerWindow.OpenForApplication(this);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -260,6 +267,7 @@ namespace XMAT
                 if (!_closeConfirmed)
                 {
                     _analysisReportExportWorkflow.CancelClosing();
+                    CaptureAppModel.AppModel.CancelClosePreparation();
                 }
                 _isCloseInProgress = false;
                 IsEnabled = wasEnabled;
@@ -400,7 +408,8 @@ namespace XMAT
             {
                 try
                 {
-                    CaptureAppModel.AppModel.LoadDataCaptures(
+                    CaptureLoadResult load =
+                        CaptureAppModel.AppModel.LoadDataCaptures(
                         filename);
                     if (CaptureAppModel.AppModel
                         .CaptureDeviceContexts.Any())
@@ -409,6 +418,19 @@ namespace XMAT
                             .SelectedDeviceContext =
                             CaptureAppModel.AppModel
                                 .CaptureDeviceContexts.Last();
+                    }
+                    string warning =
+                        CaptureOpenWarningKey(
+                            load);
+                    if (warning != null)
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString(
+                                warning),
+                            Localization.GetLocalizedString(
+                                "CAPTURE_TEXT_AMBIGUOUS_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
                     }
                 }
                 catch (SqLtSchemaException ex)
@@ -451,8 +473,18 @@ namespace XMAT
                     "CAPTURE_OPEN_SIDECAR",
                 SqLtSchemaFailure.UnsupportedLocation =>
                     "CAPTURE_OPEN_LOCATION",
+                SqLtSchemaFailure.UnsupportedVersion =>
+                    "CAPTURE_OPEN_FUTURE_VERSION",
                 _ => "CAPTURE_OPEN_SCHEMA_ERROR",
             };
+
+        internal static string CaptureOpenWarningKey(
+            CaptureLoadResult result) =>
+            result?.AddedOrReplaced == true &&
+            result.Source?.Semantics ==
+                CaptureTextSemantics.AmbiguousUnmarked
+                ? "CAPTURE_TEXT_AMBIGUOUS_WARNING"
+                : null;
 
         private void Save_Executed(object sender, RoutedEventArgs e)
         {

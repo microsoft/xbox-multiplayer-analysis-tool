@@ -87,6 +87,31 @@ namespace XMAT.Tests.Operations.Export
             }
         }
 
+        [Theory]
+        [InlineData(true, CaptureTextFormat.LiteralUserVersion)]
+        [InlineData(false, CaptureTextFormat.AmbiguousUserVersion)]
+        public void Complete_WritesTheLiteralMarkerOnlyWhenAsked(bool markLiteral, int expected)
+        {
+            using var directory = new ExportTestDirectory();
+            string output = directory.PathOf("marked.xmatcap");
+
+            using (var writer = new XmatcapExportWriter(
+                output,
+                CaptureFields(),
+                DeviceFields,
+                new Dictionary<string, RawExportRow>(),
+                markLiteral))
+            {
+                writer.Write(Row(1), CancellationToken.None);
+                writer.Complete(CancellationToken.None);
+            }
+
+            using var connection = Open(output);
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version";
+            Assert.Equal((long)expected, Convert.ToInt64(command.ExecuteScalar()));
+        }
+
         [Fact]
         public void Constructor_UnexpectedFailureReleasesTheStagedFileAndRethrows()
         {

@@ -51,5 +51,8 @@ namespace XMAT
         internal const string Export = "\uE74E";
         internal const string Delete = "\uE74D";
         internal const string Sort = "\uE8CB";
+        internal const string Edit = "\uE70F";
+        internal const string Replay = "\uE8EE";
+        internal const string Verify = "\uE9D5";
     }
 }

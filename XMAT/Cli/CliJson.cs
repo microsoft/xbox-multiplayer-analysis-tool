@@ -8,21 +8,36 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Export;
+using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
-    // service labels, ordinal ids, the input kind and SHA-256, the effective limits, the validated process selectors of
-    // the command line, an export's format and its published file's size and SHA-256, codes and fixed messages. Never
-    // AnalysisResult.Legacy, captured content or paths.
+    // service labels, ordinal ids, request numbers, outcomes and status codes, the input kind and SHA-256, the effective
+    // limits and options, the validated process selectors of the command line, an export's format and its published
+    // file's size and SHA-256, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths other
+    // than artifact paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
         internal const string SummarySchema = "xmat-analysis/1";
+        internal const string MarkCaptureTextSummarySchema =
+            "xmat-mark-capture-text/1";
+
+        // summary.json of a published replay or compose run.
+        internal const string ReplaySummarySchema = "xmat-replay/1";
+
+        // summary.json of a published save-request run.
+        internal const string SaveRequestSummarySchema = "xmat-save-request/1";
+
+        // summary.json of a published curl run.
+        internal const string CurlSummarySchema = "xmat-curl/1";
 
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
@@ -60,9 +75,35 @@ namespace XMAT.Cli
                     WriteExport(writer, report.Export);
                 }
 
+                if (report.Replay != null)
+                {
+                    WriteReplay(writer, report.Replay, includeFiles: report.Artifacts.Count != 0);
+                }
+
+                if (report.SaveRequest != null)
+                {
+                    WriteSaveRequest(writer, report.SaveRequest, includeFiles: report.Artifacts.Count != 0);
+                }
+
+                if (report.Curl != null)
+                {
+                    WriteCurl(writer, report.Curl, includeFiles: report.Artifacts.Count != 0);
+                }
+
                 if (report.Doctor != null)
                 {
                     WriteDoctor(writer, report.Doctor);
+                }
+
+                if (report.MarkCaptureText != null)
+                {
+                    writer.WriteStartObject(
+                        "markCaptureText");
+                    WriteMarkCaptureText(
+                        writer,
+                        report.MarkCaptureText,
+                        report.Artifacts.Count != 0);
+                    writer.WriteEndObject();
                 }
 
                 if (report.Commands != null)
@@ -150,6 +191,429 @@ namespace XMAT.Cli
             return stream.ToArray();
         }
 
+        // summary.json of replay and compose: the results of every send, the run's status and its warnings and errors. The
+        // results are published whatever the responses were, and a raw run cancelled after a send began publishes the sends
+        // that began, with the status cancelled and its errors (compose --raw).
+        internal static byte[] SerializeReplaySummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", ReplaySummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                writer.WriteString("status", report.Status);
+                WriteReplay(writer, report.Replay ?? new CliReplayReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                WriteDiagnostics(writer, "errors", report.Errors);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        internal static byte[] SerializeMarkCaptureTextSummary(
+            CliReport report)
+        {
+            using var stream =
+                new MemoryStream();
+            using (var writer =
+                new Utf8JsonWriter(
+                    stream,
+                    Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString(
+                    "schema",
+                    MarkCaptureTextSummarySchema);
+                writer.WriteString(
+                    "command",
+                    report.Command);
+                writer.WriteString(
+                    "runId",
+                    report.RunId);
+                writer.WriteString(
+                    "version",
+                    CliReport.ToolVersion);
+                WriteMarkCaptureText(
+                    writer,
+                    report.MarkCaptureText ??
+                        new CliMarkCaptureTextReport(),
+                    includePublishedResults: true);
+                WriteDiagnostics(
+                    writer,
+                    "warnings",
+                    report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+        // summary.json of save-request: what each saved request file holds, without its status (a published folder always
+        // succeeded).
+        internal static byte[] SerializeSaveRequestSummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", SaveRequestSummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteSaveRequest(writer, report.SaveRequest ?? new CliSaveRequestReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        // Only kinds, hashes, numbers, ordinal ids, profiles, omitted kinds and counts: never a URL, method, header name or
+        // value, or body, which are in the request files.
+        private static void WriteSaveRequest(Utf8JsonWriter writer, CliSaveRequestReport save, bool includeFiles)
+        {
+            if (save.InputKind != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", save.InputKind);
+                writer.WriteString("sha256", save.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (save.Limits != null)
+            {
+                WriteLimits(writer, save.Limits);
+            }
+
+            if (includeFiles && save.StoredText != null)
+            {
+                WriteStoredText(writer, save.StoredText);
+            }
+
+            CliReplay options = save.Options;
+            writer.WriteStartObject("options");
+            writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteString(
+                "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("requests");
+            foreach (CliSavedRequest saved in save.Requests)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", saved.Id);
+                writer.WriteString("device", saved.DeviceId);
+                if (saved.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                writer.WriteString("profile", saved.Profile);
+                WriteStrings(writer, "omitted", saved.Omitted);
+                writer.WriteStartObject("recognized");
+                writer.WriteNumber("headers", saved.Recognized.HeaderNames.Count);
+                writer.WriteNumber("queryParameters", saved.Recognized.QueryParameterNames.Count);
+                writer.WriteNumber("bodyBytesNotInspected", saved.Recognized.BodyBytesNotInspected);
+                writer.WriteEndObject();
+                writer.WriteString("file", includeFiles ? CliSaveRequestCommand.FileOf(saved.Id) : null);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        // summary.json of curl: what each script asks for, without its status (a published folder always succeeded).
+        internal static byte[] SerializeCurlSummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", CurlSummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteCurl(writer, report.Curl ?? new CliCurlReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        // Only kinds, hashes, numbers, ordinal ids, versions and counts: never a URL, method, header name or value, or body,
+        // which are in the scripts and body files.
+        private static void WriteCurl(Utf8JsonWriter writer, CliCurlReport curl, bool includeFiles)
+        {
+            if (curl.InputKind != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", curl.InputKind);
+                writer.WriteString("sha256", curl.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (curl.Limits != null)
+            {
+                WriteLimits(writer, curl.Limits);
+            }
+
+            if (includeFiles && curl.StoredText != null)
+            {
+                WriteStoredText(writer, curl.StoredText);
+            }
+
+            CliReplay options = curl.Options;
+            writer.WriteStartObject("options");
+            writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteString(
+                "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("scripts");
+            foreach (CliCurlScript script in curl.Scripts)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", script.Id);
+                writer.WriteString("device", script.DeviceId);
+                if (script.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                writer.WriteNumber("bodyBytes", script.BodyBytes);
+                writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(script.HttpVersion));
+                writer.WriteBoolean("unicodeCurl", script.UnicodeCurl);
+                writer.WriteStartObject("recognized");
+                writer.WriteNumber("headers", script.Recognized.HeaderNames.Count);
+                writer.WriteNumber("queryParameters", script.Recognized.QueryParameterNames.Count);
+                writer.WriteEndObject();
+                writer.WriteString("script", includeFiles ? CliCurlCommand.ScriptOf(script.Id) : null);
+                writer.WriteString("body", includeFiles && script.BodyBytes > 0 ? CliCurlCommand.BodyOf(script.Id) : null);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        // Only numbers, ordinal ids, outcome names, codes and the artifact paths of each send: never the URL, method,
+        // headers or bodies, which are in the request and response files.
+        private static void WriteReplay(Utf8JsonWriter writer, CliReplayReport replay, bool includeFiles)
+        {
+            // A capture file's kind and hash with its limits, a request file's kind and hash (compose --request-file), or a
+            // raw request file's (compose --raw).
+            if (replay.Limits != null || replay.InputKind is CliReplayCommand.RequestFileInputKind or CliReplayCommand.RawFileInputKind)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", replay.InputKind);
+                writer.WriteString("sha256", replay.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (replay.Limits != null)
+            {
+                WriteLimits(writer, replay.Limits);
+            }
+
+            // A replay run's capture (compose has none to classify), once the run published.
+            if (includeFiles && replay.StoredText != null)
+            {
+                WriteStoredText(writer, replay.StoredText);
+            }
+
+            CliReplay options = replay.Options;
+            writer.WriteStartObject("options");
+            writer.WriteNumber("repeat", options.Repeat);
+            writer.WriteNumber("parallel", options.Parallel);
+            writer.WriteNumber("timeoutSeconds", options.TimeoutSeconds);
+            writer.WriteNumber("maxResponseMib", options.MaxResponseMib);
+            writer.WriteNumber("followRedirects", options.FollowRedirects);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteBoolean("verify", options.Verify);
+            writer.WriteBoolean("verifyDiff", options.VerifyDiff);
+            writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+
+            // --accept-stored-text as given: replay takes it, compose (whose report has no input limits) does not.
+            if (replay.Limits != null)
+            {
+                writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
+            }
+
+            // The version that the run asks for, a request file's included, which a run with Windows authentication makes
+            // exactly HTTP/1.1 when it is Automatic (CliReplayReport.HttpVersion); HTTP/2 only stays as asked, and is refused.
+            writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(replay.HttpVersion));
+
+            // Whether --connect-to, --proxy, --client-cert, --allow-client-cert, --windows-auth and --allow-windows-auth
+            // were given, never their address, URL, thumbprint or origin: the output names no endpoint, no certificate and
+            // no identity.
+            writer.WriteBoolean("connectTo", options.ConnectTo != null);
+            writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
+            writer.WriteBoolean("proxy", options.Proxy != null);
+            writer.WriteBoolean("allowProxy", options.AllowProxy);
+            writer.WriteBoolean("clientCertificate", options.ClientCertificate != null);
+            writer.WriteBoolean("allowClientCertificate", options.AllowClientCertificate != null);
+            writer.WriteBoolean("windowsAuth", options.WindowsAuth);
+            writer.WriteBoolean("allowWindowsAuth", options.AllowWindowsAuth != null);
+            writer.WriteBoolean("saveSaz", options.SaveSaz);
+
+            // Whether --raw, --allow-raw and --fix-content-length were given, never the file or the --target origin.
+            writer.WriteBoolean("raw", options.RawFile != null);
+            writer.WriteBoolean("allowRaw", options.AllowRaw);
+            writer.WriteBoolean("fixContentLength", options.FixContentLength);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("replays");
+            foreach (ReplayItemResult item in replay.Items)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", item.Id);
+                writer.WriteString("device", item.DeviceId);
+                if (item.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                if (item.Sequence is long sequence)
+                {
+                    writer.WriteNumber("sequence", sequence);
+                }
+                else
+                {
+                    writer.WriteNull("sequence");
+                }
+
+                writer.WriteNumber("iteration", item.Iteration);
+                writer.WriteString("outcome", OutcomeName(item.Outcome));
+                if (item.StatusCode != 0)
+                {
+                    writer.WriteNumber("status", item.StatusCode);
+                }
+                else
+                {
+                    writer.WriteNull("status");
+                }
+
+                writer.WriteNumber("durationMs", (long)item.Duration.TotalMilliseconds);
+                writer.WriteNumber("responseBytes", item.ResponseBytes);
+                writer.WriteNumber("redirects", item.Redirects);
+                writer.WriteString("transport", item.Transport);
+                writer.WriteString("httpVersion", item.HttpVersion);
+                writer.WriteString("responseVersion", item.ResponseVersion);
+
+                // The Authorization label that a Windows-authentication send's final request carried ("Negotiate" or
+                // "NTLM"), null otherwise: a header label only, never a token, the package or an identity.
+                writer.WriteString("authHeaderSchemeObserved", item.AuthHeaderSchemeObserved);
+
+                // A raw send's write state, how much of its image XMAT handed to the connection, and its response's framing:
+                // none of them proves what the server received. Null for other sends.
+                writer.WriteBoolean("raw", item.Raw);
+                writer.WriteString("requestWrite", item.RequestWrite);
+                if (item.RequestBytesWritten is long written)
+                {
+                    writer.WriteNumber("requestBytesWritten", written);
+                }
+                else
+                {
+                    writer.WriteNull("requestBytesWritten");
+                }
+
+                writer.WriteString("responseFraming", item.ResponseFraming);
+                writer.WriteString("code", item.Code);
+                if (item.Verification == null)
+                {
+                    writer.WriteNull("verify");
+                }
+                else
+                {
+                    writer.WriteStartObject("verify");
+                    writer.WriteString("result", item.Verification.Matches ? "match" : "mismatch");
+                    WriteStrings(writer, "differences", item.Verification.Differences);
+
+                    // The state of the send's diff.json, never its content, which can hold captured data; null without
+                    // --verify-diff.
+                    if (options.VerifyDiff && replay.Details.TryGetValue(item.Id, out VerifyDiffState state))
+                    {
+                        writer.WriteStartObject("detail");
+                        writer.WriteString("state", JsonNamingPolicy.CamelCase.ConvertName(state.ToString()));
+                        writer.WriteString(
+                            "file",
+                            includeFiles ? CliReplayCommand.FolderOf(item.Id) + "/" + CliReplayCommand.DiffFile : null);
+                        writer.WriteEndObject();
+                    }
+                    else
+                    {
+                        writer.WriteNull("detail");
+                    }
+
+                    writer.WriteEndObject();
+                }
+
+                if (includeFiles)
+                {
+                    string folder = CliReplayCommand.FolderOf(item.Id);
+                    writer.WriteStartObject("files");
+                    writer.WriteString("request", folder + "/" + CliReplayCommand.RequestFile);
+                    writer.WriteString(
+                        "response",
+                        item.Outcome is ReplayOutcome.Completed or ReplayOutcome.TooLarge
+                            ? folder + "/" + CliReplayCommand.ResponseFile
+                            : null);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            int completed = replay.Items.Count(item => item.Outcome == ReplayOutcome.Completed);
+            writer.WriteStartObject("totals");
+            writer.WriteNumber("replays", replay.Items.Count);
+            writer.WriteNumber("completed", completed);
+            writer.WriteNumber("failed", replay.Items.Count - completed);
+            writer.WriteNumber("matched", replay.Items.Count(item => item.Verification?.Matches == true));
+            writer.WriteNumber("mismatched", replay.Items.Count(item => item.Verification is { Matches: false }));
+            writer.WriteEndObject();
+        }
+
+        private static string OutcomeName(ReplayOutcome outcome) => outcome switch
+        {
+            ReplayOutcome.Completed => "completed",
+            ReplayOutcome.TimedOut => "timedOut",
+            ReplayOutcome.TooLarge => "tooLarge",
+            _ => "failed",
+        };
+
+        // How a run that published used its input's stored text (Q): the object that analyze reports too.
+        private static void WriteStoredText(Utf8JsonWriter writer, StoredTextSummary storedText)
+        {
+            writer.WriteStartObject("storedText");
+            writer.WriteString("semantics", storedText.Semantics);
+            writer.WriteString("policy", storedText.Policy);
+            writer.WriteEndObject();
+        }
+
         private static void WriteAnalysis(Utf8JsonWriter writer, CliAnalysisReport analysis)
         {
             writer.WriteStartObject("input");
@@ -157,6 +621,19 @@ namespace XMAT.Cli
             writer.WriteString("sha256", analysis.InputSha256);
             writer.WriteEndObject();
             WriteLimits(writer, analysis.Limits);
+
+            if (analysis.StoredText != null)
+            {
+                writer.WriteStartObject(
+                    "storedText");
+                writer.WriteString(
+                    "semantics",
+                    analysis.StoredText.Semantics);
+                writer.WriteString(
+                    "policy",
+                    analysis.StoredText.Policy);
+                writer.WriteEndObject();
+            }
 
             if (analysis.ProcessFilter != null)
             {
@@ -311,6 +788,82 @@ namespace XMAT.Cli
                 writer.WriteNumber("maxRecords", limits.MaxRecords);
                 writer.WriteEndObject();
             }
+        }
+
+        private static void WriteMarkCaptureText(
+            Utf8JsonWriter writer,
+            CliMarkCaptureTextReport report,
+            bool includePublishedResults)
+        {
+            if (report.InputKind != null ||
+                report.InputSha256 != null)
+            {
+                writer.WriteStartObject(
+                    "input");
+                writer.WriteString(
+                    "kind",
+                    report.InputKind);
+                writer.WriteString(
+                    "sha256",
+                    report.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteStartObject(
+                "limits");
+            writer.WriteNumber(
+                "maxInputMib",
+                report.MaxInputMib);
+            writer.WriteEndObject();
+            writer.WriteString(
+                "interpretation",
+                report.Interpretation ==
+                    CaptureTextInterpretation.LegacyOneLayer
+                    ? "legacyOneLayer"
+                    : "asStored");
+            if (!includePublishedResults ||
+                report.OutputSha256 == null ||
+                report.Counts == null)
+            {
+                return;
+            }
+
+            writer.WriteStartObject(
+                "source");
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.AmbiguousUserVersion);
+            writer.WriteString(
+                "semantics",
+                "ambiguousUnmarked");
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "output");
+            writer.WriteString(
+                "file",
+                CliMarkCaptureTextCommand.CapturePath);
+            writer.WriteString(
+                "sha256",
+                report.OutputSha256);
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.LiteralUserVersion);
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "counts");
+            writer.WriteNumber(
+                "tables",
+                report.Counts.Tables);
+            writer.WriteNumber(
+                "rows",
+                report.Counts.Rows);
+            writer.WriteNumber(
+                "valuesExamined",
+                report.Counts.ValuesExamined);
+            writer.WriteNumber(
+                "valuesChanged",
+                report.Counts.ValuesChanged);
+            writer.WriteEndObject();
         }
 
         private static void WriteDoctor(Utf8JsonWriter writer, CliDoctorReport doctor)

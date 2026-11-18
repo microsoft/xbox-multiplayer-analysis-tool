@@ -9,7 +9,6 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
@@ -49,18 +48,12 @@ namespace XMAT
         private OverflowTabPanel HeaderPanel =>
             CaptureDevicesTabs.Template?.FindName("headerPanel", CaptureDevicesTabs) as OverflowTabPanel;
 
+        // The commands' bindings are in AllCaptureDevicesTabControl.xaml: the product makes no CommandBinding in code.
         private void AddTabReordering()
         {
-            CommandBindings.Add(new CommandBinding(
-                MoveTabLeft, (sender, e) => MoveTab(e.Parameter, -1), (sender, e) => e.CanExecute = CanMoveTab(e.Parameter, -1)));
-            CommandBindings.Add(new CommandBinding(
-                MoveTabRight, (sender, e) => MoveTab(e.Parameter, 1), (sender, e) => e.CanExecute = CanMoveTab(e.Parameter, 1)));
             foreach ((RoutedCommand command, Key key) in new[] { (MoveTabLeft, Key.PageUp), (MoveTabRight, Key.PageDown) })
             {
-                var shortcut = new KeyBinding(command, key, ModifierKeys.Control | ModifierKeys.Shift);
-                BindingOperations.SetBinding(shortcut, InputBinding.CommandParameterProperty,
-                    new Binding(nameof(Selector.SelectedItem)) { Source = CaptureDevicesTabs });
-                InputBindings.Add(shortcut);
+                InputBindings.Add(SelectedTabShortcut(command, key, ModifierKeys.Control | ModifierKeys.Shift, CaptureDevicesTabs));
             }
 
             PreviewKeyDown += MoveShortcut_PreviewKeyDown;
@@ -75,6 +68,14 @@ namespace XMAT
             int index = Tabs?.IndexOf(item as ICaptureDeviceContext) ?? -1;
             return LookState.Current.IsNewLook && !IsDraggingTab && index >= 0 && index + step >= 0 && index + step < Tabs.Count;
         }
+
+        private void MoveTabLeft_Executed(object sender, ExecutedRoutedEventArgs e) => MoveTab(e.Parameter, -1);
+
+        private void MoveTabLeft_CanExecute(object sender, CanExecuteRoutedEventArgs e) => e.CanExecute = CanMoveTab(e.Parameter, -1);
+
+        private void MoveTabRight_Executed(object sender, ExecutedRoutedEventArgs e) => MoveTab(e.Parameter, 1);
+
+        private void MoveTabRight_CanExecute(object sender, CanExecuteRoutedEventArgs e) => e.CanExecute = CanMoveTab(e.Parameter, 1);
 
         private void MoveTab(object item, int step)
         {

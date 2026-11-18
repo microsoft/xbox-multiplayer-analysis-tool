@@ -8,8 +8,13 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal partial class SqLtDatabase : IDatabase, IDisposable
+    internal partial class SqLtDatabase :
+        IDatabase,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
+        public CaptureTextSource CaptureTextSource { get; private set; }
+
         public void Initialize()
         {
             InitializeInternal();

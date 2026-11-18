@@ -33,8 +33,8 @@ namespace XMAT.Tests
 
         public ContextMenuTests(CaptureUiApplicationFixture application) => _application = application;
 
-        // Host, Process and Sessions, each under a header that names its subject once, then Sort by; the timeline's bars
-        // have the Host and Process groups only.
+        // Host, Request, Process and Sessions, each under a header that names its subject once, then Sort by; the
+        // timeline's bars have the Host and Process groups only.
         [Fact]
         public void RowAndTimelineMenus_GroupTheirItemsUnderHeaders()
         {
@@ -49,6 +49,8 @@ namespace XMAT.Tests
                     {
                         "[Host telemetry.enterprise.githubcopilot.com]",
                         "Add to Block List", "Add to Bypass List", "Manage host lists...", "-",
+                        "[Request]",
+                        "Edit and resend", "Replay", "-",
                         "[Process copilot-runtime.exe]",
                         "Show only this process", "Hide this process", "Show all processes", "-",
                         "[Sessions]",
@@ -101,6 +103,7 @@ namespace XMAT.Tests
                     Assert.Equal(new[]
                     {
                         "[Host]", "(No host is available for this item)", "Manage host lists...", "-",
+                        "[Request]", "Edit and resend", "Replay", "-",
                         "[Process]", "(No process information for this session)", "-",
                         "[Sessions]", "Export selected...", "Export visible...", "Delete selected", "Delete unselected", "-",
                         "Sort by",
@@ -143,7 +146,7 @@ namespace XMAT.Tests
                 try
                 {
                     Assert.Equal(2, menu.Items.OfType<MenuNote>().Count());
-                    Assert.Equal(3, menu.Items.OfType<MenuGroupHeader>().Count());
+                    Assert.Equal(4, menu.Items.OfType<MenuGroupHeader>().Count());
                     Assert.All(menu.Items.OfType<MenuLabel>(), label => Assert.False(label.Focusable));
                     MenuItem[] actions = menu.Items.OfType<MenuItem>().Where(item => item.IsEnabled).ToArray();
 
@@ -252,6 +255,8 @@ namespace XMAT.Tests
                         "Add telemetry.enterprise.githubcopilot.com to Block List",
                         "Add telemetry.enterprise.githubcopilot.com to Bypass List",
                         "Manage host lists...",
+                        "Edit and resend",
+                        "Replay",
                         "Show only copilot-runtime.exe",
                         "Hide copilot-runtime.exe",
                         "Export selected sessions...",
@@ -264,7 +269,7 @@ namespace XMAT.Tests
                     Assert.Equal(
                         new[] { ModifierKeys.None, ModifierKeys.Shift }.Select(modifiers =>
                             new KeyGesture(Key.Delete, modifiers).GetDisplayStringForCulture(CultureInfo.CurrentUICulture)),
-                        items.Skip(7).Take(2).Select(item => item.InputGestureText));
+                        items.Skip(9).Take(2).Select(item => item.InputGestureText));
                     Assert.All(menu.Items.OfType<MenuLabel>(),
                         label => Assert.Equal(AutomationControlType.Text, Peer(label).GetAutomationControlType()));
                     Assert.Equal("Host " + Host, Peer((UIElement)menu.Items[0]).GetName());
@@ -298,6 +303,7 @@ namespace XMAT.Tests
                     Assert.Equal(new[]
                     {
                         L("HOST_LIST_ADD_BLOCK", Host), L("HOST_LIST_ADD_BYPASS", Host), "-", L("HOST_LISTS_MANAGE_MENU"), "-",
+                        L("COMPOSER_TITLE"), L("REPLAY_MENU"), "-",
                         L("PROCESS_FILTER_SHOW_ONLY", Process), L("PROCESS_FILTER_HIDE", Process), "-",
                         L("WEBCAP_EXPORT_SELECTED"), L("WEBCAP_EXPORT_VISIBLE"), "-",
                         L("WEBCAP_DELETE_SELECTED"), L("WEBCAP_DELETE_UNSELECTED"), "-",

@@ -9,6 +9,7 @@ using System.Text;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {
@@ -63,27 +64,43 @@ namespace XMAT.XboxLiveCaptureAnalysis
             }
 
             var requestHeaders = GetRequestHeadersForString(requestLineAndHeaders);
+            // PlayFab's pre-existing substring allow-list is matched against the normalized host identity, never text
+            // carried only in an IPv6 zone.
+            string allowListHost =
+                HostAuthority.TryNormalizeHost(requestHost, out string hostIdentity)
+                    ? hostIdentity
+                    : requestHost ?? string.Empty;
             if (!Utils.IsAnalyzedService(requestHeaders, null) &&
-                !AllowedNonAnalyzedHosts.Any(host => requestHost.Contains(host)))
+                !AllowedNonAnalyzedHosts.Any(host => allowListHost.Contains(host)))
             {
                 return null;
             }
 
             var requestTime = DateTime.Parse(requestTimestamp);
-            var duration = DateTime.Parse(responseTimestamp) - requestTime;
+            // A call's time is a FILETIME (ReqTimeUTC), which starts in 1601. A request whose time is unknown or earlier
+            // than that cannot be placed among the calls that rules compare in time, so like a request without its times it
+            // is not analyzed, rather than failing the whole analysis.
+            if (!ProxyConnectionModel.IsPlaced(requestTime))
+            {
+                return null;
+            }
+
+            // The time between the two instants, never between their local clock readings, which differ by an hour across
+            // a daylight saving change.
+            var duration = ProxyConnectionModel.Elapsed(requestTime, DateTime.Parse(responseTimestamp));
 
             item.Host = string.IsNullOrWhiteSpace(requestHost)
                 ? string.Empty
-                : requestHeaders[HttpRequestHeader.Host] ??
-                    requestHost.Split(':')[0];
+                : requestHeaders[HttpRequestHeader.Host] ?? LogicalHost(requestHost);
 
             // A stored hostless capture remains hostless; otherwise the logical Host label keeps
             // the captured-header behavior. Host-list actions use separate physical provenance.
             item.EndpointKind = EndpointKind.Captured;
             item.PhysicalHost = GetPhysicalHost(requestHost, requestHeaders[HttpRequestHeader.Host]);
 
-            // A hostless capture keeps its request path without reconstructing an authority.
-            item.Uri = string.IsNullOrEmpty(item.Host)
+            // A hostless capture keeps its request path without reconstructing an authority, and so does one whose scheme
+            // makes no URL: an unknown scheme, or the method that earlier imports stored as the scheme.
+            item.Uri = string.IsNullOrEmpty(item.Host) || !UriUtils.IsUrlScheme(requestScheme)
                 ? requestPath ?? string.Empty
                 : UriUtils.GetAbsoluteUri(
                     requestScheme,
@@ -129,6 +146,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     dataRecord.Str(fieldName)));
         }
 
+        // The request headers that analysis reads, Host and those that name an analyzed service. A line that
+        // WebHeaderCollection refuses, such as a name with an apostrophe that replay sends and the SAZ readers keep, is
+        // left out of these headers only; the stored head (ReqHeader) keeps it.
         private static WebHeaderCollection GetRequestHeadersForString(
             string requestLineAndHeaders)
         {
@@ -141,12 +161,24 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     var line = lines[index];
                     if (!string.IsNullOrEmpty(line) && line.Contains(':'))
                     {
-                        headers.Add(line);
+                        try
+                        {
+                            headers.Add(line);
+                        }
+                        catch (ArgumentException)
+                        {
+                            // Not a header that WebHeaderCollection holds.
+                        }
                     }
                 }
             }
             return headers;
         }
+
+        // The label of a row without a Host header: its stored host, which an IPv6 address is whole in, where the former
+        // split at the first colon kept only its first group; any other text still keeps what precedes a colon.
+        private static string LogicalHost(string structuredHost) =>
+            HostAuthority.TryNormalizeHost(structuredHost, out string host) ? host : structuredHost.Split(':')[0];
 
         private static string GetPhysicalHost(string structuredHost, string hostHeader)
         {

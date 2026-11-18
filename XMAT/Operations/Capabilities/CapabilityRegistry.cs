@@ -14,6 +14,8 @@ namespace XMAT.Operations.Capabilities
     internal static class CapabilityRegistry
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string ReplayOperation = "XMAT.Operations.Replay.ReplayOperation";
+        internal const string MarkCaptureTextOperation = "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
         internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
         internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
 
@@ -35,6 +37,10 @@ namespace XMAT.Operations.Capabilities
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
         private const string TrafficOverviewXaml = "Controls/TrafficOverview.xaml";
         private const string WhatsNewXaml = "Windows/WhatsNewWindow.xaml";
+        private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
+        private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
+        private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
+        private const string MultipartFormXaml = "Engines/WebServiceProxy/Windows/MultipartFormWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string DeviceTabsPrefix = "XMAT.AllCaptureDevicesTabControl.";
@@ -108,6 +114,12 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
+            Capability.Supported(
+                "capture-file.mark-text",
+                "Mark or repair capture text storage",
+                "S10",
+                cli: "mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]",
+                operation: MarkCaptureTextOperation),
             // One operation exports every format: File > Export and Export Sanitized (the selected tab) and the capture
             // list's row menu (the selected or the visible sessions), whose save dialog offers each format.
             Capability.Supported(
@@ -230,6 +242,102 @@ namespace XMAT.Operations.Capabilities
                     Click(BypassListXaml, "AddBypass_Click"),
                     Click(BypassListXaml, "RemoveSelected_Click"),
                     Click(BypassListXaml, "ClearAll_Click"),
+                }),
+
+            // Replay sends captured requests again, as captured or edited, from this PC through the shared ReplaySender,
+            // directly or, when allowed, through an upstream proxy, and offers a client certificate or answers with Windows
+            // authentication only when allowed for the run's one origin; the replays are not captured. The composer is its
+            // GUI adapter for one request, or one per number of a URL with '#' (SequenceRangeWindow).
+            Capability.Supported(
+                "request.replay", "Replay captured requests, as captured or edited", "S9",
+                cli: "replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
+                    "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
+                    "[--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--accept-stored-text] " +
+                    "[--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "EditAndResend"),
+                    Command(ProxyCommandsPrefix + "Reissue"),
+                    Command(ProxyCommandsPrefix + "CancelReissue"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Click(ComposerXaml, "Send_Click"),
+                    Click(ComposerXaml, "CancelSend_Click"),
+                    Click(ComposerXaml, "UploadFile_Click"),
+                    Click(ComposerXaml, "ClearBody_Click"),
+                    // Build form: a multipart body, made by the same builder as --form (MultipartForm).
+                    Click(ComposerXaml, "BuildForm_Click"),
+                    Window("XMAT.WebServiceCapture.MultipartFormWindow"),
+                    Click(MultipartFormXaml, "AddText_Click"),
+                    Click(MultipartFormXaml, "AddFile_Click"),
+                    Click(MultipartFormXaml, "RemovePart_Click"),
+                    Click(MultipartFormXaml, "MoveUp_Click"),
+                    Click(MultipartFormXaml, "MoveDown_Click"),
+                    Click(MultipartFormXaml, "UseForm_Click"),
+                    Click(MultipartFormXaml, "CancelWork_Click"),
+                    Click(ComposerXaml, "Close_Click"),
+                    Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
+                    Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
+                    Click(VerifyDiffXaml, "Close_Click"),
+                }),
+            Capability.Supported(
+                "request.compose", "Compose and send a new request", "S9",
+                cli: "compose --url URL | --request-file FILE | --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw] " +
+                    "[--fix-content-length] [--sequence START-END] [--method METHOD] " +
+                    "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
+                    "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
+                    "[--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "ComposeRequest"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Window("XMAT.WebServiceCapture.SequenceRangeWindow"),
+                    Click(SequenceRangeXaml, "Ok_Click"),
+                    // Raw mode (compose --raw) and its Content-Length fix (--fix-content-length).
+                    Click(ComposerXaml, "ModeButton_Click"),
+                    Click(ComposerXaml, "FixContentLength_Click"),
+                }),
+
+            // A request file (xmat-request/1) holds one request without sending it: a template, by default, keeps only its
+            // shape; with consent, its captured content. Loading one never grants consent (request.compose sends it).
+            Capability.Supported(
+                "request.save", "Save requests as request files, without sending them", "S9",
+                cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
+                    "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
+                    "[--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "OpenRequest_Click"),
+                    Click(ComposerXaml, "SaveRequest_Click"),
+                    Click(ComposerXaml, "CompletePart_Click"),
+                    Window("XMAT.WebServiceCapture.SaveRequestWindow"),
+                    Click("Engines/WebServiceProxy/Windows/SaveRequestWindow.xaml", "Save_Click"),
+                }),
+
+            // A cURL script runs one request again outside XMAT: PowerShell 7 runs the inbox curl.exe with arguments that
+            // send what XMAT's sender sends. A script holds its request as captured, so exporting always needs consent; it
+            // sends nothing and starts nothing (RequestCurlExporter).
+            Capability.Supported(
+                "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
+                cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
+                    "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1] " +
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "SaveCurl_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
@@ -412,6 +520,11 @@ namespace XMAT.Operations.Capabilities
                     Click(TrafficOverviewXaml, "Show_Click"),
                     Preference("XMAT.Models.AppPreferencesModel", "ShowTrafficOverview"),
                 }),
+            Capability.GuiOnly(
+                "view.composer-history", "Composer history",
+                "Presentation: session-only navigation over rows already in the Replays tab; sends go through " +
+                    "request.replay, and headless runs keep no session",
+                gui: new[] { Click(ComposerXaml, "History_Click") }),
         };
 
         private static string[] ExportEntryPoints(string fileCommand) => new[]

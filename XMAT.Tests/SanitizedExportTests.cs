@@ -8,8 +8,10 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -640,8 +642,13 @@ namespace XMAT.Tests
             };
         }
 
-        private sealed class Dataset(params IDataRecord[] records) : IDataset
+        private sealed class Dataset(params IDataRecord[] records) :
+            IDataset,
+            ICaptureTextSourceProvider
         {
+            public CaptureTextSource CaptureTextSource =>
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
+
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => records;
             public IEnumerable<IDataRecord> DataRecordsFrom(long first) => records.Where(record => record.RowId >= first);
@@ -661,6 +668,6 @@ namespace XMAT.Tests
             public IDeviceCaptureController CaptureController => controller;
         }
 
-        public void Dispose() => Directory.Delete(_directory, true);
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
     }
 }

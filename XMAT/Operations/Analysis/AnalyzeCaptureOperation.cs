@@ -155,6 +155,49 @@ namespace XMAT.Operations.Analysis
             }
         }
 
+        // Reads a capture file with the analysis input rules (format detection, limits, schema checks and their
+        // diagnostics) for operations that need its requests rather than findings, such as replay. Devices get the
+        // ordinal ids that analysis reports. Cancellation throws OperationCanceledException.
+        internal OperationResult<CaptureRecordSet> ReadCapture(
+            string path,
+            AnalysisLimits limits,
+            CancellationToken cancellationToken)
+        {
+            var diagnostics = new List<OperationDiagnostic>();
+            try
+            {
+                limits ??= AnalysisLimits.Default;
+                CaptureInputReader.ValidateLimits(limits);
+                using LoadedInput loaded = _inputReader.Read(
+                    AnalysisInput.FromFile(path),
+                    limits,
+                    diagnostics,
+                    cancellationToken);
+                var devices = loaded.Devices
+                    .Select((device, index) => new CaptureDeviceRecords(
+                        CaptureDeviceIds.Ordinal(index),
+                        device.Records.ToList()))
+                    .ToList();
+                return OperationResult<CaptureRecordSet>.Success(
+                    new CaptureRecordSet(
+                        InputKindName(loaded.Kind),
+                        loaded.InputSha256,
+                        devices,
+                        loaded.TextSource,
+                        loaded.StoredText),
+                    diagnostics);
+            }
+            catch (CaptureInputException ex)
+            {
+                return OperationResult<CaptureRecordSet>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(
+                        ex.Code,
+                        OperationDiagnosticSeverity.Error,
+                        ex.DiagnosticMessage));
+            }
+        }
+
         private OperationResult<AnalysisResult> ExecuteCore(
             AnalyzeCaptureRequest request,
             OperationContext context,
@@ -300,6 +343,7 @@ namespace XMAT.Operations.Analysis
             var summary = new AnalysisSummary(
                 InputKindName(loaded.Kind),
                 loaded.InputSha256,
+                loaded.StoredText,
                 deviceSummaries,
                 totalCalls,
                 totalFindings);
@@ -820,17 +864,23 @@ namespace XMAT.Operations.Analysis
             IDataRecord,
             IRawBodyDataRecord,
             IOptionalTypedDataRecord,
-            IRawDataRecord
+            IRawDataRecord,
+            ICaptureTextSourceProvider
         {
             private readonly Dictionary<string, object> _values;
 
-            private AnalysisDataRecord(int rowId, Dictionary<string, object> values)
+            private AnalysisDataRecord(int rowId, Dictionary<string, object> values, CaptureTextSource captureTextSource)
             {
                 RowId = rowId;
                 _values = values;
+                CaptureTextSource = captureTextSource;
             }
 
             public int RowId { get; }
+
+            // The source of the model's stored text, which a model made from this record keeps: Literal for a SAZ
+            // record, as its parser's text is.
+            public CaptureTextSource CaptureTextSource { get; }
 
             public long Int(string fieldName)
             {
@@ -916,8 +966,7 @@ namespace XMAT.Operations.Analysis
                     [WebServiceCaptureMethod.FieldKey_RequestTimestamp] =
                         ProxyConnectionModel.ToDateTimeString(model.RequestTime),
                     [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] =
-                        ProxyConnectionModel.ToDateTimeString(
-                            model.RequestTime + model.Duration),
+                        ProxyConnectionModel.ToDateTimeString(model.ResponseDoneTime),
                     [WebServiceCaptureMethod.FieldKey_RequestScheme] =
                         model.Scheme ?? string.Empty,
                     [WebServiceCaptureMethod.FieldKey_RequestHost] =
@@ -946,7 +995,7 @@ namespace XMAT.Operations.Analysis
                     values[field.Name] = field.Value;
                 }
 
-                return new AnalysisDataRecord(rowId, values);
+                return new AnalysisDataRecord(rowId, values, model.CaptureTextSource);
             }
 
             private static string EncodeBody(byte[] body)

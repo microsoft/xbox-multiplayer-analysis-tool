@@ -8,10 +8,6 @@
              mc:Ignorable="d"
              DataContext="{Binding RelativeSource={RelativeSource Self}}"
              d:DesignHeight="450" d:DesignWidth="800">
-    <UserControl.Resources>
-        <local:BodyConverter x:Key="BodyConverter"/>
-        <local:JsonConverter x:Key="JsonConverter"/>
-    </UserControl.Resources>
     <DockPanel Background="{DynamicResource SurfacePanelBrush}">
         <!-- The title's details sit at its right when they fit, and wrap below it when the pane is narrow. -->
         <app:ReflowPanel DockPanel.Dock="Top" Margin="{DynamicResource HeadingBottomSpacing}"
@@ -31,24 +27,26 @@
                     </ScrollViewer>
                 </ContentControl>
             </TabItem>
+            <!-- The Body and JSON tabs show one preview of the body, made in the background (RequestResponseView.xaml.cs);
+                 what it says about the body (empty, not kept, cut, shown as bytes) is in a message bar, apart from the body. -->
             <TabItem x:Name="BodyTab" Header="Body" Style="{DynamicResource FormatTabItemStyle}">
                 <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
-                    <ScrollViewer>
-                        <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True">
-                            <TextBox.Text>
-                                <MultiBinding Converter="{StaticResource BodyConverter}">
-                                    <Binding Path="HeaderDictionary"/>
-                                    <Binding Path="BodyBytes"/>
-                                </MultiBinding>
-                            </TextBox.Text>
-                        </TextBox>
-                    </ScrollViewer>
+                    <DockPanel>
+                        <TextBlock x:Name="BodyMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                                   Visibility="Collapsed"/>
+                        <TextBox x:Name="BodyTextBox" Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                 TextWrapping="NoWrap" FontFamily="Consolas"
+                                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                    </DockPanel>
                 </ContentControl>
             </TabItem>
             <TabItem x:Name="JsonTab" Header="JSON" Style="{DynamicResource FormatTabItemStyle}">
                 <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
-                    <ScrollViewer>
-                        <TreeView Name="TestTreeView" Style="{DynamicResource InspectorTreeViewStyle}" ItemsSource="{Binding BodyText, Converter={StaticResource JsonConverter}}">
+                    <DockPanel>
+                        <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                                   Visibility="Collapsed"/>
+                        <TreeView x:Name="JsonTree" Style="{DynamicResource InspectorTreeViewStyle}"
+                                  VirtualizingPanel.IsVirtualizing="True">
                             <TreeView.ItemTemplate>
                                 <HierarchicalDataTemplate
                                     DataType="{x:Type local:JsonTreeViewItem}"
@@ -62,7 +60,7 @@
                                 </Style>
                             </TreeView.ItemContainerStyle>
                         </TreeView>
-                    </ScrollViewer>
+                    </DockPanel>
                 </ContentControl>
             </TabItem>
             <!--<TabItem Header="Image">

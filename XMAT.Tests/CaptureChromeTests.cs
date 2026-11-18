@@ -940,7 +940,7 @@ namespace XMAT.Tests
                 {
                     Title = "Response",
                     FirstLineAndHeaders = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1",
-                    BodyText = "{\"error\":\"rate_limited\"}"
+                    BodyBytes = System.Text.Encoding.UTF8.GetBytes("{\"error\":\"rate_limited\"}")
                 };
                 WpfTestHost.Show(window, view);
                 var tabs = (TabControl)view.FindName("RequestTabs");

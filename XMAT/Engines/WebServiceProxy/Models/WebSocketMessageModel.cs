@@ -9,8 +9,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Net.WebSockets;
-using System.Text;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Inspection;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.WebServiceCapture.Models
@@ -26,12 +26,11 @@ namespace XMAT.WebServiceCapture.Models
         public string MessageType { get; }
         public byte[] Payload { get; }
         public int PayloadLength => Payload.Length;
+        // Only the start of the message was captured (1 MB); the views say so through its preview's notice.
         public bool PayloadTruncated { get; }
-        public string PayloadNotice => PayloadTruncated
-            ? "Payload capture truncated at 1 MB. The complete message was still forwarded."
-            : string.Empty;
-        public string PayloadText => Encoding.UTF8.GetString(Payload);
-        public string PayloadHex => BitConverter.ToString(Payload).Replace('-', ' ');
+
+        // A text frame's payload is UTF-8 (RFC 6455).
+        private readonly bool _textFrame;
 
         internal WebSocketMessageModel(WebSocketMessageEventArgs args)
         {
@@ -49,9 +48,20 @@ namespace XMAT.WebServiceCapture.Models
                 WebSocketMessageType.Close => "Close",
                 _ => args.MessageType.ToString()
             };
+            _textFrame = args.MessageType == WebSocketMessageType.Text;
             Payload = args.Message == null ? Array.Empty<byte>() : (byte[])args.Message.Clone();
             PayloadTruncated = args.PayloadTruncated;
         }
+
+        // The preview of this message in the WebSockets tab (WebSocketMessagesView): its payload as captured, which may
+        // be only its start, for the Text, JSON and Hex tabs at once. A text frame is UTF-8 text; any other frame has
+        // no content type, so its bytes decide how it is shown.
+        internal BodyPreviewRequest PreviewRequest() =>
+            new(
+                Payload,
+                ContentType: _textFrame ? "text/plain; charset=utf-8" : null,
+                StoredPrefix: PayloadTruncated,
+                Parts: BodyPreviewParts.Text | BodyPreviewParts.Json | BodyPreviewParts.Hex);
 
         public bool MatchesFilter(string direction, string messageType)
         {

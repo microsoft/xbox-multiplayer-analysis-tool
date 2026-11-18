@@ -293,6 +293,26 @@ namespace XMAT.WebServiceCapture.Proxy
         Timeout,
     }
 
+    internal enum ProxyRequestBodyReadFailure
+    {
+        InactivityTimeout,
+        TotalTimeout,
+        BodyTooLarge,
+        BufferExhausted,
+    }
+
+    internal sealed class ProxyRequestBodyReadException : Exception
+    {
+        internal ProxyRequestBodyReadException(
+            ProxyRequestBodyReadFailure failure)
+            : base($"Request body read failed: {failure}.")
+        {
+            Failure = failure;
+        }
+
+        internal ProxyRequestBodyReadFailure Failure { get; }
+    }
+
     internal sealed class ProxyRequestReadResult
     {
         private ProxyRequestReadResult(

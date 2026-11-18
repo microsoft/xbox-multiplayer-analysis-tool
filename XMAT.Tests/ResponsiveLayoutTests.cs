@@ -293,13 +293,19 @@ namespace XMAT.Tests
                     ItemsSource = new ObservableCollection<WebSocketMessageModel> { truncated }
                 };
                 WpfTestHost.Show(window, Host(messages));
-                var notice = (TextBlock)messages.FindName("PayloadNotice");
+                var notice = (TextBlock)messages.FindName("PreviewMessage");
                 Assert.False(notice.IsVisible, "An empty notice must not leave a blank line above the payload.");
 
+                // The preview, made in the background, says the payload was cut.
                 messages.SelectedItem = truncated;
-                WpfTestHost.Pump();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!notice.IsVisible && clock.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    WpfTestHost.Pump();
+                    System.Threading.Thread.Sleep(10);
+                }
                 Assert.True(notice.IsVisible);
-                Assert.Equal(truncated.PayloadNotice, notice.Text);
+                Assert.NotEmpty(notice.Text);
 
                 var policy = new HostListPolicy();
                 policy.BlockList.Add("example.com");

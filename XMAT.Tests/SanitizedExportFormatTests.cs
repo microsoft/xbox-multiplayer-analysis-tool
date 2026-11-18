@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using Xunit.Abstractions;
@@ -1274,8 +1275,9 @@ namespace XMAT.Tests
                 (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
             SazArchive.Write(original, new[] { source });
             var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
-            Assert.Contains("a=1,sid=", imported.RequestLineAndHeaders);
-            Assert.Contains("Path=/,sid=", imported.ResponseLineAndHeaders);
+            Assert.Contains("\r\nCookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n", imported.RequestLineAndHeaders);
+            Assert.Contains(
+                "\r\nSet-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY", imported.ResponseLineAndHeaders);
             var evidence = ExportRecords(imported);
             using var response = JsonDocument.Parse(Body(evidence));
 
@@ -1591,6 +1593,6 @@ namespace XMAT.Tests
             return body.Append("0\r\n\r\n").ToString();
         }
 
-        public void Dispose() => Directory.Delete(_directory, true);
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
     }
 }
