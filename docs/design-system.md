@@ -84,7 +84,8 @@ panels, and the chrome a step below wells. Headings take the body text color; th
 
 A few colors belong to one component and keep their own names: button text and outlines (`ButtonTextBrush`,
 `ButtonBorderBrush`), the capture button (`CaptureAction*`), input outlines (`InputBorderBrush`), the edge of a well
-(`WellEdgeBrush`), skeleton placeholders (`Skeleton*`), the recording indicator, table column dividers, the capture tab
+(`WellEdgeBrush`), skeleton placeholders (`Skeleton*`), the recording indicator, table column dividers, the wash behind
+a problem's or a warning's table row (`ProblemRowBrush`, `AttentionRowBrush`), the capture tab
 strip (`TabStripBrush`) and the tabs' edge and shadow, the hover outline, the scroll bar track and the analysis
 report's expanders. They follow the same rules as roles.
 
@@ -163,16 +164,19 @@ it can't be told from one that is still waiting.
 
 A table shows an HTTP status with `StatusText` ([`XMAT/Controls/StatusText.cs`](../XMAT/Controls/StatusText.cs)), drawn
 by [`XMAT/Styles/Status.xaml`](../XMAT/Styles/Status.xaml) with the problem and warning icons. Screen readers hear the
-code and what a problem or a warning means. The original look keeps its whole-row colors.
+code and what a problem or a warning means. A problem's or a warning's row also takes a faint wash of its color
+(`ProblemRowBrush`, `AttentionRowBrush`), so it stands out when the table is scrolled across; a contrast theme shows no
+wash, and the icon and words carry the meaning. The original look keeps its whole-row colors.
 
 - **STATUS-1** Every state XMAT shows has one meaning, set in `StatusMeanings`. A state gets its meaning there before
   a view shows it; one without a meaning throws.
-- **STATUS-2** In a table, only a problem's or a warning's status cell takes color, with its icon. The rest of the
-  row stays body text.
+- **STATUS-2** In a table, a problem's or a warning's status cell takes its color, with its icon, and its row a faint
+  wash of that color. The row's text stays body text.
 - **STATUS-3** Charts color each status class the same way: the timeline, the traffic overview and the column
   summaries.
 - **STATUS-4** In a table, the status codes line up: every row keeps the icon's space, whether or not it shows the
   icon.
+- **STATUS-5** A table of requests keeps # and Status in view: they stay in place when the table scrolls sideways.
 
 ## Components
 

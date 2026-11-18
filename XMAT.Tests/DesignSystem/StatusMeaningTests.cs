@@ -19,8 +19,8 @@ using Path = System.Windows.Shapes.Path;
 namespace XMAT.Tests.DesignSystem
 {
     // Every state XMAT shows has a meaning (XMAT/Logic/StatusMeanings.cs), and the meaning, not the state, sets how it
-    // shows: in a table only a problem's or a warning's status cell takes color, and the charts color each status class
-    // alike (docs/design-system.md).
+    // shows: in a table a problem's or a warning's status cell takes color and its row a faint wash, the status stays in
+    // view, and the charts color each status class alike (docs/design-system.md).
     [Collection(CaptureUiApplicationCollection.Name)]
     public class StatusMeaningTests
     {
@@ -60,10 +60,11 @@ namespace XMAT.Tests.DesignSystem
             }
         }
 
-        // In the new look, a problem's or a warning's status takes its color and icon and its row stays body text. The
-        // original look colors the whole row, as it always has, and shows the status as its other cells.
+        // In the new look, a problem's or a warning's status takes its color and icon, its row a faint wash of that color,
+        // and the row's text stays body text. The original look colors the whole row's text, as it always has, and shows
+        // the status as its other cells.
         [Fact]
-        public void Table_ColorsOnlyTheStatusCellOfAProblemOrWarning()
+        public void Table_WashesAProblemOrWarningRowAndColorsItsStatusCell()
         {
             _application.Run(window =>
             {
@@ -78,13 +79,14 @@ namespace XMAT.Tests.DesignSystem
                             Color rowText = ((SolidColorBrush)row.Foreground).Color;
                             Color codeText = ((SolidColorBrush)code.Foreground).Color;
                             string shown = model.Status.Length == 0 ? "no-status" : model.Status;
+                            var grid = (DataGrid)ItemsControl.ItemsControlFromItemContainer(row);
                             if (newLook)
                             {
-                                (string brush, bool icon) expected = StatusMeanings.OfHttpStatus(model.Status) switch
+                                (string brush, bool icon, string wash) expected = StatusMeanings.OfHttpStatus(model.Status) switch
                                 {
-                                    StatusMeaning.Problem => ("ErrorTextBrush", true),
-                                    StatusMeaning.Attention => ("WarningTextBrush", true),
-                                    _ => ("TextPrimaryBrush", false),
+                                    StatusMeaning.Problem => ("ErrorTextBrush", true, "ProblemRowBrush"),
+                                    StatusMeaning.Attention => ("WarningTextBrush", true, "AttentionRowBrush"),
+                                    _ => ("TextPrimaryBrush", false, null),
                                 };
                                 var icon = (Path)status.Template.FindName("Icon", status);
                                 Assert.True(rowText == Of("TextPrimaryBrush"),
@@ -93,6 +95,9 @@ namespace XMAT.Tests.DesignSystem
                                     $"STATUS-2: a {shown} status isn't in {expected.brush}.");
                                 Assert.True((icon.Visibility == Visibility.Visible) == expected.icon,
                                     $"STATUS-2: a {shown} status {(expected.icon ? "has no" : "has an")} icon.");
+                                object background = expected.wash == null ? grid.RowBackground : window.FindResource(expected.wash);
+                                Assert.True(ReferenceEquals(background, row.Background),
+                                    $"STATUS-2: the row of a {shown} request isn't on {expected.wash ?? "the table's row background"}.");
                             }
                             else
                             {
@@ -105,6 +110,8 @@ namespace XMAT.Tests.DesignSystem
                                 Assert.Equal(Of(expected), rowText);
                                 Assert.Equal(rowText, codeText);
                                 Assert.Same(DataGridTextColumn.DefaultElementStyle, code.Style);
+                                Assert.True(DependencyPropertyHelper.GetValueSource(row, Control.BackgroundProperty).BaseValueSource
+                                    != BaseValueSource.StyleTrigger, $"The original look washes the row of a {shown} request.");
                             }
                         }
 
@@ -139,6 +146,52 @@ namespace XMAT.Tests.DesignSystem
                                 $"STATUS-4: in the {(newLook ? "new" : "original")} look a {status} status's code starts " +
                                 $"{x:0.#}px into its row and a {codes[0].Status} status's {codes[0].X:0.#}px, so the codes " +
                                 "don't line up.");
+                        }
+
+                        window.Content = null;
+                    }
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                }
+            });
+        }
+
+        // The new look's capture table keeps # and Status in place when it scrolls sideways, so a row scrolled across to
+        // its path still says which request it is and how it went. The original look's table scrolls as it always has.
+        [Fact]
+        public void Table_KeepsNumberAndStatusInView()
+        {
+            _application.Run(window =>
+            {
+                bool wasNewLook = LookState.Current.IsNewLook;
+                try
+                {
+                    foreach (bool newLook in new[] { true, false })
+                    {
+                        var (_, row, status, _) = ShowTable(window, newLook, "503").Single();
+                        var grid = (DataGrid)ItemsControl.ItemsControlFromItemContainer(row);
+                        string look = newLook ? "new" : "original";
+                        int kept = newLook ? 2 : 0;
+                        Assert.True(grid.FrozenColumnCount == kept,
+                            $"STATUS-5: the {look} look's capture table keeps {grid.FrozenColumnCount} columns in place, not {kept}.");
+                        if (newLook)
+                        {
+                            Assert.Equal(new object[] { "#", "STATUS" },
+                                grid.Columns.Where(column => column.IsFrozen).OrderBy(column => column.DisplayIndex)
+                                    .Select(column => column.Header));
+
+                            // Narrow enough that the table scrolls sideways, then scrolled all the way across.
+                            window.Width = 760;
+                            WpfTestHost.Pump();
+                            ScrollViewer scroller = DesignSystemWindowTests.Descendants(grid).OfType<ScrollViewer>().First();
+                            Assert.True(scroller.ScrollableWidth > 0, "The table doesn't scroll sideways at this width.");
+                            double before = status.TranslatePoint(new Point(), grid).X;
+                            scroller.ScrollToHorizontalOffset(scroller.ScrollableWidth);
+                            WpfTestHost.Pump();
+                            Assert.True(Math.Abs(status.TranslatePoint(new Point(), grid).X - before) < 0.5,
+                                "STATUS-5: the status moves out of view when the table scrolls sideways.");
                         }
 
                         window.Content = null;

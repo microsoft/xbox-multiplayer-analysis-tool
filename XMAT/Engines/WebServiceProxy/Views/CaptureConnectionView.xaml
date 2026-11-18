@@ -16,6 +16,7 @@
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
         <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
+        <app:HttpStatusMeaningConverter x:Key="statusMeaningConverter" />
         <local:ProcessDisplayConverter x:Key="processDisplayConverter" />
         <!-- Filled for the right-clicked or focused row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
@@ -180,9 +181,11 @@
 
         <GridSplitter x:Name="TimelineSplitter" Grid.Row="4" Height="{app:Look New=8, Original=4}" Margin="{DynamicResource TrafficPaneMargin}" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
 
-        <!-- The code-behind gives the grid its own view of CaptureController.ProxyConnections. -->
+        <!-- The code-behind gives the grid its own view of CaptureController.ProxyConnections. The new look keeps # and
+             Status in place when the table scrolls sideways (STATUS-5). -->
         <DataGrid x:Name="ConnectionList" Grid.Row="5" Margin="{DynamicResource TrafficTableMargin}"
                   ColumnHeaderStyle="{DynamicResource TrafficGridHeaderStyle}"
+                  FrozenColumnCount="{app:Look New=2, Original=0}"
                   app:ColumnSummary.IsEnabled="True"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
@@ -209,7 +212,7 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=20}"/>
                 <!-- The status's meaning sets how it shows (app:StatusText): the new look colors a problem's or a
-                     warning's status cell, and the original look the whole row, below. -->
+                     warning's status cell and washes its row, and the original look colors the whole row's text, below. -->
                 <DataGridTemplateColumn Header="STATUS" SortMemberPath="Status" ClipboardContentBinding="{Binding Status}"
                                         Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=20}">
                     <DataGridTemplateColumn.CellTemplate>
@@ -245,6 +248,24 @@
                         <DataTrigger Binding="{Binding Method}" Value="CONNECT">
                             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
                         </DataTrigger>
+                        <!-- The new look washes a problem's row in faint red and a warning's in faint amber. The text stays
+                             body text; the status cell has the color and the icon (STATUS-2). -->
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                                <Condition Binding="{Binding Status, Converter={StaticResource statusMeaningConverter}}"
+                                           Value="{x:Static app:StatusMeaning.Problem}"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Background" Value="{DynamicResource ProblemRowBrush}"/>
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                                <Condition Binding="{Binding Status, Converter={StaticResource statusMeaningConverter}}"
+                                           Value="{x:Static app:StatusMeaning.Attention}"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Background" Value="{DynamicResource AttentionRowBrush}"/>
+                        </MultiDataTrigger>
                         <!-- The original look colors the whole row of a request without a status, or with an error. -->
                         <MultiDataTrigger>
                             <MultiDataTrigger.Conditions>

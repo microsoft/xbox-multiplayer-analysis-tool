@@ -119,6 +119,8 @@ namespace XMAT.DesignSystem
             {
                 new ColorRole("ColumnHeaderDividerBrush", "Dividers between column headers, and the neutral bars of charts"),
                 new ColorRole("ColumnDividerBrush", "The divider between a capture's table and its inspector"),
+                new ColorRole("ProblemRowBrush", "The faint wash behind a table row whose status is a problem, such as a 5xx response. High contrast shows none"),
+                new ColorRole("AttentionRowBrush", "The faint wash behind a table row whose status needs attention, such as a 4xx response. High contrast shows none"),
             }),
             new ColorRoleGroup("Loading", new[]
             {
@@ -160,6 +162,17 @@ namespace XMAT.DesignSystem
                         new ContrastPair($"{status}TextBrush", "SurfaceWellBrush"),
                     })
                     .ToList()),
+            // A washed row's text, and its status cell's code. A wash drawn at part strength is checked at full strength,
+            // which is harder to read on.
+            new ContrastGroup("Washed table rows", TextContrast, new[]
+            {
+                new ContrastPair("TextPrimaryBrush", "ProblemRowBrush"),
+                new ContrastPair("TextPrimaryBrush", "AttentionRowBrush"),
+                new ContrastPair("TextSecondaryBrush", "ProblemRowBrush"),
+                new ContrastPair("TextSecondaryBrush", "AttentionRowBrush"),
+                new ContrastPair("ErrorTextBrush", "ProblemRowBrush"),
+                new ContrastPair("WarningTextBrush", "AttentionRowBrush"),
+            }),
             new ContrastGroup("Control outlines", ControlContrast, new[]
             {
                 new ContrastPair("BorderStrongBrush", "SurfacePanelBrush"),

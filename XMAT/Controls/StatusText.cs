@@ -2,10 +2,13 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 namespace XMAT
 {
@@ -71,5 +74,16 @@ namespace XMAT
             // The name says it all: the code and the icon inside aren't read again.
             protected override List<AutomationPeer> GetChildrenCore() => null;
         }
+    }
+
+    // An HTTP status's meaning (StatusMeanings), for what a status sets beyond its cell, such as its table row's wash
+    // (STATUS-2).
+    public sealed class HttpStatusMeaningConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+            StatusMeanings.OfHttpStatus(value as string);
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotSupportedException();
     }
 }

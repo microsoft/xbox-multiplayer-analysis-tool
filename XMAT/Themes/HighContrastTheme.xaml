@@ -71,6 +71,9 @@
     <SolidColorBrush x:Key="ExpanderSubHeaderBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="ExpanderDetailBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="ColumnDividerBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <!-- Table rows take no wash in a contrast theme; the status cell's icon and words show the meaning. -->
+    <SolidColorBrush x:Key="ProblemRowBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="AttentionRowBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <!-- A hovered control is outlined in the hot-track color, which differs from the highlight on checked toggles. -->
     <SolidColorBrush x:Key="HoverOutlineBrush" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}"/>
     <!-- Every tab shares the window color here, so the selected rounded tab keeps a highlight top edge. -->

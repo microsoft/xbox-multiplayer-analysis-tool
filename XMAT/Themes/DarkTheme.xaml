@@ -68,6 +68,10 @@
     <SolidColorBrush x:Key="ExpanderSubHeaderBrush" Color="{StaticResource Gray12}"/>
     <SolidColorBrush x:Key="ExpanderDetailBrush" Color="{StaticResource Gray12}"/>
     <SolidColorBrush x:Key="ColumnDividerBrush" Color="{StaticResource Gray12}"/>
+    <!-- The faint wash behind a table row whose status is a problem or needs attention (STATUS-2): the darkest red and
+         amber at half strength over the table, so a washed row stays quieter than the selected one. -->
+    <SolidColorBrush x:Key="ProblemRowBrush" Color="{StaticResource Red12}" Opacity="0.5"/>
+    <SolidColorBrush x:Key="AttentionRowBrush" Color="{StaticResource Amber12}" Opacity="0.5"/>
     <SolidColorBrush x:Key="HoverOutlineBrush" Color="Transparent"/>
     <SolidColorBrush x:Key="TabItemSelectedEdgeBrush" Color="Transparent"/>
     <SolidColorBrush x:Key="ScrollBarBackgroundBrush" Color="Transparent"/>

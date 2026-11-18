@@ -158,7 +158,10 @@ delivered them: their chunked framing is never removed a second time.
 Use the toolbar lists to filter by status code, host, or method. Lists contain the
 values found in the capture; only checked values are shown. Filters combine and
 update as traffic arrives. **ALL/NONE** helps include or exclude a small set of values.
-Status codes of 400 or higher are colored red.
+In the list, a 5xx status shows in red with a cross and a 4xx status in amber with a
+warning sign, and its row takes a faint wash of that color. **#** and **Status** stay in
+place when the list scrolls sideways. With **New look** off, rows with status codes of
+400 or higher are colored red.
 
 When the traffic pane is too narrow for the filters, the new look folds them into a
 **Filters** button with a funnel icon. The button opens a list of the same filters, and

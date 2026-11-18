@@ -85,16 +85,18 @@
                 </ds:RuleExample>
             </ds:StoryRule>
             <ds:StoryRule RuleId="STATUS-2">
-                <ds:RuleExample Kind="Do" Caption="Only the status cell takes color, with its icon, and the row stays body text.">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="63" Width="32"/>
-                        <app:StatusText Status="429" Width="64"/>
-                        <TextBlock Text="GET" Width="48"/>
-                        <TextBlock Text="images.example"/>
-                    </StackPanel>
+                <ds:RuleExample Kind="Do" Caption="The row takes a faint wash and the status cell the color, with its icon. The text stays body text.">
+                    <Border Background="{DynamicResource AttentionRowBrush}" Padding="4,2">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="63" Width="32"/>
+                            <app:StatusText Status="429" Width="64"/>
+                            <TextBlock Text="GET" Width="48"/>
+                            <TextBlock Text="images.example"/>
+                        </StackPanel>
+                    </Border>
                 </ds:RuleExample>
-                <ds:RuleExample Kind="Dont" Caption="The whole row in color, which gets loud in a busy capture.">
-                    <StackPanel Orientation="Horizontal">
+                <ds:RuleExample Kind="Dont" Caption="The whole row's text in color, which gets loud in a busy capture.">
+                    <StackPanel Orientation="Horizontal" Margin="4,2">
                         <TextBlock Text="63" Width="32" Foreground="{DynamicResource WarningTextBrush}"/>
                         <TextBlock Text="429" Width="64" Margin="2,0" Foreground="{DynamicResource WarningTextBrush}"/>
                         <TextBlock Text="GET" Width="48" Foreground="{DynamicResource WarningTextBrush}"/>
@@ -127,6 +129,27 @@
                             <TextBlock Text="429" Margin="2,0" Foreground="{DynamicResource WarningTextBrush}"/>
                         </StackPanel>
                     </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="STATUS-5">
+                <ds:RuleExample Kind="Do" Caption="Scrolled across to the path, the row still says which request it is and how it went.">
+                    <Border Background="{DynamicResource ProblemRowBrush}" Padding="4,2">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="57" Width="32"/>
+                            <app:StatusText Status="503" Width="64"/>
+                            <TextBlock Text="SampleGame.exe" Width="112" Margin="12,0,0,0"/>
+                            <TextBlock Text="/assets/avatar"/>
+                        </StackPanel>
+                    </Border>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="With # and Status scrolled away, the row can't say which request it is or what came back.">
+                    <Border Background="{DynamicResource ProblemRowBrush}" Padding="4,2">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="images.example" Width="128"/>
+                            <TextBlock Text="SampleGame.exe" Width="112"/>
+                            <TextBlock Text="/assets/avatar"/>
+                        </StackPanel>
+                    </Border>
                 </ds:RuleExample>
             </ds:StoryRule>
         </ds:StoryRules>
