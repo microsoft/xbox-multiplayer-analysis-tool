@@ -212,6 +212,12 @@ files of their own as they are worked on.
 - **BUTTON-3** Use a toggle button for an option that stays on, such as Wrap lines, and a standard button for an
   action.
 
+### Choice cards
+
+- **CHOICE-1** A field that an option needs shows on its card from the start, and using the field chooses the card.
+  People see what an option asks for before they choose it, such as the address in New Capture's Xbox console by
+  address. Tab reaches the field once its card is chosen.
+
 ## The design system app
 
 The design system app, `XMAT.DesignSystem`, has a page for each foundation and component, listed under their sections:

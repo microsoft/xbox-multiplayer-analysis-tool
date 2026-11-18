@@ -37,7 +37,32 @@ namespace XMAT.Tests
                 Assert.Equal(Text("NEW_CAPTURE_NOTE_PC_PROXY"), window.WebProxyCard.Note);
                 Assert.Equal(Text("NEW_CAPTURE_NOTE_PC_TRACE"), window.NetworkTraceCard.Note);
                 Assert.NotNull(window.NetworkTraceCard.NoteIcon);
-                Assert.False(window.AddressBox.IsVisible);
+            }));
+        }
+
+        // CHOICE-1: the address field shows on its card from the start, so people see that a console can be reached by
+        // its address. Using the field chooses the card, and Tab reaches the field only once the card is chosen.
+        [Fact]
+        public void TheAddressField_ShowsBeforeItsCardIsChosen_AndUsingItChoosesTheCard()
+        {
+            _application.Run(_ => WithWindow(gdkInstalled: true, window =>
+            {
+                ChoiceCard card = window.ConsoleByAddressCard;
+                var content = (ContentPresenter)card.Template.FindName("Extra", card);
+                Assert.True(window.ThisPcCard.IsChecked);
+                Assert.True(window.AddressBox.IsVisible, "CHOICE-1: the address field is hidden until its card is chosen.");
+                Assert.True(KeyboardNavigation.GetTabNavigation(content) == KeyboardNavigationMode.None,
+                    "CHOICE-1: Tab reaches the address field before its card is chosen.");
+
+                window.AddressBox.RaiseEvent(new KeyboardFocusChangedEventArgs(Keyboard.PrimaryDevice, 0, null, window.AddressBox)
+                {
+                    RoutedEvent = Keyboard.GotKeyboardFocusEvent,
+                });
+                WpfTestHost.Pump();
+                Assert.True(card.IsChecked == true, "CHOICE-1: using the address field doesn't choose its card.");
+                Assert.False(window.ThisPcCard.IsChecked);
+                Assert.True(KeyboardNavigation.GetTabNavigation(content) == KeyboardNavigationMode.Continue,
+                    "CHOICE-1: Tab doesn't reach the address field once its card is chosen.");
             }));
         }
 
@@ -128,7 +153,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void TheAddressField_ShowsWithItsCard_ChecksTheAddress_AndShowsAnErrorAfterAPauseInTyping()
+        public void TheAddressField_ChecksTheAddress_AndShowsAnErrorAfterAPauseInTyping()
         {
             _application.Run(_ => WithWindow(gdkInstalled: true, window =>
             {

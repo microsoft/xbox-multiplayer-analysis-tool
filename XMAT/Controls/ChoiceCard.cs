@@ -15,8 +15,9 @@ namespace XMAT
     // One option of a choice, shown as a card: a picture, a title, a sentence about the option and an optional note,
     // such as what the option needs or why it isn't available. Cards with the same GroupName make one choice, as radio
     // buttons do: Tab reaches the chosen card, and the arrow keys choose the next or previous card that is available.
-    // Content, such as a field the option needs, shows under the text while the card is chosen. Styles/ChoiceCards.xaml
-    // draws the card.
+    // Content, such as a field the option needs, shows under the text from the start, so people see what an option asks
+    // for before choosing it. Using the content chooses the card; Tab reaches the content once the card is chosen.
+    // Styles/ChoiceCards.xaml draws the card.
     public class ChoiceCard : RadioButton
     {
         public static readonly DependencyProperty IconProperty = DependencyProperty.Register(
@@ -130,6 +131,16 @@ namespace XMAT
         {
             base.OnUnchecked(e);
             UpdateTabStops();
+        }
+
+        // Focus that moves into the content, as when someone clicks into its field, chooses the card.
+        protected override void OnGotKeyboardFocus(KeyboardFocusChangedEventArgs e)
+        {
+            base.OnGotKeyboardFocus(e);
+            if (e.OriginalSource != this && IsEnabled && IsChecked != true)
+            {
+                IsChecked = true;
+            }
         }
 
         protected override void OnKeyDown(KeyEventArgs e)

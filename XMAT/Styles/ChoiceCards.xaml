@@ -21,7 +21,8 @@
 
     <!-- The picture is above the text, or beside it with Orientation="Horizontal". A card with a note keeps its
          description in the text color, so the note, in the secondary color, reads as the detail; without one, the
-         description is secondary. Content shows 8px under the text while the card is chosen. -->
+         description is secondary. Content shows 8px under the text from the start; Tab reaches it once the card is
+         chosen. -->
     <Style TargetType="local:ChoiceCard">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
@@ -77,6 +78,7 @@
                                                    TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                     </Grid>
                                     <ContentPresenter x:Name="Extra" Margin="0,8,0,0" Visibility="Collapsed"
+                                                      KeyboardNavigation.TabNavigation="None"
                                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
                                 </StackPanel>
                             </Grid>
@@ -126,14 +128,11 @@
                             <Setter TargetName="SelectedEdge" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="Picture" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
                             <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="Extra" Property="KeyboardNavigation.TabNavigation" Value="Continue"/>
                         </Trigger>
-                        <MultiTrigger>
-                            <MultiTrigger.Conditions>
-                                <Condition Property="IsChecked" Value="True"/>
-                                <Condition Property="HasContent" Value="True"/>
-                            </MultiTrigger.Conditions>
+                        <Trigger Property="HasContent" Value="True">
                             <Setter TargetName="Extra" Property="Visibility" Value="Visible"/>
-                        </MultiTrigger>
+                        </Trigger>
                         <!-- Not available: the note, which says why, stays readable. -->
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Card" Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>

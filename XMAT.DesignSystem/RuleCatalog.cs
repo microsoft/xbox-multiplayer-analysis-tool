@@ -90,6 +90,11 @@ namespace XMAT.DesignSystem
             new DesignRule("BUTTON-3", RuleLevel.Should, "Buttons",
                 "Use a toggle button for an option that stays on, such as Wrap lines, and a standard button for an action.",
                 "A toggle button shows whether its option is on. An action has nothing to show once it's done."),
+
+            new DesignRule("CHOICE-1", RuleLevel.Must, "Choice cards",
+                "A field that an option needs shows on its card from the start, and using the field chooses the card.",
+                "People see what an option asks for before they choose it, and can start typing without choosing first.",
+                "NewCaptureWindowTests.TheAddressField_ShowsBeforeItsCardIsChosen_AndUsingItChoosesTheCard"),
         };
 
         // The rule with ID, or null when there is none.
