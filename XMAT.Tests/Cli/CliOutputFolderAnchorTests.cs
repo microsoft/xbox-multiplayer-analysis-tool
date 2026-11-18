@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -108,6 +109,31 @@ namespace XMAT.Tests.Cli
                 Links.Remove(link);
             }
         }
+
+        [Fact]
+        public void ParseTarget_LeavesShortNamesForTheHeldWalk()
+        {
+            using var directory = new CliTestDirectory();
+            string parent = Path.GetFullPath(Path.Join(directory.Root, "long directory name"));
+            Directory.CreateDirectory(parent);
+            var buffer = new StringBuilder(parent.Length + 5);
+            uint length = GetShortPathName(WindowsPath.ToVerbatim(parent), buffer, (uint)buffer.Capacity);
+            Assert.InRange(length, 1u, (uint)buffer.Capacity - 1);
+            string shortName = Path.GetFileName(buffer.ToString());
+            // Windows can disable 8.3 creation. In that case the API returns the original leaf, and this still checks
+            // lexical normalization; when an alias exists, the assertion detects any filesystem-based expansion.
+            string input = Path.Join(Path.GetDirectoryName(parent), shortName, @"unused/../results");
+
+            Assert.Null(StorageAdmission.ParseTarget(input, out StorageTarget target));
+            Assert.Equal(shortName, target.Folders[^1]);
+            Assert.Equal("results", target.Name);
+            Assert.Equal(StorageAdmissionFailure.InvalidPath,
+                StorageAdmission.ParseTarget(WindowsPath.ToVerbatim(Path.Join(parent, @"unused\..\results")), out _));
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        private static extern uint GetShortPathName(string path, StringBuilder buffer, uint bufferLength);
 
         // The same for a symbolic link, even one to a network share, which following would make Windows sign in to: the
         // link is refused without being opened through, so the refusal is immediate.

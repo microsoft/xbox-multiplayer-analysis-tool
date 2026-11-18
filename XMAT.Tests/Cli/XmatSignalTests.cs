@@ -29,7 +29,7 @@ namespace XMAT.Tests.Cli
         public async Task CtrlBreak_BeforePublication_CancelsAndPublishesNothing()
         {
             using var directory = new CliTestDirectory();
-            using var helperDirectory = new CliTestDirectory();
+            using var helperDirectory = new CliTestDirectory(useSystemTemp: true);
             string input = SyntheticCaptures.WriteSaz(
                 directory.Root, "capture.saz", new SyntheticSazOptions(Consoles: 4, RequestsPerConsole: 5000));
             using ConsoleSignal signal = await ConsoleSignal.StartAsync(helperDirectory.Root);
@@ -58,7 +58,7 @@ namespace XMAT.Tests.Cli
         public async Task CtrlBreak_BeforeCurlPublication_CancelsAndPublishesNothing()
         {
             using var directory = new CliTestDirectory();
-            using var helperDirectory = new CliTestDirectory();
+            using var helperDirectory = new CliTestDirectory(useSystemTemp: true);
             string input = ReplayCaptures.WriteSaz(
                 directory.Root,
                 "capture.saz",
@@ -307,7 +307,8 @@ namespace XMAT.Tests.Cli
         }
 
         // What Windows PowerShell and Add-Type write (compiler files and caches) goes to workDirectory, a run-owned
-        // folder, instead of the OS temporary folder or the user's profile.
+        // subfolder, never directly into the OS temporary folder or the user's profile. Keep this path short for
+        // the compiler's own temporary filenames.
         internal static async Task<ConsoleSignal> StartAsync(string workDirectory)
         {
             string temp = Directory.CreateDirectory(Path.Combine(workDirectory, "temp")).FullName;

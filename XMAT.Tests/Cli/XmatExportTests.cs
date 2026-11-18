@@ -83,26 +83,26 @@ namespace XMAT.Tests.Cli
             }
         }
 
-        // xmat.exe is not long-path aware, yet a SAZ export into a folder past the classic 260-character limit (three
-        // 100-character folders) is staged and published like any other. SQLite cannot open a staged path that long, so an
-        // XMATCAP export there fails cleanly: exit 6, nothing published and no staging folder left behind.
+        // xmat.exe is not long-path aware, but both formats publish into a deep folder without leaving staging files.
         [Fact]
-        public async Task Export_PublishesSazButNotXmatcapIntoAFolderLongerThanMaxPath()
+        public async Task Export_PublishesBothFormatsIntoAFolderLongerThanMaxPath()
         {
             using var directory = new CliTestDirectory();
             string input = Path.Join(directory.Root, "capture.saz");
             SazArchive.Write(input, new[] { PairedSession(1) });
             string folder = Path.Join(directory.Root, new string('d', 100), new string('e', 100), new string('f', 100));
             Directory.CreateDirectory(folder);
-            string output = Path.Join(folder, "x.saz");
+            string sazOutput = Path.Join(folder, "x.saz");
+            string xmatcapOutput = Path.Join(folder, "x.xmatcap");
 
-            XmatRun saz = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", output);
-            XmatRun xmatcap = await XmatProcess.RunAsync(
-                directory.Root, "export", input, "--out", Path.Join(folder, "x.xmatcap"));
+            XmatRun saz = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", sazOutput);
+            XmatRun xmatcap = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", xmatcapOutput);
 
             CliAssert.ExitCode(0, saz);
-            CliAssert.ExitCode(6, xmatcap);
-            Assert.Equal(new[] { output }, Directory.GetFileSystemEntries(folder));
+            CliAssert.ExitCode(0, xmatcap);
+            Assert.Equal(new long[] { 1 }, RequestNumbers(xmatcapOutput));
+            Assert.Equal(new[] { "x.saz", "x.xmatcap" },
+                Directory.GetFileSystemEntries(folder).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         }
 
         // The request numbers in an exported capture, in order.

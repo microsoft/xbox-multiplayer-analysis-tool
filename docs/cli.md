@@ -222,9 +222,8 @@ reservation-time storage failure.
   a cleanup failure after publication exits with code 7 and can still report `export.output.published` as `true`. Where
   Windows cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
   shares), xmat publishes nothing (`export.output.unprotected`, exit code 6). A selection with no session to write
-  publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
-  (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
-  than Windows' 260-character limit; choose a shorter folder. `.saz` outputs are not affected.
+  publishes nothing (`export.no-eligible-rows`, exit code 3). Both `.xmatcap` and `.saz` exports can publish
+  to folders past Windows' traditional 260-character path limit.
 - A sanitized archive's sessions whose header history is unknown, such as those of a Fiddler archive from another tool
   or of a capture saved before XMAT recorded the history (see
   [Capture files](capture-files.md#sessions-with-an-unknown-header-history)), are sanitized from the data that is

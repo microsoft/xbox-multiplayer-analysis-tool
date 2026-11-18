@@ -96,18 +96,7 @@ namespace XMAT.Operations
             return security;
         }
 
-        internal static string NativePath(string path)
-        {
-            path = Path.GetFullPath(path);
-            if (path.StartsWith(@"\\?\", StringComparison.Ordinal) ||
-                path.StartsWith(@"\\.\", StringComparison.Ordinal))
-            {
-                return path;
-            }
-            return path.StartsWith(@"\\", StringComparison.Ordinal)
-                ? @"\\?\UNC\" + path[2..]
-                : @"\\?\" + path;
-        }
+        internal static string NativePath(string path) => WindowsPath.ToVerbatim(Path.GetFullPath(path));
 
         [StructLayout(LayoutKind.Sequential)]
         private struct SecurityAttributes

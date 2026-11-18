@@ -48,7 +48,7 @@ namespace XMAT.Operations.Export
             _deviceFields = deviceFields;
             _connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = path,
+                DataSource = WindowsPath.ToVerbatim(path),
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Pooling = false,
             }.ToString());

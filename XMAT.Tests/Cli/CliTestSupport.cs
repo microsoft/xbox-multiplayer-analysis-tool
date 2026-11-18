@@ -19,8 +19,16 @@ namespace XMAT.Tests.Cli
     // A run-owned folder under the test output (never the OS temporary folder); only the test that made it removes it.
     internal sealed class CliTestDirectory : IDisposable
     {
-        internal CliTestDirectory()
+        internal CliTestDirectory(bool useSystemTemp = false)
         {
+            if (useSystemTemp)
+            {
+                DirectoryInfo temporary = Directory.CreateTempSubdirectory("xmat-");
+                Name = temporary.Name;
+                Root = temporary.FullName;
+                return;
+            }
+
             Name = Guid.NewGuid().ToString("N");
             Root = Path.Combine(AppContext.BaseDirectory, "HeadlessTestArtifacts", "Cli", Name);
             Directory.CreateDirectory(Root);

@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Security;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
@@ -69,15 +69,23 @@ namespace XMAT.Operations.Storage
         internal static StorageAdmissionFailure? ParseTarget(string path, out StorageTarget target)
         {
             target = null;
-            string fullPath;
-            try
-            {
-                fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or SecurityException)
+            if (string.IsNullOrEmpty(path) || path.AsSpan().Trim(' ').IsEmpty || path.Contains('\0'))
             {
                 return StorageAdmissionFailure.InvalidPath;
             }
+
+            if (path.StartsWith(@"\??\", StringComparison.Ordinal))
+            {
+                return StorageAdmissionFailure.Unsupported;
+            }
+
+            // Verbatim paths keep literal components (including dots and spaces); IsName rejects traversal components.
+            string fullPath = path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path : GetFullPathLexically(path);
+            if (fullPath == null)
+            {
+                return StorageAdmissionFailure.InvalidPath;
+            }
+            fullPath = Path.TrimEndingDirectorySeparator(fullPath);
 
             bool verbatim = fullPath.StartsWith(@"\\?\", StringComparison.Ordinal);
             string rest = verbatim ? fullPath[4..] : fullPath;
@@ -102,6 +110,35 @@ namespace XMAT.Operations.Storage
             target = new StorageTarget(volume, names[..^1], names[^1]);
             return null;
         }
+
+        // Path.GetFullPath additionally tries GetLongPathNameW on paths containing '~', which can follow links.
+        // GetFullPathNameW only normalizes DOS syntax; the held walk resolves each name, including any 8.3 alias.
+        private static unsafe string GetFullPathLexically(string path)
+        {
+            Span<char> buffer = stackalloc char[260];
+            while (true)
+            {
+                uint length;
+                fixed (char* output = buffer)
+                {
+                    length = GetFullPathName(path, (uint)buffer.Length, output, IntPtr.Zero);
+                }
+
+                if (length == 0)
+                {
+                    return null;
+                }
+                if (length < buffer.Length)
+                {
+                    return new string(buffer[..(int)length]);
+                }
+                buffer = new char[length];
+            }
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "GetFullPathNameW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        private static extern unsafe uint GetFullPathName(string path, uint bufferLength, char* buffer, IntPtr filePart);
 
         // Opens and holds a target's parent from its volume root. checkpoint runs after each named folder is held and
         // checked, at the same point used by the existing namespace-race tests.

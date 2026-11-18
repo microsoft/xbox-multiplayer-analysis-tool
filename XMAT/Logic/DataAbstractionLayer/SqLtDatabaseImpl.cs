@@ -129,7 +129,8 @@ namespace XMAT.DataAbstractionLayer
                 var connectionString =
                     new SqliteConnectionStringBuilder
                     {
-                        DataSource = temporaryPath,
+                        // SQLite also opens the rollback journal, whose name is longer than the reserved filename.
+                        DataSource = WindowsPath.ToVerbatim(temporaryPath),
                         // Dispose must close the file instead of returning it to the pool.
                         Pooling = false,
                     }.ToString();

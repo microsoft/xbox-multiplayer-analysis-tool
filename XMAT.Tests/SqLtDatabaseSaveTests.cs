@@ -293,6 +293,26 @@ namespace XMAT.Tests
                 File.ReadAllBytes(path));
         }
 
+        [Theory]
+        [InlineData(252)] // The database fits in MAX_PATH, but the rollback journal does not.
+        [InlineData(300)] // Both the database and the rollback journal exceed MAX_PATH.
+        public void SaveToFile_PublishesWhenTheRollbackJournalExceedsMaxPath(int length)
+        {
+            using var directory = new TestDirectory(shortPath: true);
+            (string deepDirectory, string path) = CreateDeepDestination(directory.Path, "a.xmatcap", length);
+            using SqLtDatabase database = CreateDatabase(out IDataTable table);
+            table.AddRow("saved");
+            string temporary = null;
+            database.BackupFailureInjection = candidate => temporary = candidate;
+
+            database.SaveToFile(path);
+
+            Assert.Equal(length, temporary.Length);
+            Assert.True((temporary + "-journal").Length >= 260);
+            Assert.Equal(new[] { "saved" }, ReadSavedValues(@"\\?\" + path));
+            AssertEntries(deepDirectory, path);
+        }
+
         [Fact]
         public void SaveToFile_TemporaryNameCollisionsNeverModifyExistingFiles()
         {
@@ -575,8 +595,8 @@ namespace XMAT.Tests
                 expectedTemporaryName,
                 Path.GetFileName(temporary));
             Assert.Equal(
-                destination.Length,
-                temporary.Length);
+                destinationName.Length,
+                Path.GetFileName(temporary).Length);
             AssertEntries(
                 directory.Path,
                 destination);
