@@ -5,8 +5,10 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipelines;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -16,7 +18,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Hosting;
+using XMAT.Operations.Processes;
 using XMAT.Telemetry;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -67,6 +71,24 @@ namespace XMAT.WebServiceCapture.Proxy
                 "HTTP/1.1 503 Service Unavailable\r\n" +
                 "Connection: close\r\n" +
                 "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] ContinueResponse =
+            "HTTP/1.1 100 Continue\r\n\r\n"u8.ToArray();
+        private static readonly byte[] UnsupportedTransferCodingResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 501 Not Implemented\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] MalformedTransferCodingResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 400 Bad Request\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] UnsupportedExpectationResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 417 Expectation Failed\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] ChunkTerminator = "\r\n"u8.ToArray();
 
         public ForwardProxyConnectionHandler(
             HttpClient httpClient,
@@ -98,9 +120,26 @@ namespace XMAT.WebServiceCapture.Proxy
             var cancellationToken = connectionCancellation.Token;
             var connectionID = _proxy.GetNextConnectionID();
             var remoteEndPoint = connection.RemoteEndPoint?.ToString() ?? "unknown";
+            ClientProcessResolver processResolver = _proxy.ProcessResolver;
+            IClientProcessResolverClock processClock = processResolver.Clock;
+            var processContext = new ClientProcessContext(
+                _proxy.RunId,
+                connectionID,
+                connection.RemoteEndPoint as IPEndPoint,
+                connection.LocalEndPoint as IPEndPoint,
+                processClock.UtcNow,
+                processClock.Timestamp);
+            try
+            {
+                _ = processResolver.TryEnqueue(processContext);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                processContext.Publish(new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Unresolved));
+            }
 
             if (cancellationToken.IsCancellationRequested ||
-                !_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint))
+                !_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint, processContext))
             {
                 _logger.Log(connectionID, LogLevel.WARN, $"REJECTING connection from {remoteEndPoint}");
                 return;
@@ -108,16 +147,22 @@ namespace XMAT.WebServiceCapture.Proxy
 
             _logger.Log(connectionID, LogLevel.INFO, $"Accepting connection from {remoteEndPoint}");
 
+            Guid? sslRegistration = null;
             try
             {
-                ProxyRequestReadResult readResult =
-                    await _requestReader.ReadAsync(
-                            connection.Transport.Input,
-                            cancellationToken)
-                        .ConfigureAwait(false);
                 var stream =
                     new DuplexPipeStream(
                         connection.Transport);
+                ProxyRequestReadResult readResult =
+                    await _requestReader.ReadAsync(
+                            connection.Transport.Input,
+                            async token =>
+                            {
+                                await stream.WriteAsync(ContinueResponse, token).ConfigureAwait(false);
+                                await stream.FlushAsync(token).ConfigureAwait(false);
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
                 if (readResult.Failure !=
                     ProxyRequestReadFailure.None)
                 {
@@ -176,12 +221,22 @@ namespace XMAT.WebServiceCapture.Proxy
                     _proxy.GetNextRequestID();
                 if (request.Method == "CONNECT")
                 {
-                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, cancellationToken).ConfigureAwait(false);
+                    request.Scheme = "https";
+                    sslRegistration = _proxy.TrackSslConnection(
+                        connectionID,
+                        (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? remoteEndPoint,
+                        request,
+                        () => connection.Abort(new ConnectionAbortedException(
+                            "The enabled SSL script rejected this active connection.")),
+                        cancellationToken);
+                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, processContext,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
                     request.Scheme = "http";
-                    await HandleHttpRequestAsync(connectionID, stream, request, cancellationToken).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(connectionID, stream, request, processContext,
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -210,11 +265,19 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             finally
             {
-                _proxy.RaiseConnectionClosed(connectionID);
+                if (sslRegistration.HasValue)
+                    _proxy.UntrackSslConnection(sslRegistration.Value);
+                _proxy.RaiseConnectionClosed(connectionID, processContext);
             }
         }
 
-        private async Task HandleConnectAsync(int connectionID, Stream clientStream, ClientRequest connectRequest, string remoteEndPoint, CancellationToken ct)
+        private async Task HandleConnectAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest connectRequest,
+            string remoteEndPoint,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             connectRequest.Scheme = "https";
             var clientIP = remoteEndPoint.Contains(':') ? remoteEndPoint.Split(':')[0] : remoteEndPoint;
@@ -223,7 +286,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 clientIP,
                 connectRequest,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.ERROR, "REJECTING SSL connection request");
                 return;
@@ -244,7 +308,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 connectRequest,
                 response,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "CONNECT response was aborted.");
                 return;
@@ -262,7 +327,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname)))
             {
                 _logger.Log(connectionID, LogLevel.INFO, $"Bypassing TLS interception for {hostname}:{port}");
-                _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);
+                _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest, processContext);
                 await TunnelConnectionAsync(connectionID, clientStream, hostname, port, ct).ConfigureAwait(false);
                 return;
             }
@@ -274,15 +339,22 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 clientStream,
                 connectRequest,
+                processContext,
                 ct).ConfigureAwait(false);
         }
 
-        private async Task HandleHttpRequestAsync(int connectionID, Stream clientStream, ClientRequest request, CancellationToken ct)
+        private async Task HandleHttpRequestAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest request,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 connectionID,
                 request,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "Client request was aborted.");
                 return;
@@ -309,36 +381,70 @@ namespace XMAT.WebServiceCapture.Proxy
                 var ub = new UriBuilder(request.Scheme, request.Host, request.Port, path, query);
                 uri = ub.Uri;
             }
+            if (!HostListEntry.IsSupportedTargetScheme(uri.Scheme))
+            {
+                _logger.Log(connectionID, LogLevel.WARN, "Client request used an unsupported target scheme.");
+                return;
+            }
 
             if (WebSocketProxy.IsWebSocketUpgrade(request))
             {
-                await HandleWebSocketAsync(connectionID, uri, clientStream, request, ct).ConfigureAwait(false);
+                await HandleWebSocketAsync(connectionID, uri, clientStream, request, processContext, ct).ConfigureAwait(
+                    false);
             }
             else
             {
-                await ForwardHttpAsync(connectionID, uri, clientStream, request, ct).ConfigureAwait(false);
+                await ForwardHttpAsync(connectionID, uri, clientStream, request, processContext, ct).ConfigureAwait(
+                    false);
             }
         }
 
-        private async Task ForwardHttpAsync(int connectionID, Uri uri, Stream clientStream, ClientRequest clientRequest, CancellationToken ct)
+        private async Task ForwardHttpAsync(
+            int connectionID,
+            Uri uri,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
+            if (ProxyHeaderUtilities.HasUnsupportedTransferCoding(clientRequest))
+            {
+                await WriteProxyErrorAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    HttpStatusCode.NotImplemented,
+                    "Not Implemented",
+                    processContext,
+                    captureCompletion: false,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return;
+            }
+
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(clientRequest.Method),
                 RequestUri = uri
             };
 
-            requestMessage.Content = new ByteArrayContent(clientRequest.BodyBytes ?? Array.Empty<byte>());
+            requestMessage.Content = clientRequest.UnknownLengthBody
+                ? new BufferedRequestContent(clientRequest.BodyBytes ?? Array.Empty<byte>(), knownLength: false)
+                : new ByteArrayContent(clientRequest.BodyBytes ?? Array.Empty<byte>());
             requestMessage.Headers.Clear();
             requestMessage.Content.Headers.Clear();
 
             clientRequest.Headers.CopyTo(requestMessage.Headers);
             clientRequest.ContentHeaders.CopyTo(requestMessage.Content.Headers);
+            // Scripts may replace the body; let the buffered content calculate its length.
+            requestMessage.Content.Headers.Remove("Content-Length");
 
             HttpResponseMessage result;
             try
             {
-                result = await _httpClient.SendAsync(requestMessage, ct).ConfigureAwait(false);
+                result = await _httpClient.SendAsync(
+                    requestMessage,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, $"Request forwarded to {uri}");
             }
             catch (OperationCanceledException) when (
@@ -346,34 +452,245 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 throw;
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Upstream HTTP request to {uri} timed out: {ex.Message}");
+                await WriteProxyErrorAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    HttpStatusCode.GatewayTimeout,
+                    "Gateway Timeout",
+                    processContext,
+                    captureCompletion: true,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException ex)
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Upstream HTTP request to {uri} timed out: {ex.Message}");
+                await WriteProxyErrorAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    HttpStatusCode.GatewayTimeout,
+                    "Gateway Timeout",
+                    processContext,
+                    captureCompletion: true,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return;
+            }
             catch (Exception ex)
             {
-                _logger.Log(connectionID, LogLevel.ERROR, $"Failed sending proxied request: {ex}");
+                _logger.Log(connectionID, LogLevel.ERROR, $"Upstream HTTP request to {uri} failed: {ex}");
+                await WriteProxyErrorAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    HttpStatusCode.BadGateway,
+                    "Bad Gateway",
+                    processContext,
+                    captureCompletion: true,
+                    cancellationToken: ct).ConfigureAwait(false);
                 return;
             }
 
-            var serverResponse = await ParseServerResponseAsync(connectionID, result).ConfigureAwait(false);
-            if (serverResponse == null)
+            using (result)
             {
-                _logger.Log(connectionID, LogLevel.ERROR, "Could not parse server response");
+                await RelayResponseAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    result,
+                    processContext,
+                    ct).ConfigureAwait(false);
+            }
+        }
+
+        // Buffers the response so scripts can change it, unless it streams (event streams, audio,
+        // video, Stream all, or a body past the capture limit). The client gets the origin's framing.
+        private async Task RelayResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            HttpResponseMessage result,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            if (ProxyResponseStreaming.HasMessageBody(clientRequest.Method, result.StatusCode) &&
+                ProxyHeaderUtilities.HasUnsupportedTransferCoding(result.Headers))
+            {
+                _logger.Log(
+                    connectionID,
+                    LogLevel.ERROR,
+                    $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} used " +
+                    $"unsupported transfer coding: {result.Headers.TransferEncoding}.");
+                await WriteProxyErrorAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    HttpStatusCode.BadGateway,
+                    "Bad Gateway",
+                    processContext,
+                    captureCompletion: true,
+                    cancellationToken: ct).ConfigureAwait(false);
                 return;
             }
 
+            bool originChunked = result.Headers.TransferEncodingChunked == true;
+            long? declaredLength = result.Content.Headers.ContentLength;
+            bool clientHttp10 =
+                string.Equals(clientRequest.Version, "HTTP/1.0", StringComparison.OrdinalIgnoreCase);
+            // Chunked framing needs HTTP/1.1 on both sides: the status line carries the origin's version.
+            bool chunkedAllowed =
+                !clientHttp10 &&
+                result.Version >= HttpVersion.Version11;
+            ServerResponse serverResponse = CreateServerResponse(result);
             serverResponse.RequestNumber = clientRequest.RequestNumber;
 
-            if (!await _proxy.RaiseReceivedWebResponseAsync(
-                connectionID,
-                clientRequest,
-                serverResponse,
-                ct).ConfigureAwait(false))
+            if (!ProxyResponseStreaming.HasMessageBody(clientRequest.Method, result.StatusCode))
             {
-                _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
+                if (await AcceptResponseAsync(connectionID, clientRequest, serverResponse, processContext, ct)
+                        .ConfigureAwait(false))
+                {
+                    await WriteResponseAsync(connectionID, clientStream, serverResponse.ToByteArray(), ct)
+                        .ConfigureAwait(false);
+                }
                 return;
             }
 
+            ResponseStreamingOptions options = _proxy.EffectiveResponseStreaming;
+            Stream body = await result.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var reader = new IdleTimeoutReader(body, _httpClient.Timeout, ct);
+            var capture = new CapturedResponseBody(options.CaptureLimitBytes);
+            ReadOnlyMemory<byte> overflow = ReadOnlyMemory<byte>.Empty;
+            if (!ProxyResponseStreaming.StreamsImmediately(result, options))
+            {
+                BufferedResponseBody buffered;
+                try
+                {
+                    buffered = await ProxyResponseStreaming.ReadUpToLimitAsync(
+                        reader,
+                        options.CaptureLimitBytes,
+                        declaredLength).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or HttpRequestException)
+                {
+                    _logger.Log(
+                        connectionID,
+                        LogLevel.ERROR,
+                        $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} failed: " +
+                        ex.Message);
+                    await WriteProxyErrorAsync(
+                        connectionID,
+                        clientStream,
+                        clientRequest,
+                        HttpStatusCode.BadGateway,
+                        "Bad Gateway",
+                        processContext,
+                        captureCompletion: true,
+                        cancellationToken: ct).ConfigureAwait(false);
+                    return;
+                }
+                catch (TimeoutException ex)
+                {
+                    _logger.Log(
+                        connectionID,
+                        LogLevel.ERROR,
+                        $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} timed out: " +
+                        ex.Message);
+                    await WriteProxyErrorAsync(
+                        connectionID,
+                        clientStream,
+                        clientRequest,
+                        HttpStatusCode.GatewayTimeout,
+                        "Gateway Timeout",
+                        processContext,
+                        captureCompletion: true,
+                        cancellationToken: ct).ConfigureAwait(false);
+                    return;
+                }
+
+                capture = buffered.Capture;
+                overflow = buffered.Overflow;
+                if (buffered.Complete)
+                {
+                    serverResponse.BodyBytes = capture.Freeze();
+                    serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
+                    if (!await AcceptResponseAsync(connectionID, clientRequest, serverResponse, processContext, ct)
+                            .ConfigureAwait(false))
+                    {
+                        return;
+                    }
+
+                    string[] trailerNames = AllowedTrailerNames(result, serverResponse.Trailers);
+                    ResponseFraming bufferedFraming = declaredLength.HasValue
+                        ? ResponseFraming.ContentLength
+                        : clientHttp10
+                            ? ResponseFraming.CloseDelimited
+                            : chunkedAllowed && (originChunked || trailerNames.Length != 0)
+                                ? ResponseFraming.Chunked
+                                : ResponseFraming.ContentLength;
+                    await WriteBufferedResponseAsync(
+                        connectionID,
+                        clientStream,
+                        serverResponse,
+                        bufferedFraming,
+                        trailerNames,
+                        ct).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            ResponseFraming framing = declaredLength.HasValue
+                ? ResponseFraming.ContentLength
+                : chunkedAllowed ? ResponseFraming.Chunked : ResponseFraming.CloseDelimited;
+            await StreamResponseAsync(
+                connectionID,
+                clientStream,
+                clientRequest,
+                serverResponse,
+                result,
+                reader,
+                capture,
+                overflow,
+                framing,
+                declaredLength ?? 0,
+                AllowedTrailerNames(result, trailers: null),
+                processContext,
+                ct).ConfigureAwait(false);
+        }
+
+        private async Task<bool> AcceptResponseAsync(
+            int connectionID,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            if (await _proxy.RaiseReceivedWebResponseAsync(
+                    connectionID,
+                    clientRequest,
+                    serverResponse,
+                    ct,
+                    processContext).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
+            return false;
+        }
+
+        private async Task WriteResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            byte[] response,
+            CancellationToken ct)
+        {
             try
             {
-                await clientStream.WriteAsync(serverResponse.ToByteArray(), ct).ConfigureAwait(false);
+                await clientStream.WriteAsync(response, ct).ConfigureAwait(false);
                 await clientStream.FlushAsync(ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, "Response sent to client");
             }
@@ -396,7 +713,379 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private async Task HandleWebSocketAsync(int connectionID, Uri uri, Stream clientStream, ClientRequest clientRequest, CancellationToken ct)
+        // The headers go out first; the body follows as it arrives, teed into a capture copy that
+        // keeps up to the capture limit. Scripts see that copy only after the body has ended.
+        private async Task StreamResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            HttpResponseMessage result,
+            IdleTimeoutReader reader,
+            CapturedResponseBody capture,
+            ReadOnlyMemory<byte> overflow,
+            ResponseFraming framing,
+            long contentLength,
+            IReadOnlyList<string> trailerNames,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            WebServiceProxy.StreamedResponseFinalizer finalizer =
+                _proxy.RegisterStreamedResponseFinalizer(
+                    connectionID,
+                    clientRequest,
+                    serverResponse,
+                    processContext);
+            DateTime? transportEndedAt = null;
+            try
+            {
+                using (result)
+                {
+                    try
+                    {
+                        await clientStream.WriteAsync(
+                            BuildHead(serverResponse, framing, contentLength, trailerNames),
+                            ct)
+                            .ConfigureAwait(false);
+                        await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                        serverResponse.BodyBytes = Array.Empty<byte>();
+                        serverResponse.CaptureTruncatedAt = 0;
+                        await _proxy.RaiseWebResponseProgressAsync(
+                            connectionID,
+                            clientRequest,
+                            serverResponse,
+                            _applicationStopping,
+                            processContext).ConfigureAwait(false);
+
+                        await ProxyResponseStreaming.RelayBodyAsync(
+                            reader,
+                            capture,
+                            overflow,
+                            async data =>
+                            {
+                                if (framing == ResponseFraming.Chunked)
+                                {
+                                    await WriteChunkAsync(clientStream, data, ct).ConfigureAwait(false);
+                                }
+                                else
+                                {
+                                    await clientStream.WriteAsync(data, ct).ConfigureAwait(false);
+                                    await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                                }
+                            },
+                            NotifyCaptureAsync).ConfigureAwait(false);
+
+                        serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
+                        if (framing == ResponseFraming.Chunked)
+                        {
+                            await WriteLastChunkAsync(clientStream, serverResponse.Trailers, ct).ConfigureAwait(false);
+                        }
+                        await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                        _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response sent to client");
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or
+                        SocketException or
+                        ObjectDisposedException or
+                        HttpRequestException or
+                        TimeoutException or
+                        OperationCanceledException)
+                    {
+                        if (!_applicationStopping.IsCancellationRequested)
+                        {
+                            LogConnection(
+                                connectionID,
+                                LogLevel.WARN,
+                                $"Streamed response ended early: {ex.Message}");
+                        }
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            await CompleteClientOutputAsync(clientStream, connectionID).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            transportEndedAt = DateTime.Now;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                finalizer.Complete(
+                    transportEndedAt ?? DateTime.Now,
+                    () => capture.CopyFinalTo(serverResponse));
+            }
+
+            // Capture updates use the proxy's stop token, not the connection's: after
+            // "Connection: close" the client may hang up as soon as it has the response.
+            Task NotifyCaptureAsync()
+            {
+                capture.CopyProgressTo(serverResponse);
+                return _proxy.RaiseWebResponseProgressAsync(
+                    connectionID,
+                    clientRequest,
+                    serverResponse,
+                    _applicationStopping,
+                    processContext);
+            }
+        }
+
+        private enum ResponseFraming
+        {
+            ContentLength,
+            Chunked,
+            CloseDelimited,
+        }
+
+        private async Task WriteBufferedResponseAsync(
+            int connectionId,
+            Stream clientStream,
+            ServerResponse response,
+            ResponseFraming framing,
+            IReadOnlyList<string> trailerNames,
+            CancellationToken cancellationToken)
+        {
+            byte[] body = response.BodyBytes ?? Array.Empty<byte>();
+            try
+            {
+                await clientStream.WriteAsync(
+                    BuildHead(response, framing, body.Length, trailerNames),
+                    cancellationToken).ConfigureAwait(false);
+                if (framing == ResponseFraming.Chunked)
+                {
+                    for (var offset = 0; offset < body.Length; offset += ProxyResponseStreaming.ReadBufferSize)
+                    {
+                        await WriteChunkAsync(
+                            clientStream,
+                            body.AsMemory(
+                                offset,
+                                Math.Min(ProxyResponseStreaming.ReadBufferSize, body.Length - offset)),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    await WriteLastChunkAsync(
+                        clientStream,
+                        response.Trailers,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    for (var offset = 0; offset < body.Length; offset += ProxyResponseStreaming.ReadBufferSize)
+                    {
+                        await clientStream.WriteAsync(
+                            body.AsMemory(
+                                offset,
+                                Math.Min(ProxyResponseStreaming.ReadBufferSize, body.Length - offset)),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                await clientStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                _logger.Log(connectionId, LogLevel.DEBUG, "Response sent to client");
+            }
+            catch (Exception ex) when (
+                ex is IOException or
+                SocketException or
+                ObjectDisposedException)
+            {
+                LogConnection(
+                    connectionId,
+                    LogLevel.WARN,
+                    $"Client connection ended while writing the response: {ex.Message}");
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                LogConnection(
+                    connectionId,
+                    LogLevel.ERROR,
+                    $"Failed writing response to client: {ex}");
+            }
+        }
+
+        // The capture keeps the origin's headers; the client gets framing for the decoded body.
+        private static byte[] BuildHead(
+            ServerResponse response,
+            ResponseFraming framing,
+            long contentLength,
+            IReadOnlyList<string> trailerNames)
+        {
+            var head = new StringBuilder();
+            head.Append(response.Version).Append(' ').Append(response.Status).Append(' ')
+                .Append(response.StatusDescription).Append("\r\n");
+            AppendHeaders(head, response.Headers);
+            AppendHeaders(head, response.ContentHeaders);
+            if (framing == ResponseFraming.ContentLength)
+            {
+                head.Append("Content-Length: ")
+                    .Append(contentLength.ToString(CultureInfo.InvariantCulture))
+                    .Append("\r\n");
+            }
+            else if (framing == ResponseFraming.Chunked)
+            {
+                head.Append("Transfer-Encoding: chunked\r\n");
+                if (trailerNames.Count != 0)
+                {
+                    head.Append("Trailer: ")
+                        .AppendJoin(", ", trailerNames)
+                        .Append("\r\n");
+                }
+            }
+            head.Append("\r\n");
+            return Encoding.ASCII.GetBytes(head.ToString());
+        }
+
+        private static void AppendHeaders(StringBuilder head, HeaderCollection headers)
+        {
+            foreach (KeyValuePair<string, IEnumerable<string>> header in headers)
+            {
+                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Trailer", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                foreach (string value in header.Value)
+                {
+                    head.Append(header.Key).Append(": ").Append(value).Append("\r\n");
+                }
+            }
+        }
+
+        internal static async Task WriteChunkAsync(
+            Stream stream,
+            ReadOnlyMemory<byte> data,
+            CancellationToken cancellationToken)
+        {
+            // Framing must stay in the 64 KiB pool bucket; crossing it rents 128 KiB arrays on the LOH.
+            const int MaximumPayload = ProxyResponseStreaming.ReadBufferSize - 8;
+            while (!data.IsEmpty)
+            {
+                int payloadLength = Math.Min(MaximumPayload, data.Length);
+                ReadOnlyMemory<byte> payload = data[..payloadLength];
+                byte[] size = Encoding.ASCII.GetBytes(
+                    payloadLength.ToString("X", CultureInfo.InvariantCulture) + "\r\n");
+                int length = size.Length + payloadLength + ChunkTerminator.Length;
+                byte[] chunk = ArrayPool<byte>.Shared.Rent(length);
+                try
+                {
+                    size.CopyTo(chunk, 0);
+                    payload.Span.CopyTo(chunk.AsSpan(size.Length));
+                    ChunkTerminator.CopyTo(chunk, size.Length + payloadLength);
+                    await stream.WriteAsync(
+                        chunk.AsMemory(0, length),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(chunk);
+                }
+                data = data[payloadLength..];
+            }
+        }
+
+        private static async Task WriteLastChunkAsync(
+            Stream stream,
+            HeaderCollection trailers,
+            CancellationToken cancellationToken)
+        {
+            await stream.WriteAsync("0\r\n"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+            foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers.Where(
+                trailer => ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key)))
+            {
+                foreach (string value in trailer.Value)
+                {
+                    byte[] line = Encoding.ASCII.GetBytes($"{trailer.Key}: {value}\r\n");
+                    await stream.WriteAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            await stream.WriteAsync(ChunkTerminator, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static string[] AllowedTrailerNames(
+            HttpResponseMessage response,
+            HeaderCollection trailers) =>
+            ProxyHeaderUtilities.AllowedTrailerNames(response.Headers, trailers).ToArray();
+
+        private async Task WriteProxyErrorAsync(
+            int connectionId,
+            Stream clientStream,
+            ClientRequest request,
+            HttpStatusCode status,
+            string reason,
+            ClientProcessContext processContext,
+            bool captureCompletion,
+            CancellationToken cancellationToken)
+        {
+            var response = new ServerResponse
+            {
+                RequestNumber = request.RequestNumber,
+                StreamId = request.StreamId,
+                Version = request.Version,
+                Status = ((int)status).ToString(CultureInfo.InvariantCulture),
+                StatusDescription = reason,
+                BodyBytes = Array.Empty<byte>(),
+            };
+            response.Headers["Connection"] = "close";
+            response.ContentHeaders["Content-Length"] = "0";
+            try
+            {
+                await clientStream.WriteAsync(response.ToByteArray(), cancellationToken).ConfigureAwait(false);
+                await clientStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                _logger.Log(connectionId, LogLevel.DEBUG, "Proxy-generated response sent to client");
+            }
+            catch (Exception ex) when (
+                ex is IOException or
+                SocketException or
+                ObjectDisposedException or
+                OperationCanceledException)
+            {
+                LogConnection(
+                    connectionId,
+                    LogLevel.WARN,
+                    $"Client connection ended while writing a proxy-generated response: {ex.Message}");
+                return;
+            }
+
+            if (!captureCompletion)
+                return;
+
+            if (_proxy.TryRegisterStreamedResponseFinalizer(
+                    connectionId,
+                    request,
+                    response,
+                    processContext,
+                    out WebServiceProxy.StreamedResponseFinalizer finalizer,
+                    proxyGenerated: true))
+            {
+                finalizer.Complete(DateTime.Now, prepareResponse: null);
+            }
+        }
+
+        private async Task CompleteClientOutputAsync(Stream clientStream, int connectionId)
+        {
+            if (clientStream is not DuplexPipeStream duplex)
+                return;
+            try
+            {
+                await duplex.CompleteOutputAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                LogConnection(
+                    connectionId,
+                    LogLevel.DEBUG,
+                    $"Client output was already closed: {ex.Message}");
+            }
+        }
+
+        private async Task HandleWebSocketAsync(
+            int connectionID,
+            Uri uri,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             var wsProxy = new WebSocketProxy();
             wsProxy.WebSocketOpened += (_, args) => _proxy.RaiseWebSocketOpened(args);
@@ -409,20 +1098,17 @@ namespace XMAT.WebServiceCapture.Proxy
                 clientStream,
                 clientRequest,
                 _logger,
+                processContext,
                 ct).ConfigureAwait(false);
         }
 
-        private async Task<ServerResponse> ParseServerResponseAsync(int connectionID, HttpResponseMessage response)
+        // Headers only: the body is read by RelayResponseAsync. The capture stores the decoded
+        // body, so it never claims chunked framing (#148); this connection closes after one response.
+        private static ServerResponse CreateServerResponse(HttpResponseMessage response)
         {
-            if (response == null)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, "Server response is null");
-                return null;
-            }
-
             var serverResponse = new ServerResponse
             {
-                Status = ((int)response.StatusCode).ToString(),
+                Status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture),
                 StatusDescription = response.ReasonPhrase,
                 Version = "HTTP/" + response.Version.ToString(),
             };
@@ -431,8 +1117,6 @@ namespace XMAT.WebServiceCapture.Proxy
             serverResponse.Headers.CopyFrom(response.Headers);
             serverResponse.ContentHeaders.CopyFrom(response.Content.Headers);
             serverResponse.Headers["Connection"] = "close";
-            serverResponse.BodyBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-
             return serverResponse;
         }
 
@@ -456,6 +1140,15 @@ namespace XMAT.WebServiceCapture.Proxy
                     ProxyRequestReadFailure
                         .BufferExhausted =>
                         BufferExhaustedResponse,
+                    ProxyRequestReadFailure
+                        .UnsupportedTransferCoding =>
+                        UnsupportedTransferCodingResponse,
+                    ProxyRequestReadFailure
+                        .MalformedTransferCoding =>
+                        MalformedTransferCodingResponse,
+                    ProxyRequestReadFailure
+                        .UnsupportedExpectation =>
+                        UnsupportedExpectationResponse,
                     _ => null,
                 };
             if (response == null ||
@@ -618,6 +1311,7 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             Stream clientStream,
             ClientRequest connectRequest,
+            ClientProcessContext processContext,
             CancellationToken ct)
         {
             using var tcpClient = new TcpClient();
@@ -637,7 +1331,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 localPort = ((IPEndPoint)tcpClient.Client.LocalEndPoint).Port;
                 registered = _interceptedTunnels.TryRegister(
                     localPort,
-                    new InterceptedTunnelContext(connectionID, connectRequest));
+                    new InterceptedTunnelContext(connectionID, connectRequest, processContext));
                 if (!registered)
                     throw new InvalidOperationException(
                         $"An intercepted tunnel is already registered for port {localPort}.");
@@ -668,7 +1362,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     connectionID,
                     LogLevel.ERROR,
                     $"Failed opening intercepted TLS tunnel: {ex.Message}");
-                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex);
+                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex, processContext);
             }
             finally
             {
@@ -790,6 +1484,8 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             FlushAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
+
+        internal ValueTask CompleteOutputAsync() => _writer.CompleteAsync();
 
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();

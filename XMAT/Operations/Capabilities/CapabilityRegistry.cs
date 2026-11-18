@@ -1,0 +1,503 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
+
+using System.Collections.Generic;
+using static XMAT.Operations.Capabilities.CapabilityKeys;
+
+namespace XMAT.Operations.Capabilities
+{
+    // Every user-facing capability, how the GUI reaches it and whether it runs headless. The parity tests fail when a
+    // GUI entry point (routed command, XAML Command/Click/CommandBinding, dialog window, device or capture type, script
+    // event, analyzer or preference) is missing here or listed but no longer exists. GuiOnly is only for presentation.
+    // docs/cli.md shows this table between its xmat-capabilities markers.
+    internal static class CapabilityRegistry
+    {
+        internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string ReplayOperation = "XMAT.Operations.Replay.ReplayOperation";
+        internal const string MarkCaptureTextOperation = "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
+        internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
+        internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
+
+        private const string Owner = "XMAT-021";
+        private const string MainWindowXaml = "Windows/MainWindow.xaml";
+        private const string DeviceTabsXaml = "Controls/AllCaptureDevicesTabControl.xaml";
+        private const string AnalysisTabsXaml = "Controls/CaptureAnalysisControl.xaml";
+        private const string PreferencesXaml = "Windows/PreferencesWindow.xaml";
+        private const string AnalyzerChoiceXaml = "Windows/CaptureAnalyzerWindow.xaml";
+        private const string AddDeviceXaml = "Windows/AddDeviceWindow.xaml";
+        private const string DisableOnCloseXaml = "Windows/DisableDeviceOnCloseWindow.xaml";
+        private const string SourceAddressXaml = "Engines/WebServiceProxy/Windows/SourceAddressWindow.xaml";
+        private const string PortChangeXaml = "Engines/WebServiceProxy/Windows/ProxyPortChangeWindow.xaml";
+        private const string BlockListXaml = "Engines/WebServiceProxy/Views/BlockListView.xaml";
+        private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
+        private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
+        private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
+        private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
+        private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
+        private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
+        private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
+        private const string MultipartFormXaml = "Engines/WebServiceProxy/Windows/MultipartFormWindow.xaml";
+
+        private const string AppCommandsPrefix = "XMAT.AppCommands.";
+        private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
+        private const string ScriptCommandsPrefix = "XMAT.ScriptCommands.";
+        private const string NavigationCommandsPrefix = "XMAT.XboxLiveCaptureAnalysis.CaptureAnalysisCommands.";
+        private const string DeviceTypeEnum = "XMAT.SharedInterfaces.DeviceType";
+        private const string CaptureTypeEnum = "XMAT.SharedInterfaces.CaptureType";
+        private const string ScriptEventEnum = "XMAT.WebServiceCaptureScriptableEventType";
+        private const string ProxyPreferences = "XMAT.WebServiceCapture.Models.PreferencesModel";
+        private const string DeviceParameters = "XMAT.WebServiceCapture.WebServiceDeviceCaptureController+ControllerParameters";
+        private const string NetworkAnalysisPreferences =
+            "XMAT.NetworkTraceCaptureAnalysis.Models.NetworkTraceAnalysisOptionsModel";
+
+        internal static IReadOnlyList<Capability> All { get; } = new[]
+        {
+            // Analysis
+            Capability.Supported(
+                "analysis.xbox-live", "Analyze Xbox Live service calls", "S1",
+                cli: "analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] " +
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
+                operation: AnalyzeCaptureOperation,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "AnalyzeCaptures"),
+                    Analyzer("XMAT.XboxLiveCaptureAnalysis.XboxLiveCaptureAnalyzer"),
+                    Window("XMAT.CaptureAnalyzerWindow"),
+                    Click(AnalyzerChoiceXaml, "OkButton_Click"),
+                }),
+            Capability.Planned(
+                "analysis.network-trace", "Analyze network traces", "S8b", Owner,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "AnalyzeCaptures"),
+                    Analyzer("XMAT.NetworkTraceCaptureAnalysis.NetworkTraceCaptureAnalyzer"),
+                    Window("XMAT.CaptureAnalyzerWindow"),
+                    Click(AnalyzerChoiceXaml, "OkButton_Click"),
+                    Preference(NetworkAnalysisPreferences, "PacketsPerSecondThreshold"),
+                    Preference(NetworkAnalysisPreferences, "MaximumMTU"),
+                    Preference(NetworkAnalysisPreferences, "DuplicatePacketWindow"),
+                }),
+            // XMAT-008 exports the HTML report from the GUI; xmat analyze --out writes metadata JSON, not this report.
+            Capability.Planned(
+                "analysis.html-report", "Write the analysis HTML report", "S3", "XMAT-008",
+                gui: new[] { Command(AppCommandsPrefix + "ExportAnalysisReport") }),
+            Capability.Planned(
+                "analysis.compatibility", "Analyze with the LTA rule set, custom rules or other thresholds", "S1b", Owner),
+
+            // Capture files
+            Capability.Supported(
+                "capture-file.read-xmatcap", "Read XMAT capture files (.xmatcap)", "S1",
+                cli: "analyze INPUT.xmatcap --out DIR",
+                operation: AnalyzeCaptureOperation,
+                gui: new[] { WpfCommand("Open", MainWindowXaml) }),
+            Capability.Supported(
+                "capture-file.import-saz", "Read Fiddler archives (.saz)", "S1",
+                cli: "analyze INPUT.saz --out DIR",
+                operation: AnalyzeCaptureOperation,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "Import"),
+                    EnumValue("XMAT.Models.ImportType", "Fiddler"),
+                    EnumValue(DeviceTypeEnum, "Unknown"),
+                }),
+            Capability.Planned(
+                "capture-file.import-etl", "Read network traces (.etl)", "S8b", Owner,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "Import"),
+                    EnumValue("XMAT.Models.ImportType", "NetTrace"),
+                    EnumValue(DeviceTypeEnum, "Unknown"),
+                }),
+            Capability.Supported(
+                "capture-file.mark-text",
+                "Mark or repair capture text storage",
+                "S10",
+                cli: "mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]",
+                operation: MarkCaptureTextOperation),
+            // One operation exports every format: File > Export and Export Sanitized (the selected tab) and the capture
+            // list's row menu (the selected or the visible sessions), whose save dialog offers each format.
+            Capability.Supported(
+                "capture-file.export-xmatcap", "Export sessions as an XMAT capture (.xmatcap)", "S10",
+                cli: "export INPUT --out FILE [--format xmatcap|saz|sanitized-saz] [--device ID] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]... [--host PATTERN]... " +
+                    "[--exclude-host PATTERN]... [--host-mode glob|exact] [--status VALUE]... [--method VALUE]... " +
+                    "[--match-none] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.export-saz", "Export sessions as Fiddler archives (.saz)", "S2",
+                cli: "export INPUT --out FILE.saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.sanitize", "Export sessions as a sanitized Fiddler archive", "S2",
+                cli: "export INPUT --out FILE.saz --format sanitized-saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("ExportSanitized")),
+            Capability.Planned(
+                "capture-file.save-xmatcap", "Save captures (.xmatcap)", "S5", Owner,
+                gui: new[] { WpfCommand("Save", MainWindowXaml) }),
+
+            // Capture
+            Capability.Planned(
+                "capture.add-device", "Choose the device and capture method", "S5", Owner,
+                gui: new[]
+                {
+                    WpfCommand("New", MainWindowXaml),
+                    WpfCommand("New", DeviceTabsXaml),
+                    Window("XMAT.AddDeviceWindow"),
+                    Click(AddDeviceXaml, "OkButton_Click"),
+                    EnumValue(CaptureTypeEnum, "WebProxy"),
+                }),
+            Capability.Planned(
+                "capture.generic", "Capture an explicit-proxy (generic) device", "S5", Owner,
+                gui: new[] { EnumValue(DeviceTypeEnum, "GenericProxyDevice") }),
+            Capability.Planned(
+                "capture.local-pc", "Capture this PC", "S6", Owner,
+                gui: new[] { EnumValue(DeviceTypeEnum, "LocalPC") }),
+            Capability.Planned(
+                "capture.xbox", "Capture an Xbox development kit", "S7", Owner,
+                gui: new[] { EnumValue(DeviceTypeEnum, "XboxConsole") }),
+            Capability.Planned(
+                "capture.stop", "Stop a running capture", "S5", Owner,
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "StartStopCapture"),
+                    Window("XMAT.WebProxyStopProgressWindow"),
+                    WpfCommand("Close", DeviceTabsXaml),
+                }),
+            Capability.Planned(
+                "capture.clear", "Clear captured data", "S8a", Owner,
+                gui: new[] { Command(AppCommandsPrefix + "ClearAllCaptures") }),
+            Capability.PolicyException(
+                "capture.delete-sessions", "Delete sessions from a capture", "S11", "XMAT",
+                "Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the " +
+                    "capture list; headless runs export the sessions to keep instead",
+                new[]
+                {
+                    Command(ProxyCommandsPrefix + "DeleteSelectedSessions"),
+                    Command(ProxyCommandsPrefix + "DeleteUnselectedSessions"),
+                }),
+            Capability.Planned(
+                "capture.network-trace", "Capture low-level network traces", "S8b", Owner,
+                gui: new[]
+                {
+                    Command("XMAT.NetworkTrace.NetworkTraceCommands.StartStopCapture"),
+                    EnumValue(CaptureTypeEnum, "NetworkTrace"),
+                }),
+            // Hides sessions from view and selects the sessions to analyze or export; it never changes what the proxy
+            // forwards or records. The editor's buttons, the proxy commands that the row and timeline menus run, and the
+            // analyzer window's opt-in all use the same selection.
+            Capability.Supported(
+                "capture.process-filter", "Filter captured sessions by client process", "S9",
+                cli: "analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
+                operation: FilterCaptureSessionsOperation,
+                gui: new[]
+                {
+                    Click(CaptureViewXaml, "ApplyProcessFilter_Click"),
+                    Click(CaptureViewXaml, "HideSvchost_Click"),
+                    Click(CaptureViewXaml, "ShowAllProcesses_Click"),
+                    Command(ProxyCommandsPrefix + "ShowOnlyProcess"),
+                    Command(ProxyCommandsPrefix + "HideProcess"),
+                    Command(ProxyCommandsPrefix + "ShowAllProcesses"),
+                    Command(AppCommandsPrefix + "AnalyzeCaptures"),
+                    Window("XMAT.CaptureAnalyzerWindow"),
+                }) with
+            {
+                AdditionalCliRoutes =
+                    new[] { "export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]..." },
+            },
+            Capability.Planned(
+                "capture.scripts", "Run capture scripts", "S8a", Owner,
+                gui: new[]
+                {
+                    Command(ScriptCommandsPrefix + "LoadScript"),
+                    EnumValue(ScriptEventEnum, "SslConnectionRequest"),
+                    EnumValue(ScriptEventEnum, "WebRequest"),
+                    EnumValue(ScriptEventEnum, "WebResponse"),
+                }),
+            Capability.Planned(
+                "script.validate", "Validate a capture script without running it", "S8a", Owner,
+                gui: new[] { Command(ScriptCommandsPrefix + "ValidateScript") }),
+            // The lists last only for the session, but they change what the proxy captures, so they are not
+            // presentation.
+            Capability.Planned(
+                "capture.host-lists", "Block or bypass hosts during capture", "S8a", Owner,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "ManageHostLists"),
+                    Window("XMAT.WebServiceCapture.HostListManagerWindow"),
+                    Click(HostListManagerXaml, "Close_Click"),
+                    Click(BlockListXaml, "AddUrlBlock_Click"),
+                    Click(BlockListXaml, "RemoveSelected_Click"),
+                    Click(BlockListXaml, "ClearAll_Click"),
+                    Click(BypassListXaml, "AddBypass_Click"),
+                    Click(BypassListXaml, "RemoveSelected_Click"),
+                    Click(BypassListXaml, "ClearAll_Click"),
+                }),
+            // Changes what the proxy forwards as it arrives and how much of each response a capture keeps, so it is not
+            // presentation.
+            Capability.Planned(
+                "capture.response-streaming",
+                "Stream responses and limit how much of each response body a capture keeps",
+                "S8a",
+                Owner,
+                gui: new[]
+                {
+                    Preference(ProxyPreferences, "AutoStreamMediaAndEvents"),
+                    Preference(ProxyPreferences, "StreamAllResponses"),
+                    Preference(ProxyPreferences, "CaptureLimitMegabytes"),
+                }),
+
+            // Replay sends captured requests again, as captured or edited, from this PC through the shared ReplaySender,
+            // directly or, when allowed, through an upstream proxy, and offers a client certificate or answers with Windows
+            // authentication only when allowed for the run's one origin; the replays are not captured. The composer is its
+            // GUI adapter for one request, or one per number of a URL with '#' (SequenceRangeWindow).
+            Capability.Supported(
+                "request.replay", "Replay captured requests, as captured or edited", "S9",
+                cli: "replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
+                    "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
+                    "[--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--accept-stored-text] " +
+                    "[--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "EditAndResend"),
+                    Command(ProxyCommandsPrefix + "Reissue"),
+                    Command(ProxyCommandsPrefix + "CancelReissue"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Click(ComposerXaml, "Send_Click"),
+                    Click(ComposerXaml, "CancelSend_Click"),
+                    Click(ComposerXaml, "UploadFile_Click"),
+                    Click(ComposerXaml, "ClearBody_Click"),
+                    // Build form: a multipart body, made by the same builder as --form (MultipartForm).
+                    Click(ComposerXaml, "BuildForm_Click"),
+                    Window("XMAT.WebServiceCapture.MultipartFormWindow"),
+                    Click(MultipartFormXaml, "AddText_Click"),
+                    Click(MultipartFormXaml, "AddFile_Click"),
+                    Click(MultipartFormXaml, "RemovePart_Click"),
+                    Click(MultipartFormXaml, "MoveUp_Click"),
+                    Click(MultipartFormXaml, "MoveDown_Click"),
+                    Click(MultipartFormXaml, "UseForm_Click"),
+                    Click(MultipartFormXaml, "CancelWork_Click"),
+                    Click(ComposerXaml, "Close_Click"),
+                    Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
+                    Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
+                    Click(VerifyDiffXaml, "Close_Click"),
+                }),
+            Capability.Supported(
+                "request.compose", "Compose and send a new request", "S9",
+                cli: "compose --url URL | --request-file FILE | --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw] " +
+                    "[--fix-content-length] [--sequence START-END] [--method METHOD] " +
+                    "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
+                    "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
+                    "[--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "ComposeRequest"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Window("XMAT.WebServiceCapture.SequenceRangeWindow"),
+                    Click(SequenceRangeXaml, "Ok_Click"),
+                    // Raw mode (compose --raw) and its Content-Length fix (--fix-content-length).
+                    Click(ComposerXaml, "ModeButton_Click"),
+                    Click(ComposerXaml, "FixContentLength_Click"),
+                }),
+
+            // A request file (xmat-request/1) holds one request without sending it: a template, by default, keeps only its
+            // shape; with consent, its captured content. Loading one never grants consent (request.compose sends it).
+            Capability.Supported(
+                "request.save", "Save requests as request files, without sending them", "S9",
+                cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
+                    "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
+                    "[--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "OpenRequest_Click"),
+                    Click(ComposerXaml, "SaveRequest_Click"),
+                    Click(ComposerXaml, "CompletePart_Click"),
+                    Window("XMAT.WebServiceCapture.SaveRequestWindow"),
+                    Click("Engines/WebServiceProxy/Windows/SaveRequestWindow.xaml", "Save_Click"),
+                }),
+
+            // A cURL script runs one request again outside XMAT: PowerShell 7 runs the inbox curl.exe with arguments that
+            // send what XMAT's sender sends. A script holds its request as captured, so exporting always needs consent; it
+            // sends nothing and starts nothing (RequestCurlExporter).
+            Capability.Supported(
+                "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
+                cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
+                    "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1] " +
+                    "[--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] " +
+                    "[--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "SaveCurl_Click"),
+                }),
+
+            // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
+            Capability.Planned(
+                "capture.websocket-handshakes",
+                "Record WebSocket handshakes and report observed frames without their payloads",
+                "S4",
+                Owner),
+            Capability.Planned(
+                "capture.websocket-payloads", "Archive WebSocket message payloads", "S8a", Owner),
+
+            // Headless runs
+            Capability.Planned("run.records", "List, inspect, recover or clean up headless runs", "S4", Owner),
+
+            // Device proxy configuration
+            Capability.Planned(
+                "proxy.port", "Choose the proxy port", "S5", Owner,
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "ChangePort"),
+                    Command(ProxyCommandsPrefix + "DiscardPortChange"),
+                    Command(ProxyCommandsPrefix + "CancelPortChange"),
+                    Window("XMAT.WebServiceCapture.ProxyPortChangeWindow"),
+                    Click(PortChangeXaml, "Apply_Click"),
+                    Click(PortChangeXaml, "Later_Click"),
+                    Preference(ProxyPreferences, "FirstPort"),
+                    Preference(ProxyPreferences, "LastPort"),
+                    Preference(DeviceParameters, "Port"),
+                    Preference(DeviceParameters, "PendingPort"),
+                }),
+            Capability.Planned(
+                "proxy.enable", "Enable a device's proxy for a bounded foreground session", "S6", Owner,
+                gui: new[] { Command(ProxyCommandsPrefix + "EnableDevice") }),
+            Capability.Planned(
+                "proxy.disable",
+                "Disable a device's proxy: stop an owned run or recover an attributable one, never a blind reset",
+                "S6",
+                Owner,
+                gui: new[] { Command(ProxyCommandsPrefix + "DisableDevice") }),
+            Capability.Planned(
+                "proxy.status", "Check a device's proxy status", "S6", Owner,
+                gui: new[] { Command(ProxyCommandsPrefix + "CheckDevice") }),
+            Capability.Planned("proxy.recover", "Recover proxy settings after a crash", "S6", Owner),
+            Capability.Planned(
+                "proxy.on-exit", "Restore an Xbox's proxy when capture ends", "S7", Owner,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "Exit"),
+                    Window("XMAT.DisableDeviceOnCloseWindow"),
+                    Click(DisableOnCloseXaml, "OkButton_Click"),
+                    Preference(ProxyPreferences, "PromptToDisableOnClose"),
+                }),
+            Capability.Planned(
+                "xbox.source-address", "Choose the PC address a console sends traffic to", "S7", Owner,
+                gui: new[]
+                {
+                    Window("XMAT.WebServiceCapture.SourceAddressWindow"),
+                    Click(SourceAddressXaml, "OkButton_Click"),
+                    Preference(DeviceParameters, "ProxyHost"),
+                }),
+            Capability.Planned(
+                "device.status", "Ping an Xbox development kit or read its status (read-only)", "S7", Owner,
+                gui: new[] { Command(ProxyCommandsPrefix + "PingDevice") }),
+
+            // Certificates, diagnostics and environment
+            Capability.Planned(
+                "certificate.export", "Show or export the existing root certificate; never creates one", "S5", Owner,
+                gui: new[] { Command(AppCommandsPrefix + "ExportRootCert") }),
+            Capability.Planned(
+                "diagnostics.logs", "Collect debug logs", "S8a", Owner,
+                gui: new[] { Command(AppCommandsPrefix + "CollectLogs") }),
+            Capability.Planned(
+                "environment.gdk", "Show GDK for Xbox details", "S7", Owner,
+                gui: new[] { Command(AppCommandsPrefix + "ViewGDKXInfo") }),
+            Capability.Supported(
+                "cli.doctor", "Check what a command needs before running it", "S1",
+                cli: "doctor --for analyze"),
+
+            // Presentation only
+            Capability.GuiOnly(
+                "view.main-window", "Main window", "Presentation: hosts the GUI adapters of every capability",
+                gui: new[] { Window("XMAT.MainWindow") }),
+            Capability.GuiOnly(
+                "view.theme", "Light and dark theme", "Presentation: colors only",
+                gui: new[]
+                {
+                    Click(MainWindowXaml, "ToggleDarkMode_Click"),
+                    Preference("XMAT.Models.AppPreferencesModel", "Theme"),
+                }),
+            Capability.GuiOnly(
+                "view.language", "Display language",
+                "Presentation: the command line emits stable codes and English diagnostics",
+                gui: new[] { Preference("XMAT.Models.AppPreferencesModel", "Language") }),
+            Capability.GuiOnly(
+                "view.preferences-editor", "Preferences window",
+                "Presentation: edits saved GUI preferences; headless runs take per-run options instead",
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "Preferences"),
+                    Window("XMAT.PreferencesWindow"),
+                    WpfCommand("Save", PreferencesXaml),
+                }),
+            Capability.GuiOnly(
+                "view.analysis-navigation", "Report navigation and analysis tabs",
+                "Presentation: moves between report views and tabs",
+                gui: new[]
+                {
+                    Command(NavigationCommandsPrefix + "GoToId"),
+                    Command(NavigationCommandsPrefix + "GoToEndpoint"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointBfr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointBdr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointCfr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointPdr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointRcr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointSbdr"),
+                    Command(NavigationCommandsPrefix + "GoToEndpointTcr"),
+                    WpfCommand("Close", AnalysisTabsXaml),
+                }),
+            Capability.GuiOnly(
+                "view.script-editor", "Script editor",
+                "Presentation: editor buffer, save, revert and error navigation; headless scripts are files",
+                gui: new[]
+                {
+                    Command(ScriptCommandsPrefix + "SaveScript"),
+                    Command(ScriptCommandsPrefix + "RevertScript"),
+                    Command(ScriptCommandsPrefix + "ScriptErrorSelected"),
+                }),
+            Capability.GuiOnly(
+                "view.controls", "Control templates", "Presentation: scroll bar commands inside control templates",
+                gui: new[]
+                {
+                    WpfCommand("ScrollBar.PageUpCommand", "App.xaml"),
+                    WpfCommand("ScrollBar.PageDownCommand", "App.xaml"),
+                    WpfCommand("ScrollBar.PageLeftCommand", "App.xaml"),
+                    WpfCommand("ScrollBar.PageRightCommand", "App.xaml"),
+                }),
+            Capability.GuiOnly(
+                "view.capture-viewers", "Capture viewers",
+                "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+            Capability.GuiOnly(
+                "view.composer-history", "Composer history",
+                "Presentation: session-only navigation over rows already in the Replays tab; sends go through " +
+                    "request.replay, and headless runs keep no session",
+                gui: new[] { Click(ComposerXaml, "History_Click") }),
+        };
+
+        private static string[] ExportEntryPoints(string fileCommand) => new[]
+        {
+            Command(AppCommandsPrefix + fileCommand),
+            Command(ProxyCommandsPrefix + "ExportSelectedSessions"),
+            Command(ProxyCommandsPrefix + "ExportVisibleSessions"),
+            Window("XMAT.ExportProgressWindow"),
+            Click(ExportProgressXaml, "CancelExport_Click"),
+        };
+    }
+}

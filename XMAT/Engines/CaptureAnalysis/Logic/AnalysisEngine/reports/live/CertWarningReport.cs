@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 
@@ -11,6 +12,12 @@ namespace CaptureAnalysisEngine
 {
     public class CertWarningReportDocument : ReportDocument
     {
+        private static readonly JsonSerializerOptions
+            SerializerOptions = new()
+            {
+                IncludeFields = true,
+            };
+
         internal CertWarningReportDocument()
         {
             WarningResults = new();
@@ -18,14 +25,21 @@ namespace CaptureAnalysisEngine
 
         public override string ToJson()
         {
-            var options = new JsonSerializerOptions
-            {
-                IncludeFields = true,
-            };
             return JsonSerializer.Serialize(
                 this,
                 this.GetType(),
-                options);
+                SerializerOptions);
+        }
+
+        public override void WriteJson(
+            Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            JsonSerializer.Serialize(
+                output,
+                this,
+                this.GetType(),
+                SerializerOptions);
         }
 
         public class CertWarning

@@ -9,6 +9,10 @@ releases collect automatically; there is no end-user collection preference. An e
 **local sample run** records the same application events to a local file without creating a collector
 reporter or requiring a collector key.
 
+The delivery implementation is still the legacy OneCollector exporter. Migration to the approved
+Windows telemetry pipeline remains gated on provider ownership, collection eligibility, and onboarding;
+the main-branch integration below does not enable collection or complete that migration.
+
 ## Event names and semantics
 
 The namespace is `Microsoft.Gaming.XMAT`. For example, the launch event is
@@ -33,6 +37,8 @@ they are not a count of simultaneously successful captures. A proxy listener sta
 traffic arrived: use `CaptureFirstData` or a non-empty completed capture.
 Proxy startup waits for the public listener to bind: a port conflict produces a failed operation,
 not an empty successful capture. Stored requests are counted before their deferred UI updates.
+Retryable proxy-stop failures keep the same capture operation open, so late streaming callbacks and
+the eventual successful stop retain their original correlation and item count.
 On normal application shutdown, unfinished operations are completed once with
 `Outcome = Cancelled` and `ErrorCategory = Cancelled` before session closure.
 
@@ -123,7 +129,8 @@ rendered successfully. Hidden Calls/CertWarnings reports are not counted as view
 
 `None`, `DeviceAdd`, `EnableProxy`, `DisableProxy`, `Capture`, `Analysis`, `LoadCaptures`,
 `SaveCaptures`, `ImportSaz`, `ExportSaz`, `CompileScript`, `LoadScript`, `SaveScript`,
-`CollectLogs`, `ExportRootCertificate`, `StatisticsRender`, `AnalyzerInitialize`.
+`CollectLogs`, `ExportRootCertificate`, `StatisticsRender`, `AnalyzerInitialize`, `Replay`,
+`ExportCaptures`, `ExportSanitizedSaz`.
 
 `AnalyzerInitialize` also produces operation events during startup. Analysis kind is distinguished by
 `Feature = XboxLiveAnalysis` or `NetworkTraceAnalysis`, not another arbitrary string field.
@@ -142,10 +149,42 @@ rendered successfully. Hidden Calls/CertWarnings reports are not counted as view
 | Scripting | `Scripting`, `SslScript`, `RequestScript`, `ResponseScript`, `ScriptLoad`, `ScriptSave`, `ScriptRevert` |
 | Proxy configuration | `BlockList`, `BypassList` |
 | Support/configuration | `DebugLogs`, `RootCertificate`, `GdkInfo`, `Preferences`, `LightTheme`, `DarkTheme`, `EnglishLanguage` |
+| Replay and compose | `RequestComposer`, `ReplayRequests`, `RequestVerification`, `VerificationDiff`, `ReplayHistory` |
+| Request files and cURL | `RequestFileOpen`, `RequestFileSave`, `CurlCopy`, `CurlSave` |
+| Capture editing | `DeleteSessions` |
 
 Filter telemetry records only the category, never the filter value. Feature-use hooks exclude binding
 initialization where appropriate; report/default selected-view inspection can be recorded when data is
 actually displayed. The taxonomy is fixed; localization changes do not change event values.
+
+### New workflow coverage
+
+The new GUI workflows reuse the existing event kinds and schema version; they do not require new
+event registrations:
+
+- Composer sends (parsed, raw, or numbered) and capture-list reissues emit one `Replay` operation per
+  run, with a bucket of sends observed. Cancellation remains `Cancelled`; a transport failure or
+  response-size refusal is not reported as success merely because the shared operation returned
+  normally. HTTP error responses and verification differences are debugging results, not XMAT failures.
+- Reissue-and-verify records `RequestVerification` adoption; opening recorded differences records
+  `VerificationDiff`. Neither verdicts nor difference content are exported.
+- Capture exports from the menu or selected/visible-session actions use `ExportSaz`,
+  `ExportSanitizedSaz`, or `ExportCaptures` (XMAT capture format). Tracking begins after destination and
+  sanitization consent. A protection-consent retry stays in the same operation. The final typed result,
+  exported-item bucket, and published-file size bucket are recorded, not paths or selection criteria.
+  Cancelling the destination picker records a `CaptureFiles` cancellation counter with
+  `Operation = ExportCaptures`, since no final format was chosen.
+- Process filtering records only `FilterProcess` when the user applies a changed non-empty filter,
+  not binding initialization, repeated application, process names, process IDs, or selector text.
+  `DeleteSessions` requires an actual deletion, not a declined confirmation or a busy operation.
+- Request-file open and replay-history adoption require a successful load. Request-file/cURL saves
+  require a published file, and cURL copy requires successful clipboard publication. Cancelled or
+  failed actions do not count as successful adoption of those features.
+
+Shared `XMAT.Operations` implementations and the headless `xmat` CLI remain free of GUI telemetry
+initialization and hooks. These signals measure GUI use only; CLI adoption requires a separate
+headless-safe lifecycle and collection-policy design. No new fields collect HTTP versions, transport
+destinations, certificate identities, authentication data, request/response content, or process identity.
 
 ### Stage values
 
@@ -167,12 +206,14 @@ uses conversion/validation/report generation; network analysis currently uses va
 | `MissingGdk` | Required GDK unavailable |
 | `MissingDefaultConsole` | Device setup cannot find the default console |
 | `AlreadyExists` | Duplicate device/proxy setup |
-| `Configuration` | Reserved taxonomy value; no current producer |
+| `Configuration` | A shared operation reports a missing prerequisite |
 | `Compilation` | Script compilation has errors |
 | `Unknown` | Other or uncategorized failure |
 
 Application errors keep their existing handling. Telemetry records only the category; it does not
 serialize exception objects. Captured game/service HTTP failures are not automatically XMAT failures.
+For typed shared-operation results, invalid input maps to `InvalidData`, conflicts to
+`InvalidOperation`, cancellation to `Cancelled`, and other/cleanup failures to `Unknown`.
 
 ### Bucket boundaries
 

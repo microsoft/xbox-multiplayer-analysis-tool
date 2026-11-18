@@ -17,7 +17,7 @@
         <logic:PacketFlagsConverter x:Key="PacketFlagsConverter"/>
         <logic:NetworkProtocolConverter x:Key="NetworkProtocolConverter"/>
         <logic:DeviceStatusConverter x:Key="DeviceStatusConverter"/>
-        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader">
+        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
     </UserControl.Resources>
@@ -40,7 +40,7 @@
         <ToolBar Grid.Row="0" Grid.ColumnSpan="2" ToolBarTray.IsLocked="True">
             <ToggleButton IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}">
                 <ToggleButton.Style>
-                    <Style TargetType="{x:Type ToggleButton}">
+                    <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
                         <Setter Property="Content">
                             <Setter.Value>
                                 <StackPanel Orientation="Horizontal">

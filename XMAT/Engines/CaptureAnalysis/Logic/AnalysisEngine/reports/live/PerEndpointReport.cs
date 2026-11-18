@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -90,6 +91,12 @@ namespace CaptureAnalysisEngine
 
     public class PerEndpointReportDocument : ReportDocument, IEndpointReportData
     {
+        private static readonly JsonSerializerOptions
+            SerializerOptions = new()
+            {
+                IncludeFields = true,
+            };
+
         public int Warnings { get { return Metadata.Warnings; } }
         public int Errors { get { return Metadata.Errors; } }
         public string Result { get { return Metadata.Result; } }
@@ -101,14 +108,21 @@ namespace CaptureAnalysisEngine
 
         public override string ToJson()
         {
-            var options = new JsonSerializerOptions
-            {
-                IncludeFields = true,
-            };
             return JsonSerializer.Serialize(
                 this,
                 this.GetType(),
-                options);
+                SerializerOptions);
+        }
+
+        public override void WriteJson(
+            Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            JsonSerializer.Serialize(
+                output,
+                this,
+                this.GetType(),
+                SerializerOptions);
         }
 
         public ReportMetadata Metadata = new();
@@ -140,13 +154,18 @@ namespace CaptureAnalysisEngine
 
             // Grouped by endpoint identity, so a captured endpoint and synthesized telemetry
             // sharing a logical name are reported as separate endpoints.
-            var endpointRules = result.GroupBy(rule => rule.Identity).ToList();
+            ILookup<string, IGrouping<EndpointKey, RuleResult>>
+                endpointRules = result
+                    .GroupBy(rule => rule.Identity)
+                    .ToLookup(
+                        group => group.Key.LogicalName,
+                        StringComparer.Ordinal);
 
             foreach (var endpoint in endpoints)
             {
-                foreach (var endpointResults in endpointRules
-                    .Where(group => group.Key.LogicalName == endpoint.Key)
-                    .OrderBy(group => group.Key.Kind))
+                foreach (var endpointResults in
+                    endpointRules[endpoint.Key]
+                        .OrderBy(group => group.Key.Kind))
                 {
                     var endpointReportData = ReportEndpoint(endpointResults, endpoint);
                     if (endpointReportData != null)

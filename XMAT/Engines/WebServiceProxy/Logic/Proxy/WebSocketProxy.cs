@@ -12,6 +12,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.Operations.Captures;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -29,6 +30,8 @@ namespace XMAT.WebServiceCapture.Proxy
         private Logger _logger;
         private int _connectionID;
         private int _requestNumber;
+        private ClientProcessContext _processContext;
+        private CaptureRowKey _rowKey;
 
         public async Task StartWebSocketProxy(
             int connectionID,
@@ -36,11 +39,14 @@ namespace XMAT.WebServiceCapture.Proxy
             Stream clientStream,
             ClientRequest clientRequest,
             Logger logger,
+            ClientProcessContext processContext,
             CancellationToken ct)
         {
             _connectionID = connectionID;
             _requestNumber = clientRequest.RequestNumber;
             _logger = logger;
+            _processContext = processContext;
+            _rowKey = clientRequest.RowKey;
             bool opened = false;
 
             try
@@ -89,7 +95,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     {
                         Timestamp = DateTime.Now,
                         ConnectionID = _connectionID,
-                        RequestNumber = _requestNumber
+                        RequestNumber = _requestNumber,
+                        ProcessContext = _processContext,
                     });
                 }
 
@@ -141,7 +148,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 _connectionID,
                 _requestNumber,
                 CreateUpstreamUri(uri).ToString(),
-                _serverWebSocket.SubProtocol))
+                _serverWebSocket.SubProtocol,
+                _processContext))
             {
                 await WriteErrorResponseAsync(clientStream, "403 Forbidden", ct).ConfigureAwait(false);
                 return false;
@@ -293,7 +301,9 @@ namespace XMAT.WebServiceCapture.Proxy
                             true,
                             result.MessageType,
                             message.ToArray(),
-                            messageTruncated);
+                            messageTruncated,
+                            _processContext,
+                            _rowKey);
                         message.SetLength(0);
                         messageTruncated = false;
                     }
@@ -349,7 +359,9 @@ namespace XMAT.WebServiceCapture.Proxy
                             false,
                             result.MessageType,
                             message.ToArray(),
-                            messageTruncated);
+                            messageTruncated,
+                            _processContext,
+                            _rowKey);
                         message.SetLength(0);
                         messageTruncated = false;
                     }
@@ -372,7 +384,8 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             int requestNumber,
             string remoteEndPoint,
-            string subProtocol)
+            string subProtocol,
+            ClientProcessContext processContext = null)
         {
             var args = new WebSocketOpenedEventArgs
             {
@@ -381,7 +394,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestNumber = requestNumber,
                 RemoteEndPoint = remoteEndPoint,
                 SubProtocol = subProtocol,
-                AcceptConnection = true
+                AcceptConnection = true,
+                ProcessContext = processContext,
             };
 
             WebSocketOpened?.Invoke(this, args);
@@ -394,7 +408,9 @@ namespace XMAT.WebServiceCapture.Proxy
             bool fromHost,
             WebSocketMessageType messageType,
             byte[] message,
-            bool payloadTruncated = false)
+            bool payloadTruncated = false,
+            ClientProcessContext processContext = null,
+            CaptureRowKey rowKey = default)
         {
             WebSocketMessage?.Invoke(this, new WebSocketMessageEventArgs
             {
@@ -404,7 +420,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 FromHost = fromHost,
                 MessageType = messageType,
                 Message = message,
-                PayloadTruncated = payloadTruncated
+                PayloadTruncated = payloadTruncated,
+                ProcessContext = processContext,
+                RowKey = rowKey,
             });
         }
 

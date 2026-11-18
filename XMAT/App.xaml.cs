@@ -35,11 +35,24 @@ namespace XMAT
             InitializeExceptionHandlers();
             // Before any proxy, certificate or database initialization.
             RecoverProxySettings();
-            XmatTelemetryService.Initialize(e.Args);
+            XmatTelemetryService.Initialize(e.Args, () => MessageBox.Show(
+                Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_MESSAGE"),
+                Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_TITLE"),
+                MessageBoxButton.OK, MessageBoxImage.Error));
             InitializeDataLayer();
             InitializeCaptureMethods();
             InitializeCaptureAnalyzers();
             TrackXboxCaptures();
+            SessionEnding += Application_SessionEnding;
+        }
+
+        // Windows ending the session closes XMAT without the main window's Closing, which would cancel a running replay
+        // and wait for it: cancel it here, without waiting, since its rows are added on this thread. This handler never
+        // cancels the session end (e.Cancel stays false), so XMAT always exits and BeginShutdown, which is terminal, is
+        // safe here. A handler that may cancel it must first add a reversible preparation instead (BeginShutdown).
+        private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
+        {
+            CaptureAppModel.AppModel.BeginShutdown();
         }
 
         private void InitializeExceptionHandlers()
@@ -262,6 +275,8 @@ namespace XMAT
         {
             try
             {
+                // Shutdown does not wait for Closing; cancel replays before their capture storage goes away.
+                CaptureAppModel.AppModel.BeginShutdown();
                 ShutdownCaptureAnalyzers();
                 ShutdownCaptureMethods();
                 _xboxSessions?.Clear();

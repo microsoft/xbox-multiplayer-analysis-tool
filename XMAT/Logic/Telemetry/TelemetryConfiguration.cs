@@ -19,8 +19,10 @@ namespace XMAT.Telemetry
 
         internal static TelemetryConfiguration FromAssembly()
         {
-            var metadata = typeof(App).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToArray();
-            string Read(string key) => metadata.FirstOrDefault(x => x.Key == key)?.Value ?? string.Empty;
+            var metadata = typeof(App).Assembly.GetCustomAttributesData()
+                .Where(attribute => attribute.AttributeType == typeof(AssemblyMetadataAttribute)).ToArray();
+            string Read(string key) => metadata.FirstOrDefault(attribute => attribute.ConstructorArguments[0].Value as string == key)?
+                .ConstructorArguments[1].Value as string ?? string.Empty;
             var enabled = Read("Xmat.Telemetry.Enabled");
             if (!bool.TryParse(enabled, out var isEnabled))
             {

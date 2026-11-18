@@ -9,6 +9,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using XMAT.Models;
+using XMAT.Operations;
+using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.Telemetry
@@ -39,7 +41,7 @@ namespace XMAT.Telemetry
             _diagnose = diagnose;
         }
 
-        internal static void Initialize(string[] args = null)
+        internal static void Initialize(string[] args = null, Action sampleFailure = null)
         {
             args ??= [];
             var sampleRequested = Array.IndexOf(args, "--telemetry-sample") >= 0;
@@ -60,10 +62,7 @@ namespace XMAT.Telemetry
                 Diagnose("InitializationFailed");
                 if (sampleRequested)
                 {
-                    System.Windows.MessageBox.Show(
-                        Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_MESSAGE"),
-                        Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_TITLE"),
-                        System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                    sampleFailure?.Invoke();
                 }
             }
         }
@@ -401,6 +400,38 @@ namespace XMAT.Telemetry
         internal void Fail(Exception exception) => Complete(
             exception is OperationCanceledException ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed,
             TelemetryBuckets.Error(exception));
+
+        internal void Complete(OperationOutcome outcome, long items = -1, long fileSize = -1)
+        {
+            var (result, error) = outcome switch
+            {
+                OperationOutcome.Succeeded => (TelemetryOutcome.Succeeded, TelemetryError.None),
+                OperationOutcome.Cancelled => (TelemetryOutcome.Cancelled, TelemetryError.Cancelled),
+                OperationOutcome.NoAnalyzableData => (TelemetryOutcome.NoData, TelemetryError.None),
+                OperationOutcome.InvalidInput => (TelemetryOutcome.Failed, TelemetryError.InvalidData),
+                OperationOutcome.Conflict => (TelemetryOutcome.Failed, TelemetryError.InvalidOperation),
+                OperationOutcome.PrerequisiteMissing => (TelemetryOutcome.Failed, TelemetryError.Configuration),
+                _ => (TelemetryOutcome.Failed, TelemetryError.Unknown)
+            };
+            Complete(result, error, items, fileSize);
+        }
+
+        internal void CompleteReplay(OperationResult<ReplayResult> result, long sends)
+        {
+            var failed = result.Succeeded
+                ? result.Value?.Items.FirstOrDefault(item => item.Outcome != ReplayOutcome.Completed)
+                : null;
+            if (failed != null)
+            {
+                Complete(TelemetryOutcome.Failed,
+                    failed.Outcome == ReplayOutcome.TooLarge ? TelemetryError.InvalidData : TelemetryError.Network,
+                    items: sends);
+            }
+            else
+            {
+                Complete(result.Outcome, items: sends);
+            }
+        }
 
         private long ElapsedMilliseconds => (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds;
 

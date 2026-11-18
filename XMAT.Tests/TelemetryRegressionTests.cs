@@ -7,7 +7,9 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
+using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.Telemetry;
 using XMAT.WebServiceCapture;
@@ -154,6 +156,11 @@ namespace XMAT.Tests
                 using (ZipFile.Open(path, ZipArchiveMode.Create))
                 { }
                 var controller = new WebServiceDeviceCaptureController("import", DeviceType.Unknown, true);
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                var table = database.CreateTable(WebServiceCaptureMethod.TableName, WebProxyCaptureSchema.CreateFields());
+                typeof(WebServiceDeviceCaptureController).GetField("_dataTable", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(controller, table);
                 using var cancelled = new CancellationTokenSource();
                 cancelled.Cancel();
                 var first = Task.Run(() => controller.ImportFromFiddler(path, cancelled.Token));

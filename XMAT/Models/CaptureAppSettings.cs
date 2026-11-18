@@ -44,7 +44,21 @@ namespace XMAT.Models
                 }
             }
 
-            internal void DeserializeTo(CaptureAppModel model)
+            internal void DeserializeTo(CaptureAppModel model) =>
+                DeserializeTo(
+                    model,
+                    captureDevice => model.AddDeviceContext(
+                        captureDevice.DeviceType,
+                        captureDevice.DeviceName,
+                        captureDevice.CaptureType,
+                        false,
+                        captureDevice.Parameters,
+                        deferPortAllocation: true,
+                        origin: CaptureOrigin.Restored),
+                    message => PublicUtilities.AppLog(LogLevel.WARN, message));
+
+            // addDevice adds a saved device's capture and logWarning logs; tests replace them.
+            internal void DeserializeTo(CaptureAppModel model, Action<CaptureDevice> addDevice, Action<string> logWarning)
             {
                 model.PreferencesModel.DeserializeFrom(Preferences);
 
@@ -53,14 +67,17 @@ namespace XMAT.Models
 
                 foreach (var captureDevice in CaptureDevices)
                 {
-                    ICaptureDeviceContext deviceContext = model.AddDeviceContext(
-                        captureDevice.DeviceType,
-                        captureDevice.DeviceName,
-                        captureDevice.CaptureType,
-                        false,
-                        captureDevice.Parameters,
-                        deferPortAllocation: true,
-                        origin: CaptureOrigin.Restored);
+                    // Only a hand-edited file can save a device under the replay tab's name, which AddDeviceContext refuses:
+                    // that entry is skipped, so XMAT still starts, with the other devices. Other failures still stop it.
+                    if (CaptureAppModel.IsReplayContextName(captureDevice.DeviceName))
+                    {
+                        logWarning(
+                            "A saved capture device was not restored: its name is reserved for the tab that replays " +
+                            "are recorded in.");
+                        continue;
+                    }
+
+                    addDevice(captureDevice);
                 }
                 var proxies = model.CaptureDeviceContexts
                     .Where(context => !context.IsReadOnly)

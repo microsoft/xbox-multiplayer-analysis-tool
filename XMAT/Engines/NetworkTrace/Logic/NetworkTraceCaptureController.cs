@@ -77,6 +77,7 @@ namespace XMAT.NetworkTrace
         public ItemCollection FilteredItems { get; set; }
 
         private readonly string _deviceName;
+        private readonly Func<INetworkTraceEngine, Task> _disconnectEngine;
         private DeviceType _deviceType;
         private IDataTable _dataTable;
         private bool _liveRowsAttached;
@@ -117,9 +118,16 @@ namespace XMAT.NetworkTrace
         public bool HaveNoTraces { get { return !HaveTraces; } }
 
         public NetworkTraceCaptureController(string deviceName, DeviceType deviceType)
+            : this(deviceName, deviceType, NetworkTraceEngine.Disconnect)
+        {
+        }
+
+        internal NetworkTraceCaptureController(
+            string deviceName, DeviceType deviceType, Func<INetworkTraceEngine, Task> disconnectEngine)
         {
             _deviceName = deviceName;
             _deviceType = deviceType;
+            _disconnectEngine = disconnectEngine ?? throw new ArgumentNullException(nameof(disconnectEngine));
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             PidFilterList = new ObservableCollection<CheckedListItem>();
@@ -200,13 +208,19 @@ namespace XMAT.NetworkTrace
             }
         }
 
-        internal async Task StartCapture(ICaptureDeviceContext device)
+        internal async Task StartCapture(ICaptureDeviceContext device, IDisposable operationLease = null)
         {
+            if (IsCapturing || DeviceStatus != DeviceStatusEnum.Idle)
+            {
+                throw new InvalidOperationException("A capture operation is already in progress.");
+            }
+
             _captureTelemetry = XmatTelemetryService.Current.Begin(TelemetryOperationKind.Capture,
-                TelemetryFeature.NetworkTraceCapture, XmatTelemetryService.ContextFor(device));
+                TelemetryFeature.NetworkTraceCapture,
+                device == null ? null : XmatTelemetryService.ContextFor(device));
+            IsCapturing = true;
             try
             {
-                IsCapturing = true;
                 CaptureAppModel.AppModel.StatusBarText1 = Localization.GetLocalizedString("NETCAP_STATUS_RUNNING");
 
                 if (_deviceType == DeviceType.XboxConsole)
@@ -216,17 +230,16 @@ namespace XMAT.NetworkTrace
                 }
                 else if (_deviceType == DeviceType.LocalPC)
                 {
-                    if (_networkTraceEngine == null)
-                    {
-                        _networkTraceEngine = NetworkTraceEngine.CreateLocal();
-                        _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
-                    }
+                    _networkTraceEngine ??= NetworkTraceEngine.CreateLocal();
                 }
                 else
                 {
                     throw new ApplicationException("Unsupported DeviceType");
                 }
 
+                // Reused engines need one subscription per capture, including after a failed attempt.
+                _networkTraceEngine.EventRecordAvailable -= OnEventRecordAvailable;
+                _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
                 DeviceStatus = DeviceStatusEnum.Starting;
 
                 await _networkTraceEngine.StartPacketTraceAsync();
@@ -239,32 +252,23 @@ namespace XMAT.NetworkTrace
             {
                 _captureTelemetry.Fail(ex);
                 _captureTelemetry = null;
+                // The application's close check also observes the view's capture-data lease.
+                operationLease?.Dispose();
+                await CompleteCaptureAsync(preserveCaptureError: true);
                 throw;
             }
         }
 
         internal async Task StopCapture(ICaptureDeviceContext device)
         {
+            if (!IsCapturing || DeviceStatus != DeviceStatusEnum.Tracing)
+            {
+                throw new InvalidOperationException("No trace is ready to stop.");
+            }
+
             try
             {
-                DeviceStatus = DeviceStatusEnum.Stopping;
-                await _networkTraceEngine.StopPacketTraceAsync();
-
-                DeviceStatus = DeviceStatusEnum.Downloading;
-                await _networkTraceEngine.GetAllEventsAsync();
-
-                _networkTraceEngine.EventRecordAvailable -= OnEventRecordAvailable;
-
-                if (_deviceType == DeviceType.XboxConsole)
-                {
-                    DeviceStatus = DeviceStatusEnum.Disconnecting;
-                    await DisconnectFromDevice(device);
-                }
-
-                DeviceStatus = DeviceStatusEnum.Idle;
-                IsCapturing = false;
-                CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
-                CommandManager.InvalidateRequerySuggested();
+                await StopCaptureCoreAsync();
                 _captureTelemetry?.Complete();
             }
             catch (Exception ex)
@@ -275,6 +279,60 @@ namespace XMAT.NetworkTrace
             finally
             {
                 _captureTelemetry = null;
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+
+        private async Task StopCaptureCoreAsync()
+        {
+            bool captureFailed = true;
+            try
+            {
+                DeviceStatus = DeviceStatusEnum.Stopping;
+                await _networkTraceEngine.StopPacketTraceAsync();
+
+                DeviceStatus = DeviceStatusEnum.Downloading;
+                await _networkTraceEngine.GetAllEventsAsync();
+                captureFailed = false;
+            }
+            finally
+            {
+                await CompleteCaptureAsync(preserveCaptureError: captureFailed);
+            }
+        }
+
+        private async Task CompleteCaptureAsync(bool preserveCaptureError)
+        {
+            var engine = _networkTraceEngine;
+            if (engine != null)
+            {
+                engine.EventRecordAvailable -= OnEventRecordAvailable;
+            }
+
+            bool needsDisconnect = engine != null && _deviceType == DeviceType.XboxConsole;
+            if (needsDisconnect)
+            {
+                _networkTraceEngine = null;
+                DeviceStatus = DeviceStatusEnum.Disconnecting;
+            }
+
+            // Publish the retained packets and allow close, but keep Start disabled until cleanup finishes.
+            IsCapturing = false;
+            CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
+            try
+            {
+                if (needsDisconnect)
+                {
+                    await _disconnectEngine(engine);
+                }
+            }
+            catch (Exception ex) when (preserveCaptureError && !ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Network trace recovery disconnect failed: {ex}");
+            }
+            finally
+            {
+                DeviceStatus = DeviceStatusEnum.Idle;
             }
         }
 
@@ -305,7 +363,6 @@ namespace XMAT.NetworkTrace
                 options.HostName = _deviceName;
 
                 _networkTraceEngine = await NetworkTraceEngine.Connect(options);
-                _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
             }
         }
 
@@ -357,15 +414,6 @@ namespace XMAT.NetworkTrace
                 packetNode.GetProperty("data").GetString()
                 );
             _captureTelemetry?.ItemReceived();
-        }
-
-        internal async Task DisconnectFromDevice(ICaptureDeviceContext device)
-        {
-            if (_networkTraceEngine != null && _deviceType == DeviceType.XboxConsole)
-            {
-                await NetworkTraceEngine.Disconnect(_networkTraceEngine);
-                _networkTraceEngine = null;
-            }
         }
 
         public void LoadCaptures(IEnumerable<IDataset> datasets)

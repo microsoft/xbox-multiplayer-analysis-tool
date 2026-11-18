@@ -145,7 +145,15 @@ Captures HTTP/HTTPS traffic by acting as a forward proxy. Supports Xbox developm
 - **FiddlerSazHandler** — Import/export support for Fiddler SAZ archive format
 - **ScriptHost** — Roslyn-based C# script execution for on-the-fly traffic modification
 
-**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP).
+**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP), for traffic from a PC the client process (image name, PID, start time and status), and response trailers and where a capture truncated a long response body.
+
+**Streaming:** `WebServiceProxy` buffers a response for its Web Response script, or streams it as it arrives (`ResponseStreamingOptions`, set from Preferences). For a streamed response it publishes the captured body prefix, an array it never changes, when the headers arrive (`WebResponseProgressAsync`), when the prefix fills the capture limit and when the body passes it, then reports the end once with the time the stream ended (`ResponseForwarded`), after the client has the end of the response. The controller updates the row at each step, stores an unchanged prefix once, and records the end before it runs the script on a copy. A response that the proxy sends itself instead of the server's (502 or 504) is reported the same way, marked `ProxyGenerated`, and recorded without a script. A proxy stop completes only after it has reported the end of every stream it admitted, so `WebServiceDeviceCaptureController` keeps its capture callbacks open until the proxy has stopped, also after a failed start, and until a later stop when the proxy is still stopping after the capture budget.
+
+**Process filter:** each capture tab can hide sessions by client process (`ProcessFilterSpec`). The filter only changes what the grid and timeline show; the proxy still forwards and records every session. The GUI, opt-in filtered analysis, exports and the `--process`/`--exclude-process` options of `xmat analyze` and `xmat export` share one matcher (`ProcessFilter`) and `FilterCaptureSessionsOperation`, which also counts the included, hidden and unknown sessions.
+
+**Export:** File > Export, File > Export Sanitized, the capture list's Export Selected and Export Visible (`CaptureExportWorkflow`) and `xmat export` are adapters of one `ExportCaptureSessionsOperation`. It reads a frozen snapshot of the capture tab or, for `xmat export`, the input file through `CaptureInputReader`, the reader that analysis uses; selects the sessions with `CaptureSessionSelector` (process, host, status and method); stages the XMATCAP, SAZ or sanitized SAZ file next to the destination with private access unless a GUI user explicitly accepts storage without Windows permissions; and publishes it, with its SHA-256, by one atomic move. Failure or cancellation before publication leaves no output; staging cleanup can fail after a successful publication. `xmat export` never replaces an existing file. Every session carries its header history (`HeaderProvenance`) through models, snapshots, saves and exports; a sanitized export leaves an uninspectable session's pair out, inspects one whose history is unknown as stored, and reports those it published with the warning `export.sanitization.header-provenance-unknown`.
+
+**Delete:** only the GUI deletes sessions: `capture.delete-sessions` is the capability registry's one policy exception, with no command line or operation. The capture list's Delete and Shift+Delete freeze the exact visible sessions before the confirmation; `CaptureAppModel.TryDeleteSessions` then runs the deletion as a capture data operation, which never overlaps saving, exporting, importing or analysis, and read-only tabs cannot delete. `WebServiceDeviceCaptureController.DeleteSessions` removes only frozen sessions that are still current and visible, by row id through `IExactCaptureRowDelete`, from the writable capture database, which enables SQLite `secure_delete`. It then changes the capture's source stamp and retires the deleted row keys in `CaptureRowRegistry`, so the proxy still forwards a deleted in-flight session but its later callbacks record nothing.
 
 ### NetworkTrace Engine
 
@@ -210,6 +218,8 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 
 **Reports:** `PerEndpointReport`, `CallReport`, `StatsReport`, `CertWarningReport` — rendered as HTML via WebView2.
 
+**Session links:** an analysis keeps the `CaptureSourceStamp` of the capture tab it read. Its session links open only the tab whose current stamp matches (`CaptureAppModel.ResolveCaptureSource`), never one with the same name; deleting, clearing or reloading sessions changes the stamp and closing the tab removes it, so the analysis becomes historical and its links are disabled.
+
 ## Data Flow
 
 ### Capture → Storage → Analysis → Reporting
@@ -235,7 +245,7 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 | Table | Created By | Fields |
 |---|---|---|
 | `CaptureDevices` | App startup | DeviceType, DeviceName, CaptureType |
-| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies |
+| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies; optional client process columns (`ClientProcessName`, `ClientProcessId`, `ClientProcessStartTime`, `ClientProcessStatus`), response columns (`ResponseTrailers`, `ResponseBodyTruncatedAt`) and `HeadersUninspectable` (each session's header history: `0` no known loss, `-1` unknown, as for a capture saved without the column, and `1` uninspectable, which sanitized exports leave out) |
 | `NetworkTracePackets` | NetworkTraceCaptureMethod | PID, TID, timestamp, flags, payload |
 
 ## Design Patterns

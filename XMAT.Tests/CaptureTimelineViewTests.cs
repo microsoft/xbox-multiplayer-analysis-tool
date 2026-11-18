@@ -17,6 +17,7 @@ using static XMAT.Tests.CaptureTimelineTestData;
 
 namespace XMAT.Tests
 {
+    [Collection(WpfTestHostCollection.Name)]
     public class CaptureTimelineViewTests
     {
         [Fact]

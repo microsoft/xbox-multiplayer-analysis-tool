@@ -48,6 +48,12 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
 
                 ContextMenu menu = Open(Row(grid, clicked));
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_TITLE"), replay.Header);
+                Assert.Same(view, replay.CommandTarget);
+                Assert.Same(clicked, replay.CommandParameter);
+                Assert.True(replay.IsEnabled);
                 HostListAction block = Actions(menu).Single(action => action.List == HostListKind.Block);
                 Assert.Equal("clicked.example", block.Host);
                 Assert.Equal(HostListOperation.Add, block.Operation);
@@ -84,6 +90,11 @@ namespace XMAT.Tests
                 Assert.Same(selected, grid.SelectedItem);
 
                 ContextMenu menu = OpenFromFocus(window);
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Same(view, replay.CommandTarget);
+                Assert.Same(focused, replay.CommandParameter);
+                Assert.True(replay.IsEnabled);
                 Assert.NotEmpty(Actions(menu));
                 Assert.All(Actions(menu), action => Assert.Equal("focused.example", action.Host));
                 HostListAction block = Actions(menu).Single(action => action.List == HostListKind.Block);
@@ -136,6 +147,31 @@ namespace XMAT.Tests
                     WpfTestHost.Pump();
                 }
                 Assert.Equal(handlers, CollectionHandlerCount(policy.BlockList.BlockedUrls));
+            });
+        }
+
+        [Theory]
+        [InlineData("GET", "", true)]
+        [InlineData("CONNECT", "", false)]
+        [InlineData("GET", "Upgrade: websocket\r\n", false)]
+        public void CaptureRowMenu_OnlyEnablesReplayForSupportedRequests(
+            string method, string headers, bool expected)
+        {
+            _application.Run(window =>
+            {
+                var capture = RequestReplayDraftTests.Capture(method, "/", [], headers);
+                CaptureConnectionView view = CaptureView(new HostListPolicy(), capture);
+                ShowCaptureView(window, view);
+                var grid = (DataGrid)view.FindName("ConnectionList");
+
+                ContextMenu menu = Open(Row(grid, capture));
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Same(capture, replay.CommandParameter);
+                Assert.Equal(expected, replay.IsEnabled);
+                Assert.NotEmpty(Actions(menu));
+                menu.IsOpen = false;
+                WpfTestHost.Pump();
             });
         }
 
@@ -526,7 +562,7 @@ namespace XMAT.Tests
             });
         }
 
-        private static CaptureConnectionView CaptureView(HostListPolicy policy, params ProxyConnectionModel[] rows)
+        internal static CaptureConnectionView CaptureView(HostListPolicy policy, params ProxyConnectionModel[] rows)
         {
             var controller = new WebServiceDeviceCaptureController(
                 "Test device", DeviceType.Unknown, true, new ProxyPortPool(), hostListPolicy: policy);
@@ -543,14 +579,14 @@ namespace XMAT.Tests
         // Shows the capture view at its designed size. In the small default test window the fixed
         // toolbar, filter and timeline rows leave the grid no row viewport, so only its first row
         // container can be realized.
-        private static void ShowCaptureView(Window window, CaptureConnectionView view)
+        internal static void ShowCaptureView(Window window, CaptureConnectionView view)
         {
             window.Width = 1280;
             window.Height = 720;
             WpfTestHost.Show(window, view);
         }
 
-        private static DataGridRow Row(DataGrid grid, object item)
+        internal static DataGridRow Row(DataGrid grid, object item)
         {
             grid.ScrollIntoView(item);
             WpfTestHost.Pump();
@@ -570,7 +606,7 @@ namespace XMAT.Tests
 
         // Right-click route: the opening event is raised on the clicked element with cursor
         // coordinates and bubbles to the nearest element that owns a context menu.
-        private static ContextMenu Open(FrameworkElement clicked) => OpenThroughRoute(clicked, keyboard: false);
+        internal static ContextMenu Open(FrameworkElement clicked) => OpenThroughRoute(clicked, keyboard: false);
 
         // Menu-key route: the same event is raised on the focused element with the keyboard
         // coordinates (-1, -1). Logical focus stands in for keyboard focus deterministically.

@@ -2,42 +2,27 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Runtime.ExceptionServices;
-using System.Threading;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace XMAT.Tests
 {
+    // WpfTestHost.Run runs each test on the shared WPF application's dispatcher, the one thread that reads the
+    // application's resources: a ResourceDictionary fills a lookup cache on first use that is not thread-safe, so a test
+    // on a dispatcher thread of its own could corrupt it, and every later UI test would then fail. The classes that use
+    // Run also join this collection, which runs alone.
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class WpfTestHostCollection
+    {
+        public const string Name = "WPF test host";
+    }
+
     internal static class WpfTestHost
     {
-        internal static void Run(Action<Window> test)
-        {
-            Exception failure = null;
-            var thread = new Thread(() =>
-            {
-                try
-                {
-                    RunOnCurrentDispatcher(test);
-                }
-                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-                {
-                    failure = exception;
-                }
-                finally
-                {
-                    Dispatcher.CurrentDispatcher.InvokeShutdown();
-                }
-            }) { IsBackground = true };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "The WPF test dispatcher did not complete.");
-            if (failure != null)
-            {
-                ExceptionDispatchInfo.Capture(failure).Throw();
-            }
-        }
+        // Runs the test on the shared application's dispatcher; a caller already on it runs the test in place.
+        internal static void Run(Action<Window> test) => CaptureUiApplicationFixture.RunOnApplication(test);
 
         internal static void RunOnCurrentDispatcher(Action<Window> test)
         {
@@ -76,6 +61,28 @@ namespace XMAT.Tests
             Dispatcher.CurrentDispatcher.BeginInvoke(
                 DispatcherPriority.ContextIdle, new Action(() => frame.Continue = false));
             Dispatcher.PushFrame(frame);
+        }
+
+        // Pumps the shared application's dispatcher until TASK completes or TIMEOUT passes, then rethrows any failure.
+        internal static void Complete(Task task, TimeSpan timeout)
+        {
+            Application.Current.Dispatcher.VerifyAccess();
+            var clock = Stopwatch.StartNew();
+            while (!task.IsCompleted && clock.Elapsed < timeout)
+            {
+                Pump();
+            }
+            if (!task.IsCompleted)
+            {
+                throw new TimeoutException("The dispatcher operation did not complete.");
+            }
+            task.GetAwaiter().GetResult();
+        }
+
+        internal static T Complete<T>(Task<T> task, TimeSpan timeout)
+        {
+            Complete((Task)task, timeout);
+            return task.GetAwaiter().GetResult();
         }
     }
 }

@@ -6,10 +6,16 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.Tests.Fixtures;
+using Microsoft.Data.Sqlite;
+using XMAT.DataAbstractionLayer;
+using XMAT.SharedInterfaces;
+using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using Xunit.Abstractions;
@@ -346,15 +352,16 @@ namespace XMAT.Tests
             Assert.DoesNotContain("multiline-canary", evidence.DecodedContent);
         }
 
+        // A malformed header line can no longer be dropped unread: with its continuation, it leaves the whole pair out.
         [Fact]
-        public void DroppedMalformedAuthorization_DoesNotReattachItsContinuationToHost()
+        public void MalformedAuthorizationAndItsContinuation_MakeThePairOpaque()
         {
             var evidence = Export("text/plain", string.Empty,
                 extraRequestHeaders: "Authorization\r\n folded-canary\r\nX-Keep: visible\r\n");
 
             Assert.DoesNotContain("folded-canary", evidence.DecodedContent);
-            Assert.Equal(2, evidence.Summary.OmittedHeaders);
-            Assert.Contains("Host: example.test\r\nX-Keep: visible", evidence.DecodedContent);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain("X-Keep: visible", evidence.DecodedContent);
         }
 
         [Fact]
@@ -421,68 +428,6 @@ namespace XMAT.Tests
                 Assert.Equal(1, evidence.Summary.OmittedBodies);
                 Assert.Equal(0, evidence.Summary.WorkBudgetOmissions);
             }
-        }
-
-        [Theory]
-        [InlineData("before-first")]
-        [InlineData("between-records")]
-        [InlineData("after-last")]
-        public void CancelledArchiveExport_DisposesTheSourceAndNeverReplacesTheDestination(string point)
-        {
-            Export("text/plain", "visible");
-            var path = Assert.Single(Directory.GetFiles(_directory, "*.saz"));
-            var original = File.ReadAllBytes(path);
-            var record = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            using var cancellation = new CancellationTokenSource();
-            var disposed = false;
-            IEnumerable<ProxyConnectionModel> Records()
-            {
-                try
-                {
-                    if (point == "before-first")
-                    {
-                        cancellation.Cancel();
-                    }
-                    yield return record;
-                    cancellation.Cancel();
-                    if (point == "between-records")
-                    {
-                        yield return record;
-                    }
-                }
-                finally
-                {
-                    disposed = true;
-                }
-            }
-
-            Assert.ThrowsAny<OperationCanceledException>(() =>
-                FiddlerSazHandler.CreateSanitizedSazFile(path, Records(), cancellation.Token));
-
-            Assert.True(disposed);
-            Assert.Equal(original, File.ReadAllBytes(path));
-            Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
-            var retained = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            Assert.Equal("visible", Encoding.UTF8.GetString(retained.ResponseBody));
-        }
-
-        [Fact]
-        public void AlreadyCancelledExport_DoesNotOpenTheSourceOrCreateATemporaryArchive()
-        {
-            using var cancellation = new CancellationTokenSource();
-            cancellation.Cancel();
-            var enumerated = false;
-            IEnumerable<ProxyConnectionModel> Records()
-            {
-                enumerated = true;
-                yield break;
-            }
-
-            Assert.ThrowsAny<OperationCanceledException>(() => FiddlerSazHandler.CreateSanitizedSazFile(
-                Path.Join(_directory, "cancelled.saz"), Records(), cancellation.Token));
-
-            Assert.False(enumerated);
-            Assert.Empty(Directory.GetFiles(_directory));
         }
 
         [Fact]
@@ -1323,6 +1268,997 @@ namespace XMAT.Tests
             Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
         }
 
+        // A value that is a secret only because of the name it is sent under, such as x-session-token, is learned from a
+        // response trailer as from a response header, although the archive never writes the trailer: its echo in either
+        // body is redacted, and an unrelated value is kept. The canary matches no generic detector.
+        [Theory]
+        [InlineData("header", true)]
+        [InlineData("header", false)]
+        [InlineData("trailer", true)]
+        [InlineData("trailer", false)]
+        public void SessionTokenFromAResponseHeaderOrTrailer_IsRedactedWhereEitherBodyEchoesIt(
+            string source, bool requestEchoes)
+        {
+            const string canary = "OPAQUE-SESSION-CANARY";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var record = PairRecord(1, requestEchoes ? echo : "{\"keep\":\"public-marker\"}",
+                requestEchoes ? "{\"keep\":\"public-marker\"}" : echo,
+                extraResponseHeaders: source == "header" ? "x-session-token: " + canary + "\r\n" : "");
+            if (source == "trailer")
+            {
+                record.SetResponseCaptureDetails("x-session-token: " + canary + "\r\n", 0);
+            }
+
+            var evidence = ExportRecords(record);
+            using var echoed = JsonDocument.Parse(Body(evidence, requestEchoes));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, echoed.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", echoed.RootElement.GetProperty("keep").GetString());
+        }
+
+        // A trailer whose name is not sensitive still goes through the generic detectors, as a header would: the decoded
+        // password of a Basic credential, or the password in a URL's user information, is learned, so an echo of the
+        // password alone is redacted.
+        [Theory]
+        [InlineData("basic", "OPAQUE-BASIC-CANARY")]
+        [InlineData("userinfo", "OPAQUE-USERINFO-CANARY")]
+        public void CredentialsInAnOrdinaryTrailer_AreLearnedFromTheirParts(string kind, string canary)
+        {
+            var value = kind == "basic"
+                ? "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("svc-user:" + canary))
+                : "https://svc-user:" + canary + "@callback.example.test/done";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}");
+            record.SetResponseCaptureDetails("x-diagnostics: " + value + "\r\n", 0);
+
+            var evidence = ExportRecords(record);
+            using var request = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", request.RootElement.GetProperty("keep").GetString());
+        }
+
+        // An ordinary archive keeps the trailers and an import restores them; a sanitized export of the import still
+        // learns from them before leaving them out, whichever body echoes the value.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ImportedTrailers_AreInspectedBeforeASanitizedExportLeavesThemOut(bool requestEchoes)
+        {
+            const string canary = "OPAQUE-IMPORTED-CANARY";
+            const string trailers = "x-checksum: abc123\r\nx-session-token: " + canary + "\r\n";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var original = Path.Join(_directory, "trailers.saz");
+            var source = PairRecord(1, requestEchoes ? echo : "{\"keep\":\"public-marker\"}",
+                requestEchoes ? "{\"keep\":\"public-marker\"}" : echo);
+            source.SetResponseCaptureDetails(trailers, 0);
+            SazArchive.Write(original, new[] { source });
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
+            Assert.Equal(trailers, imported.ResponseTrailers);
+
+            var evidence = ExportRecords(imported);
+            using var echoed = JsonDocument.Parse(Body(evidence, requestEchoes));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.DoesNotContain("x-session-token", evidence.DecodedContent);
+            Assert.DoesNotContain("x-checksum", evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, echoed.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", echoed.RootElement.GetProperty("keep").GetString());
+        }
+
+        // A trailer value too long to learn, or one secret more than the pair can hold across its headers, bodies and
+        // trailers, leaves the whole pair out like any other capacity failure; the next session is unaffected.
+        [Theory]
+        [InlineData("oversized")]
+        [InlineData("capacity")]
+        public void TrailerSecretsBeyondTheCapacity_MakeThePairOpaqueButNotTheNextSession(string kind)
+        {
+            var oversized = kind == "oversized";
+            var headers = oversized ? "" : string.Concat(Enumerable.Range(0, 24)
+                .Select(index => $"x-api-token-{index:D2}: CAP-HEADER-{index:D2}\r\n"));
+            var response = oversized ? "{\"keep\":\"public-marker\"}" : JsonSerializer.Serialize(
+                Enumerable.Range(0, 24).Select(index => new { secret = $"CAP-BODY-{index:D2}" }));
+            var trailers = oversized ? "x-session-token: CAP-" + new string('S', 5000) + "\r\n" : string.Concat(
+                Enumerable.Range(0, 24).Select(index => $"x-session-token-{index:D2}: CAP-TRAILER-{index:D2}\r\n"));
+            var first = PairRecord(1, "{\"keep\":\"public-marker\"}", response, extraRequestHeaders: headers);
+            first.SetResponseCaptureDetails(trailers, 0);
+
+            var evidence = ExportRecords(first,
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Equal(0, evidence.Summary.WorkBudgetOmissions);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain("CAP-", evidence.DecodedContent);
+            using var next = JsonDocument.Parse(Body(evidence, true, 2));
+            Assert.Equal("public-marker", next.RootElement.GetProperty("keep").GetString());
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // Trailers spend what the response's inspection left of its work budget, and the response is then rendered with
+        // what they leave. Trailer header fields cost the response one unit a character in each pass and are never
+        // written, so this response fits its budget alone, as do the trailers (the next session has them too), but not
+        // both.
+        [Fact]
+        public void ResponseTrailers_SpendTheResponseWorkBudget()
+        {
+            var budget = (long)typeof(SazSanitizer)
+                .GetField("MaximumInspectionWork", BindingFlags.NonPublic | BindingFlags.Static).GetRawConstantValue();
+            var field = "Trailer: " + new string('a', 32 * 1024 - 11) + "\r\n";
+            var trailers = string.Concat(Enumerable.Repeat("x-padding:\r\n", 3 * 1024 * 1024 / 12));
+            var first = PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}",
+                extraResponseHeaders: string.Concat(
+                    Enumerable.Repeat(field, (int)((budget / 2 - 1024 * 1024) / field.Length))));
+            first.SetResponseCaptureDetails(trailers, 0);
+            var next = PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}");
+            next.SetResponseCaptureDetails(trailers, 0);
+
+            var evidence = ExportRecords(first, next);
+
+            Assert.Equal(1, evidence.Summary.WorkBudgetOmissions);
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // A trailer line that is not a header field could hide a secret that cannot be learned, so it leaves the whole
+        // pair out, even beside valid fields; a line of other whitespace, such as a vertical tab, is not a field either.
+        // Empty lines only separate the fields.
+        [Theory]
+        [InlineData("x-session-token TRAILER-LINE-CANARY\r\n", true)]
+        [InlineData("x-checksum: abc123\r\nx-session-token TRAILER-LINE-CANARY\r\n", true)]
+        [InlineData("x-checksum: abc123\r\n x-session-token: TRAILER-LINE-CANARY\r\n", true)]
+        [InlineData("x session token: TRAILER-LINE-CANARY\r\n", true)]
+        [InlineData("x-session-token: TRAILER-LINE-CANARY\r\n\v\r\n", true)]
+        [InlineData("\r\nx-session-token: TRAILER-LINE-CANARY\r\n\r\n", false)]
+        public void TrailerLinesThatAreNotFields_MakeThePairOpaque(string trailers, bool opaque)
+        {
+            const string canary = "TRAILER-LINE-CANARY";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}");
+            record.SetResponseCaptureDetails(trailers, 0);
+
+            var evidence = ExportRecords(record);
+
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            if (opaque)
+            {
+                Assert.Equal(2, evidence.Summary.OmittedBodies);
+                Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+                Assert.Empty(Body(evidence, true));
+                Assert.Empty(Body(evidence));
+            }
+            else
+            {
+                using var request = JsonDocument.Parse(Body(evidence, true));
+                Assert.Equal(0, evidence.Summary.OmittedBodies);
+                Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("echo").GetString());
+                Assert.Equal("public-marker", request.RootElement.GetProperty("keep").GetString());
+            }
+        }
+
+        // A captured or imported trailer value with a control character, or with a character above U+00FF that no field
+        // byte decodes to, can't be learned as a receiver would read it: learned whole, it would miss an echo of the value
+        // before that character, and trimmed, it would be a value no receiver reads. So the whole pair is left out.
+        [Theory]
+        [InlineData("del", false)]
+        [InlineData("control", false)]
+        [InlineData("beyond-latin1", false)]
+        [InlineData("leading-vt", false)]
+        [InlineData("trailing-vt", false)]
+        [InlineData("leading-ff", false)]
+        [InlineData("trailing-ideographic-space", false)]
+        [InlineData("del", true)]
+        [InlineData("beyond-latin1", true)]
+        public void TrailerValuesWithControlOrNonLatin1Characters_MakeThePairOpaque(string kind, bool imported)
+        {
+            const string canary = "q7Opaque";
+            var trailers = "x-session-token: " + UnusualValue(canary, kind) + "\r\n";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}");
+            record.SetResponseCaptureDetails(trailers, 0);
+            if (imported)
+            {
+                var original = Path.Join(_directory, "unusual-trailers.saz");
+                SazArchive.Write(original, new[] { record });
+                record = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
+                Assert.Equal(trailers, record.ResponseTrailers);
+            }
+
+            var evidence = ExportRecords(record);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // Stored header values follow the same field-value rule: a sensitive request or response header whose value has a
+        // control character or a character above U+00FF leaves the whole pair out instead of being learned whole or
+        // trimmed.
+        [Theory]
+        [InlineData(true, "del")]
+        [InlineData(false, "del")]
+        [InlineData(true, "trailing-vt")]
+        [InlineData(false, "leading-vt")]
+        [InlineData(true, "trailing-ff")]
+        [InlineData(false, "beyond-latin1")]
+        [InlineData(true, "unpaired-surrogate")]
+        public void HeaderValuesWithControlOrNonLatin1Characters_MakeThePairOpaque(bool inRequest, string kind)
+        {
+            const string canary = "q7Opaque";
+            var header = "x-session-token: " + UnusualValue(canary, kind) + "\r\n";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var evidence = ExportRecords(PairRecord(1, inRequest ? "{\"keep\":\"public-marker\"}" : echo,
+                inRequest ? echo : "{\"keep\":\"public-marker\"}",
+                extraRequestHeaders: inRequest ? header : "", extraResponseHeaders: inRequest ? "" : header));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // Tabs and obs-text (U+0080-U+00FF) are field-value characters, so such a value isn't opaque: it is learned as
+        // stored apart from surrounding spaces and tabs, and its echo is redacted whole. A trailing NEL or no-break space
+        // is part of the value, not whitespace to trim, though the value is also learned without it (see below).
+        [Theory]
+        [InlineData("trailer", "inner-tab")]
+        [InlineData("trailer", "edge-tabs")]
+        [InlineData("trailer", "obs-text")]
+        [InlineData("trailer", "trailing-nel")]
+        [InlineData("trailer", "trailing-nbsp")]
+        [InlineData("header", "edge-tabs")]
+        [InlineData("header", "obs-text")]
+        [InlineData("header", "trailing-nel")]
+        public void FieldValuesWithTabsAndObsText_AreLearnedAsStoredAndRedacted(string source, string kind)
+        {
+            var (stored, learned) = kind switch
+            {
+                "inner-tab" => ("q7Op\taque", "q7Op\taque"),
+                "edge-tabs" => ("\tq7Opaque\t", "q7Opaque"),
+                "obs-text" => ("q7Opaqu\u00E9", "q7Opaqu\u00E9"),
+                "trailing-nel" => ("q7Opaque\u0085", "q7Opaque\u0085"),
+                _ => ("q7Opaque\u00A0", "q7Opaque\u00A0"),
+            };
+            var field = "x-session-token: " + stored + "\r\n";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { echo = learned, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}", extraResponseHeaders: source == "header" ? field : "");
+            if (source == "trailer")
+            {
+                record.SetResponseCaptureDetails(field, 0);
+            }
+
+            var evidence = ExportRecords(record);
+            using var request = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", request.RootElement.GetProperty("keep").GetString());
+        }
+
+        // A learned secret that starts or ends with a NEL or a no-break space is also learned as String.Trim() leaves it,
+        // since a receiver that trims it uses that form: an echo of either form is redacted.
+        [Theory]
+        [InlineData("trailer", "trailing-nel")]
+        [InlineData("trailer", "leading-nbsp")]
+        [InlineData("header", "trailing-nbsp")]
+        [InlineData("header", "leading-nel")]
+        public void EdgeNelAndNbspSecrets_AreRedactedWithAndWithoutTheEdgeCharacter(string source, string kind)
+        {
+            const string canary = "q7Opaque";
+            var exact = kind switch
+            {
+                "trailing-nel" => canary + "\u0085",
+                "leading-nbsp" => "\u00A0" + canary,
+                "trailing-nbsp" => canary + "\u00A0",
+                _ => "\u0085" + canary,
+            };
+            var field = "x-session-token: " + exact + "\r\n";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { exact, trimmed = canary, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}", extraResponseHeaders: source == "header" ? field : "");
+            if (source == "trailer")
+            {
+                record.SetResponseCaptureDetails(field, 0);
+            }
+
+            var evidence = ExportRecords(record);
+            using var request = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("exact").GetString());
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("trimmed").GetString());
+            Assert.Equal("public-marker", request.RootElement.GetProperty("keep").GetString());
+        }
+
+        // The trimmed forms count toward the pair's capacity like any learned value: forty secrets with a no-break space
+        // fit, but not with their trimmed forms, so the pair is left out. The next session is unaffected.
+        [Theory]
+        [InlineData("header")]
+        [InlineData("trailer")]
+        public void TrimmedSecretForms_CountTowardThePairCapacity(string source)
+        {
+            var fields = string.Concat(Enumerable.Range(0, 40)
+                .Select(index => $"x-api-token-{index:D2}: ALIAS-{index:D2}\u00A0\r\n"));
+            var first = PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}",
+                extraRequestHeaders: source == "header" ? fields : "");
+            if (source == "trailer")
+            {
+                first.SetResponseCaptureDetails(fields, 0);
+            }
+
+            var evidence = ExportRecords(first,
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Equal(0, evidence.Summary.WorkBudgetOmissions);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain("ALIAS-", evidence.DecodedContent);
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // Trimming never rescues a value: a secret too long to learn stays too long even when its trimmed form would fit,
+        // and an invalid character still leaves the pair out beside edge whitespace.
+        [Theory]
+        [InlineData("oversized")]
+        [InlineData("invalid")]
+        public void TrimmedSecretForms_NeverRescueAnOversizedOrInvalidValue(string kind)
+        {
+            var value = kind == "oversized"
+                ? new string('S', 4090) + new string('\u00A0', 10)
+                : "q7Opaque\u000B\u00A0";
+            var evidence = ExportRecords(PairRecord(1,
+                JsonSerializer.Serialize(new { echo = "q7Opaque", keep = "public-marker" }), "{\"keep\":\"public-marker\"}",
+                extraResponseHeaders: "x-session-token: " + value + "\r\n"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+        }
+
+        // A stored header line that is not a field, with a name that is not a token or no colon, could hide a secret that
+        // is never learned, so it leaves the whole pair out in either direction instead of being dropped unread.
+        [Theory]
+        [InlineData("x session-token: HEADER-LINE-CANARY", true)]
+        [InlineData("x session-token: HEADER-LINE-CANARY", false)]
+        [InlineData("x-session-token HEADER-LINE-CANARY", true)]
+        [InlineData("x-session-token HEADER-LINE-CANARY", false)]
+        public void MalformedStoredHeaderLines_MakeThePairOpaque(string line, bool inRequest)
+        {
+            const string canary = "HEADER-LINE-CANARY";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var evidence = ExportRecords(PairRecord(1, inRequest ? "{\"keep\":\"public-marker\"}" : echo,
+                inRequest ? echo : "{\"keep\":\"public-marker\"}",
+                extraRequestHeaders: inRequest ? line + "\r\n" : "", extraResponseHeaders: inRequest ? "" : line + "\r\n"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // A trailer field inside a captured chunked body is learned before the framing is removed, so its secret is
+        // redacted where the other message echoes it.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ChunkedBodyTrailers_AreLearnedBeforeTheFramingIsRemoved(bool requestChunked)
+        {
+            const string canary = "RAW-TRAILER-CANARY";
+            var chunked = Chunk("{\"keep\":\"public-marker\"}")
+                .Replace("0\r\n\r\n", "0\r\nx-session-token: " + canary + "\r\n\r\n", StringComparison.Ordinal);
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var evidence = ExportRecords(PairRecord(1, requestChunked ? chunked : echo, requestChunked ? echo : chunked,
+                extraRequestHeaders: requestChunked ? "Transfer-Encoding: chunked\r\n" : "",
+                extraResponseHeaders: requestChunked ? "" : "Transfer-Encoding: chunked\r\n"));
+            using var echoed = JsonDocument.Parse(Body(evidence, !requestChunked));
+            using var dechunked = JsonDocument.Parse(Body(evidence, requestChunked));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, echoed.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", echoed.RootElement.GetProperty("keep").GetString());
+            Assert.Equal("public-marker", dechunked.RootElement.GetProperty("keep").GetString());
+        }
+
+        [Fact]
+        public void MalformedChunkedJsonWithTrailer_MakesThePairOpaque()
+        {
+            const string canary = "MALFORMED-JSON-TRAILER-CANARY";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var malformed = "Z\r\n0\r\nx-session-token: " + canary + "\r\n\r\n";
+            var evidence = ExportRecords(PairRecord(1, echo, malformed,
+                extraResponseHeaders: "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // A chunked body's trailer section that can't be read to its end could hide a field that is never learned: a line
+        // too long to read, data after the section's final CRLF, or a section without its terminator leaves the whole
+        // pair out, not only that body. The next session is unaffected.
+        [Theory]
+        [InlineData("long-line")]
+        [InlineData("trailing-data")]
+        [InlineData("no-final-crlf")]
+        [InlineData("unterminated-line")]
+        public void UnreadableChunkedTrailerSections_MakeThePairOpaque(string kind)
+        {
+            const string canary = "HIDDEN-CANARY";
+            var section = kind switch
+            {
+                "long-line" => "0\r\nx-padding: " + new string('a', 9000) + "\r\nx-session-token: " + canary + "\r\n\r\n",
+                "trailing-data" => "0\r\n\r\nx-session-token: " + canary + "\r\n",
+                "no-final-crlf" => "0\r\nx-session-token: " + canary + "\r\n",
+                _ => "0\r\nx-session-token: " + canary,
+            };
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var evidence = ExportRecords(
+                PairRecord(1, echo,
+                    Chunk("{\"keep\":\"public-marker\"}").Replace("0\r\n\r\n", section, StringComparison.Ordinal),
+                    extraResponseHeaders: "Transfer-Encoding: chunked\r\n"),
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // A chunked body over the inspection limit can't be read through to its trailer section, so the whole pair is left
+        // out rather than letting a trailer secret reach the archive through the other message's echo, in either
+        // direction. The next session is unaffected.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ChunkedBodyOverTheInspectionLimit_DoesNotLeakItsTrailersThroughAnEcho(bool requestChunked)
+        {
+            const string canary = "LARGE-CANARY";
+            var chunked = SazSanitizer.MaximumBodyBytes.ToString("X", CultureInfo.InvariantCulture) + "\r\n\"" +
+                new string('a', SazSanitizer.MaximumBodyBytes - 2) + "\"\r\n0\r\nx-session-token: " + canary + "\r\n\r\n";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var evidence = ExportRecords(
+                PairRecord(1, requestChunked ? chunked : echo, requestChunked ? echo : chunked,
+                    extraRequestHeaders: requestChunked ? "Transfer-Encoding: chunked\r\n" : "",
+                    extraResponseHeaders: requestChunked ? "" : "Transfer-Encoding: chunked\r\n"),
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // A decoded body over the inspection limit, as XMAT stores responses, is only omitted itself: the response's
+        // separately stored trailers are still inspected, so the paired echo is redacted and the rest of the request kept.
+        [Fact]
+        public void DecodedBodyOverTheInspectionLimit_IsOmittedAloneWhileItsStoredTrailersAreLearned()
+        {
+            const string canary = "DECODED-CANARY";
+            var record = PairRecord(1, JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                "\"" + new string('a', SazSanitizer.MaximumBodyBytes) + "\"");
+            record.SetResponseCaptureDetails("x-session-token: " + canary + "\r\n", 0);
+
+            var evidence = ExportRecords(record);
+            using var request = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(1, evidence.Summary.OmittedBodies);
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", request.RootElement.GetProperty("keep").GetString());
+        }
+
+        // An archive's trailer flag that is not valid header lines is imported as it is, so sanitizing the import still
+        // sees that it may hold a secret and leaves the whole pair out instead of never reading it.
+        [Fact]
+        public void ImportedMalformedTrailers_AreKeptSoSanitizingFailsClosed()
+        {
+            const string canary = "MALFORMED-IMPORT-CANARY";
+            const string trailers = "x-checksum: abc123\r\nx-session-token " + canary + "\r\n";
+            var original = Path.Join(_directory, "malformed-trailers.saz");
+            var source = PairRecord(1, JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                "{\"keep\":\"public-marker\"}");
+            source.SetResponseCaptureDetails(trailers, 0);
+            SazArchive.Write(original, new[] { source });
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
+            Assert.Equal(trailers, imported.ResponseTrailers);
+
+            var evidence = ExportRecords(imported);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // A malformed header line in a plain Fiddler archive could hold a secret that the other message echoes. The import
+        // leaves the line out of the message's text, which keeps only valid fields, and makes the session's header history
+        // uninspectable instead, so a sanitized export leaves the whole pair out. That history survives an ordinary SAZ
+        // copy (its x-xmat-headers-uninspectable flag) and a saved and reloaded capture (its HeadersUninspectable column).
+        [Theory]
+        [InlineData(true, "import")]
+        [InlineData(false, "import")]
+        [InlineData(true, "saz")]
+        [InlineData(false, "saz")]
+        [InlineData(true, "saved")]
+        [InlineData(false, "saved")]
+        public void ImportedMalformedHeaderLines_KeepTheirSessionOpaqueThroughSazAndSavedCopies(bool inRequest, string route)
+        {
+            const string canary = "IMPORTED-LINE-CANARY";
+            const string requestHead = "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n";
+            const string responseHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n";
+            var line = "x session-token: " + canary + "\r\n";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var original = Path.Join(_directory, "malformed-headers.saz");
+            SazArchive.WriteRaw(original,
+                Encoding.ASCII.GetBytes(requestHead + (inRequest ? line : "") + "\r\n" +
+                    (inRequest ? "{\"keep\":\"public-marker\"}" : echo)),
+                Encoding.ASCII.GetBytes(responseHead + (inRequest ? "" : line) + "\r\n" +
+                    (inRequest ? echo : "{\"keep\":\"public-marker\"}")));
+            var record = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
+            if (route == "saz")
+            {
+                var copy = Path.Join(_directory, "malformed-headers-copy.saz");
+                SazArchive.Write(copy, new[] { record });
+                Assert.Contains(new KeyValuePair<string, string>("x-xmat-headers-uninspectable", "1"),
+                    ProcessCaptures.SessionFlags(ProcessCaptures.Entries(copy)["raw/1_m.xml"]));
+                record = Assert.Single(FiddlerSazHandler.ImportSazFile(copy, CancellationToken.None));
+            }
+            else if (route == "saved")
+            {
+                var (saved, mark) = LoadCapture(SaveCapture(record, WebProxyCaptureSchema.CreateFields()));
+                Assert.Equal(1L, mark);
+                record = saved;
+            }
+            Assert.Equal((requestHead + "\r\n", responseHead + "\r\n"),
+                (record.RequestLineAndHeaders, record.ResponseLineAndHeaders));
+
+            var evidence = ExportRecords(record);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // The import reads a session's header history from what it left out and from XMAT's x-xmat-headers-uninspectable
+        // flag in any case: an archive without the flag, as from Fiddler, has an unknown history; "-1", "0" and "1" are
+        // unknown, no known loss and uninspectable; any other value, or values that differ, are uninspectable; and header
+        // lines that the import left out make the session uninspectable whatever the flag says. A sanitized export leaves
+        // an uninspectable pair out, sanitizes the others as stored, counts the unknown ones and carries each history.
+        [Theory]
+        [InlineData(null, false, "unknown")]
+        [InlineData("-1", false, "unknown")]
+        [InlineData("0", false, "none")]
+        [InlineData("1", false, "uninspectable")]
+        [InlineData("X-XMAT-HEADERS-UNINSPECTABLE=-1", false, "unknown")]
+        [InlineData("X-XMAT-HEADERS-UNINSPECTABLE=0", false, "none")]
+        [InlineData("0|0", false, "none")]
+        [InlineData("yes", false, "uninspectable")]
+        [InlineData("", false, "uninspectable")]
+        [InlineData("2", false, "uninspectable")]
+        [InlineData(" 0", false, "uninspectable")]
+        [InlineData("0|1", false, "uninspectable")]
+        [InlineData("-1|0", false, "uninspectable")]
+        [InlineData(null, true, "uninspectable")]
+        [InlineData("-1", true, "uninspectable")]
+        [InlineData("0", true, "uninspectable")]
+        public void Import_ReadsTheHeaderHistoryFromWhatItLeftOutAndItsFlag(string flags, bool malformedLine, string history)
+        {
+            const string canary = "FLAGGED-LINE-CANARY";
+            var metadata = flags == null
+                ? Array.Empty<KeyValuePair<string, string>>()
+                : flags.Split('|').Select(flag => flag.Split('=', 2) is [var name, var value]
+                    ? new KeyValuePair<string, string>(name, value)
+                    : new KeyValuePair<string, string>("x-xmat-headers-uninspectable", flag)).ToArray();
+            var path = Path.Join(_directory, "flagged.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.ASCII.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                    (malformedLine ? "x session-token: " + canary + "\r\n" : "") + "\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" +
+                    JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" })),
+                metadata);
+
+            var evidence = ExportRecords(Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None)));
+
+            AssertHeaderHistory(evidence, history);
+            Assert.Equal(history == "unknown" ? 1 : 0, SazArchive.UnknownHeaderProvenanceSessions(evidence.Summary));
+            if (malformedLine)
+            {
+                Assert.DoesNotContain(canary, evidence.DecodedContent);
+            }
+        }
+
+        // A capture saved before the HeadersUninspectable column existed has an unknown history, and so has -1; 0 is no
+        // known loss; NULL and any other stored value are uninspectable. A sanitized export of the reloaded session
+        // follows the state and carries it on.
+        [Theory]
+        [InlineData(null, "unknown")]
+        [InlineData("-1", "unknown")]
+        [InlineData("0", "none")]
+        [InlineData("1", "uninspectable")]
+        [InlineData("2", "uninspectable")]
+        [InlineData("-2", "uninspectable")]
+        [InlineData("NULL", "uninspectable")]
+        [InlineData("'yes'", "uninspectable")]
+        [InlineData("0.5", "uninspectable")]
+        public void StoredHeaderHistory_IsUnknownWithoutTheColumnAndUninspectableUnlessValid(string stored, string history)
+        {
+            var fields = WebProxyCaptureSchema.Fields.Where(field => field.Name != "HeadersUninspectable").ToList();
+            if (stored != null)
+            {
+                fields.Add(new Field<long>("HeadersUninspectable"));
+            }
+            var path = SaveCapture(PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"),
+                fields.ToArray());
+            if (stored != null)
+            {
+                using var connection = new SqliteConnection(
+                    new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE WebProxyConnections SET HeadersUninspectable = " + stored;
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            var evidence = ExportRecords(LoadCapture(path).Record);
+
+            AssertHeaderHistory(evidence, history);
+            Assert.Equal(history == "unknown" ? 1 : 0, SazArchive.UnknownHeaderProvenanceSessions(evidence.Summary));
+        }
+
+        // A session whose header history is unknown is sanitized as stored: a secret that its stored headers or bodies
+        // identify is redacted wherever it is echoed, and benign data is kept. The export counts it. An uninspectable
+        // session in the same archive is left out and isn't counted.
+        [Theory]
+        [InlineData("legacy-capture")]
+        [InlineData("fiddler-archive")]
+        public void UnknownHeaderHistory_IsSanitizedAsStoredWhileAnUninspectablePairIsLeftOut(string source)
+        {
+            const string token = "q7KnownBearerToken";
+            const string password = "q7KnownPassword";
+            const string authorization = "Authorization: Bearer " + token + "\r\n";
+            var request = JsonSerializer.Serialize(new { password, keep = "public-marker" });
+            var response = JsonSerializer.Serialize(
+                new { echo = token, again = password, note = "benign-note", keep = "public-marker" });
+            ProxyConnectionModel unknown;
+            if (source == "legacy-capture")
+            {
+                unknown = LoadCapture(SaveCapture(
+                    PairRecord(1, request, response, extraRequestHeaders: authorization),
+                    WebProxyCaptureSchema.Fields.Where(field => field.Name != "HeadersUninspectable").ToArray())).Record;
+            }
+            else
+            {
+                var archive = Path.Join(_directory, "fiddler.saz");
+                SazArchive.WriteRaw(archive,
+                    Encoding.ASCII.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                        authorization + "\r\n" + request),
+                    Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + response));
+                unknown = Assert.Single(FiddlerSazHandler.ImportSazFile(archive, CancellationToken.None));
+            }
+            var path = Path.Join(_directory, "uninspectable.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.ASCII.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                    "\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"keep\":\"public-marker\"}"),
+                new KeyValuePair<string, string>("x-xmat-request-number", "2"),
+                new KeyValuePair<string, string>("x-xmat-headers-uninspectable", "1"));
+            var uninspectable = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+
+            var evidence = ExportRecords(unknown, uninspectable);
+            using var echoed = JsonDocument.Parse(Body(evidence));
+
+            Assert.DoesNotContain(token, evidence.DecodedContent);
+            Assert.DoesNotContain(password, evidence.DecodedContent);
+            Assert.Equal("benign-note", echoed.RootElement.GetProperty("note").GetString());
+            AssertHeaderHistory(evidence, "unknown");
+            AssertHeaderHistory(evidence, "uninspectable", 2);
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Equal(1, SazArchive.UnknownHeaderProvenanceSessions(evidence.Summary));
+        }
+
+        // A sanitized archive carries each session's header history, so a sanitized export of its import keeps it: an
+        // unknown history is counted again, and an uninspectable pair is still left out.
+        [Fact]
+        public void SanitizedReexport_KeepsEachHeaderHistory()
+        {
+            var records = new[] { "-1", "0", "1" }.Select((flag, index) =>
+            {
+                var path = Path.Join(_directory, $"history-{index + 1}.saz");
+                SazArchive.WriteRaw(path,
+                    Encoding.ASCII.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                        "\r\n{\"keep\":\"public-marker\"}"),
+                    Encoding.ASCII.GetBytes(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"keep\":\"public-marker\"}"),
+                    new KeyValuePair<string, string>(
+                        "x-xmat-request-number", (index + 1).ToString(CultureInfo.InvariantCulture)),
+                    new KeyValuePair<string, string>("x-xmat-headers-uninspectable", flag));
+                return Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            }).ToArray();
+            var sanitized = Path.Join(_directory, "sanitized-once.saz");
+            SazArchive.Write(sanitized, records, sanitized: true);
+
+            var evidence = ExportRecords(FiddlerSazHandler.ImportSazFile(sanitized, CancellationToken.None).ToArray());
+
+            AssertHeaderHistory(evidence, "unknown", 1);
+            AssertHeaderHistory(evidence, "none", 2);
+            AssertHeaderHistory(evidence, "uninspectable", 3);
+            Assert.Equal(1, SazArchive.UnknownHeaderProvenanceSessions(evidence.Summary));
+        }
+
+        // A SAZ header value with a byte above 0x7F, such as a no-break space (0xA0) or a NEL (0x85), is imported as that
+        // character rather than '?', so the secret is learned as stored and, like any edge NEL or no-break space, without
+        // it: an echo of either form in the other message is redacted.
+        [Theory]
+        [InlineData(0xA0, true, false)]
+        [InlineData(0x85, false, false)]
+        [InlineData(0x85, true, true)]
+        [InlineData(0xA0, false, true)]
+        public void ImportedHeaderBytesAboveAscii_AreLearnedSoEitherEchoIsRedacted(int edge, bool inRequest, bool leading)
+        {
+            const string canary = "q7Opaque";
+            var exact = leading ? (char)edge + canary : canary + (char)edge;
+            var field = "x-session-token: " + exact + "\r\n";
+            var echo = JsonSerializer.Serialize(new { exact, trimmed = canary, keep = "public-marker" });
+            var requestHead = "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                (inRequest ? field : "") + "\r\n";
+            var responseHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + (inRequest ? "" : field) + "\r\n";
+            var path = Path.Join(_directory, "latin1-headers.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.Latin1.GetBytes(requestHead + (inRequest ? "{\"keep\":\"public-marker\"}" : echo)),
+                Encoding.Latin1.GetBytes(responseHead + (inRequest ? echo : "{\"keep\":\"public-marker\"}")));
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            Assert.Equal((requestHead, responseHead), (imported.RequestLineAndHeaders, imported.ResponseLineAndHeaders));
+
+            var evidence = ExportRecords(imported);
+            using var echoed = JsonDocument.Parse(Body(evidence, !inRequest));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, echoed.RootElement.GetProperty("exact").GetString());
+            Assert.Equal(SazSanitizer.Redacted, echoed.RootElement.GetProperty("trimmed").GetString());
+            Assert.Equal("public-marker", echoed.RootElement.GetProperty("keep").GetString());
+        }
+
+        // Read as one character per byte, a header line of only a NEL or a no-break space is header data that isn't a
+        // field, not the empty line that ends the headers: the fields after it stay headers, and the import marks the
+        // session for the line it leaves out.
+        [Theory]
+        [InlineData(0xA0)]
+        [InlineData(0x85)]
+        public void ImportedHeaderLinesOfANelOrNoBreakSpace_DoNotEndTheHeaders(int edge)
+        {
+            const string canary = "AFTER-EDGE-CANARY";
+            var path = Path.Join(_directory, "edge-line.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.Latin1.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\n" + (char)edge + "\r\n" +
+                    "x-session-token: " + canary + "\r\nContent-Type: application/json\r\n\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" +
+                    JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" })));
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            Assert.Equal(
+                "POST / HTTP/1.1\r\nHost: example.test\r\nx-session-token: " + canary +
+                "\r\nContent-Type: application/json\r\n\r\n",
+                imported.RequestLineAndHeaders);
+            Assert.Equal("{\"keep\":\"public-marker\"}", Encoding.ASCII.GetString(imported.RequestBody));
+
+            var evidence = ExportRecords(imported);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // XMAT's header encoding flags are trusted only as XMAT writes them. A value other than utf-8, flags that disagree,
+        // or bytes that aren't UTF-8 under the utf-8 flag leave that message's text as Latin-1, which keeps every byte
+        // rather than replacing any, and mark the session, so a sanitized export leaves the pair out instead of learning a
+        // value it can't be sure of.
+        [Theory]
+        [InlineData("utf-16", false, true)]
+        [InlineData("utf-8|iso-8859-1", false, true)]
+        [InlineData("utf-8", true, true)]
+        [InlineData("x-unknown", false, false)]
+        [InlineData("utf-8", true, false)]
+        public void UnusableHeaderEncodingFlags_KeepTheBytesAndLeaveThePairOut(string hints, bool invalidUtf8, bool inRequest)
+        {
+            const string canary = "q7Opaque";
+            // An e-acute after the canary as its two UTF-8 bytes, or as one Latin-1 byte that isn't UTF-8.
+            var field = "x-session-token: " + canary + (invalidUtf8 ? "\u00E9" : "\u00C3\u00A9") + "\r\n";
+            var echo = JsonSerializer.Serialize(new { exact = canary + "\u00E9", trimmed = canary, keep = "public-marker" });
+            var requestHead = "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                (inRequest ? field : "") + "\r\n";
+            var responseHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + (inRequest ? "" : field) + "\r\n";
+            var flag = inRequest ? "x-xmat-request-header-encoding" : "x-xmat-response-header-encoding";
+            var path = Path.Join(_directory, "unusable-encoding.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.Latin1.GetBytes(requestHead + (inRequest ? "{\"keep\":\"public-marker\"}" : echo)),
+                Encoding.Latin1.GetBytes(responseHead + (inRequest ? echo : "{\"keep\":\"public-marker\"}")),
+                hints.Split('|').Select(hint => new KeyValuePair<string, string>(flag, hint)).ToArray());
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            Assert.Equal((requestHead, responseHead), (imported.RequestLineAndHeaders, imported.ResponseLineAndHeaders));
+
+            var evidence = ExportRecords(imported);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // Under XMAT's utf-8 flag an import keeps a header value above U+00FF, one outside the Basic Multilingual Plane
+        // included, as it was written. A sanitized export still leaves the pair out, as for any such value (see
+        // HeaderValuesWithControlOrNonLatin1Characters_MakeThePairOpaque), whether or not the field is sensitive.
+        [Theory]
+        [InlineData("x-session-token", true)]
+        [InlineData("x-display-name", false)]
+        public void Utf8HeaderValues_AreKeptOnImportButLeaveASanitizedPairOut(string name, bool inRequest)
+        {
+            const string canary = "q7Opaque";
+            var field = name + ": " + canary + "\u20AC\U0001F600\r\n";
+            var echo = JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" });
+            var requestHead = "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                (inRequest ? field : "") + "\r\n";
+            var responseHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + (inRequest ? "" : field) + "\r\n";
+            var path = Path.Join(_directory, "utf8-headers.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.UTF8.GetBytes(requestHead + (inRequest ? "{\"keep\":\"public-marker\"}" : echo)),
+                Encoding.UTF8.GetBytes(responseHead + (inRequest ? echo : "{\"keep\":\"public-marker\"}")),
+                new KeyValuePair<string, string>(
+                    inRequest ? "x-xmat-request-header-encoding" : "x-xmat-response-header-encoding", "utf-8"));
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            Assert.Equal((requestHead, responseHead), (imported.RequestLineAndHeaders, imported.ResponseLineAndHeaders));
+
+            var evidence = ExportRecords(imported);
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+        }
+
+        // A header's bytes can't be proved to be Latin-1 or UTF-8: without a flag, "q7caf" and the UTF-8 bytes of an e-acute
+        // import as the Latin-1 text "q7caf" + U+00C3 U+00A9 while an echo has "q7caf" + U+00E9, and a utf-8 flag on the
+        // same bytes, declared or forged, gives the reverse. Either reading of an identified secret is learned, so an echo
+        // of each is redacted, while a benign value with the same ambiguity is kept.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void EncodingReadingsOfASecret_AreRedactedWhereverEitherIsEchoed(bool utf8Flag)
+        {
+            const string latin1 = "q7caf\u00C3\u00A9";
+            const string utf8 = "q7caf\u00E9";
+            var echo = JsonSerializer.Serialize(new { latin1, utf8, note = "caf\u00E9", keep = "public-marker" });
+            var path = Path.Join(_directory, "ambiguous-encoding.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.Latin1.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                    "x-session-token: " + latin1 + "\r\nx-note: caf\u00C3\u00A9\r\n\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + echo),
+                utf8Flag
+                    ? new[] { new KeyValuePair<string, string>("x-xmat-request-header-encoding", "utf-8") }
+                    : Array.Empty<KeyValuePair<string, string>>());
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            Assert.Contains("x-session-token: " + (utf8Flag ? utf8 : latin1) + "\r\n", imported.RequestLineAndHeaders);
+
+            var evidence = ExportRecords(imported);
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("q7caf", evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("latin1").GetString());
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("utf8").GetString());
+            Assert.Equal("caf\u00E9", response.RootElement.GetProperty("note").GetString());
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        // The other reading of a secret is learned trimmed as well as whole. The bytes of "q7caf" and of an e-acute and a
+        // no-break space or NEL in UTF-8 import without a flag as Latin-1 text whose UTF-8 reading is "q7caf" + U+00E9 + the
+        // edge character, and under a utf-8 flag as that text, whose Latin-1 reading is the bytes again. Every form of the
+        // other reading, trimmed before or after it is taken, is redacted where it is echoed.
+        [Theory]
+        [InlineData(false, 0xA0)]
+        [InlineData(false, 0x85)]
+        [InlineData(true, 0xA0)]
+        [InlineData(true, 0x85)]
+        public void TrimmedEncodingReadingsOfASecret_AreRedacted(bool utf8Flag, int edge)
+        {
+            var bytes = "q7caf\u00C3\u00A9\u00C2" + (char)edge;
+            var echoes = utf8Flag
+                ? new[] { bytes, "q7caf\u00C3\u00A9\u00C2", "q7caf\u00C3\u00A9" }
+                : new[] { "q7caf\u00E9" + (char)edge, "q7caf\u00E9" };
+            var echo = JsonSerializer.Serialize(new { echoes, keep = "public-marker" });
+            var path = Path.Join(_directory, "ambiguous-edge.saz");
+            SazArchive.WriteRaw(path,
+                Encoding.Latin1.GetBytes("POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                    "x-session-token: " + bytes + "\r\n\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + echo),
+                utf8Flag
+                    ? new[] { new KeyValuePair<string, string>("x-xmat-request-header-encoding", "utf-8") }
+                    : Array.Empty<KeyValuePair<string, string>>());
+
+            var evidence = ExportRecords(Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None)));
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("q7caf", evidence.DecodedContent);
+            Assert.Equal(echoes.Length, response.RootElement.GetProperty("echoes").GetArrayLength());
+            Assert.All(response.RootElement.GetProperty("echoes").EnumerateArray(),
+                element => Assert.Equal(SazSanitizer.Redacted, element.GetString()));
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        // A secret's other readings count toward the pair's capacity like any learned form: twenty values that fit with
+        // their trimmed forms don't fit with their readings, so the pair is left out. The next session is unaffected.
+        [Fact]
+        public void EncodingReadingsOfSecrets_CountTowardThePairCapacity()
+        {
+            var fields = string.Concat(Enumerable.Range(0, 20)
+                .Select(index => $"x-api-token-{index:D2}: ALIAS-{index:D2}\u00C3\u00A9\u00C2\u00A0\r\n"));
+
+            var evidence = ExportRecords(
+                PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}", extraRequestHeaders: fields),
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Equal(0, evidence.Summary.WorkBudgetOmissions);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.DoesNotContain("ALIAS-", evidence.DecodedContent);
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        // As for a header value, a character above U+00FF in a start line leaves the pair out of a sanitized export; the
+        // next session is unaffected.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void StartLinesWithCharactersAboveLatin1_LeaveThePairOut(bool inRequest)
+        {
+            var target = inRequest ? "/menu/\u20AC" : "/";
+            var first = new ProxyConnectionModel(1, "200", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                TimeSpan.FromMilliseconds(20), "https", "example.test:443", "POST", target,
+                "POST " + target + " HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n\r\n",
+                Encoding.UTF8.GetBytes("{\"keep\":\"public-marker\"}"),
+                "HTTP/1.1 200 " + (inRequest ? "OK" : "\u00C9t\u00E9 \u20AC") + "\r\nContent-Type: application/json\r\n\r\n",
+                Encoding.UTF8.GetBytes("{\"keep\":\"public-marker\"}"), "192.0.2.27")
+            { RecordRowId = 101 };
+
+            var evidence = ExportRecords(first,
+                PairRecord(2, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -1334,10 +2270,11 @@ namespace XMAT.Tests
                 "Cookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n",
                 "Set-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY" +
                 (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
-            FiddlerSazHandler.CreateSazFile(original, new[] { source });
+            SazArchive.Write(original, new[] { source });
             var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
-            Assert.Contains("a=1,sid=", imported.RequestLineAndHeaders);
-            Assert.Contains("Path=/,sid=", imported.ResponseLineAndHeaders);
+            Assert.Contains("\r\nCookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n", imported.RequestLineAndHeaders);
+            Assert.Contains(
+                "\r\nSet-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY", imported.ResponseLineAndHeaders);
             var evidence = ExportRecords(imported);
             using var response = JsonDocument.Parse(Body(evidence));
 
@@ -1476,7 +2413,7 @@ namespace XMAT.Tests
             var originals = records.Select(record => (
                 Request: record.RequestBody.ToArray(), Response: record.ResponseBody.ToArray(),
                 RequestHeaders: record.RequestLineAndHeaders, ResponseHeaders: record.ResponseLineAndHeaders)).ToArray();
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            var summary = SazArchive.Write(path, records, sanitized: true);
             for (var index = 0; index < records.Length; index++)
             {
                 Assert.Equal(originals[index].Request, records[index].RequestBody);
@@ -1526,7 +2463,9 @@ namespace XMAT.Tests
                 omissions += flags.Keys.Count(key => key.EndsWith("-body-omitted", StringComparison.Ordinal));
                 Assert.All(flags.Keys, key => Assert.Contains(key, new[]
                 {
-                    "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted"
+                    "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted", "x-xmat-request-number",
+                    "x-xmat-connection-id", "x-xmat-request-timestamp", "x-xmat-response-timestamp", "x-xmat-scheme",
+                    "x-xmat-headers-uninspectable",
                 }));
                 if (flags.ContainsKey("x-xmat-request-body-omitted"))
                 {
@@ -1616,6 +2555,26 @@ namespace XMAT.Tests
             return message.AsSpan(message.AsSpan().IndexOf("\r\n\r\n"u8) + 4).ToArray();
         }
 
+        // A sanitized session as its header history leaves it: an uninspectable pair is left out, and any other is
+        // sanitized as stored, keeping its benign marker. The archive carries the history either way.
+        private static void AssertHeaderHistory(Evidence evidence, string history, long number = 1)
+        {
+            var flags = ProcessCaptures.SessionFlags(evidence.Entries[$"raw/{number}_m.xml"])
+                .Where(flag => flag.Key == "x-xmat-headers-uninspectable")
+                .Select(flag => flag.Value);
+            Assert.Equal(new[] { history switch { "unknown" => "-1", "none" => "0", _ => "1" } }, flags);
+            if (history == "uninspectable")
+            {
+                Assert.Empty(Body(evidence, true, number));
+                Assert.Empty(Body(evidence, false, number));
+            }
+            else
+            {
+                Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, true, number)));
+                Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, number)));
+            }
+        }
+
         private static ProxyConnectionModel PairRecord(long number, string request, string response,
             string requestType = "application/json", string target = "/", string extraRequestHeaders = "",
             string extraResponseHeaders = "") =>
@@ -1627,6 +2586,30 @@ namespace XMAT.Tests
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + extraResponseHeaders + "\r\n",
                 Encoding.UTF8.GetBytes(response), "192.0.2.27")
             { RecordRowId = number + 100 };
+
+        // Saves the record as Save Captures does, in a capture file whose web proxy table has the given columns.
+        private string SaveCapture(ProxyConnectionModel record, IField[] fields)
+        {
+            var path = Path.Join(_directory, Guid.NewGuid().ToString("N") + ".xmatcap");
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            database.CreateTable("CaptureDevices", new Field<long>("DeviceType"), new Field<string>("DeviceName"),
+                new Field<long>("CaptureType")).AddRow((long)DeviceType.LocalPC, "Saved PC", (long)CaptureType.WebProxy);
+            var table = database.CreateTable(WebServiceCaptureMethod.TableName, fields);
+            table.AddRow(record.ToDataTableValues("Saved PC", table));
+            database.SaveToFile(path);
+            return path;
+        }
+
+        // Loads a saved capture's only session as Load Captures does, with the HeadersUninspectable value it stores (null
+        // without the column).
+        private static (ProxyConnectionModel Record, object Mark) LoadCapture(string path)
+        {
+            using var database = new SqLtReadonlyDatabase(path);
+            var record = Assert.Single(database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+            return (new ProxyConnectionModel(record),
+                ((IRawDataRecord)record).TryReadRaw("HeadersUninspectable", out var mark) ? mark : null);
+        }
 
         private static string Jwt()
         {
@@ -1652,6 +2635,21 @@ namespace XMAT.Tests
             return body.Append("0\r\n\r\n").ToString();
         }
 
-        public void Dispose() => Directory.Delete(_directory, true);
+        // A field value with a character outside HTTP's field-value grammar; String.Trim() would remove the VT, the FF and
+        // the ideographic space, and no encoding can hold an unpaired surrogate.
+        private static string UnusualValue(string value, string kind) => kind switch
+        {
+            "del" => value + "\u007F",
+            "control" => value + "\u0001",
+            "beyond-latin1" => value + "\u0100",
+            "leading-vt" => "\u000B" + value,
+            "trailing-vt" => value + "\u000B",
+            "leading-ff" => "\u000C" + value,
+            "trailing-ff" => value + "\u000C",
+            "unpaired-surrogate" => value + "\uD800",
+            _ => value + "\u3000",
+        };
+
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
     }
 }

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Security;
 using Microsoft.Win32;
@@ -14,7 +15,9 @@ namespace XMAT.Telemetry
     {
         internal static IReadOnlyList<KeyValuePair<string, object>> Read(TelemetryBuildChannel channel, Action<string> diagnose)
         {
-            var version = typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            var version = typeof(App).Assembly.GetCustomAttributesData()
+                .FirstOrDefault(attribute => attribute.AttributeType == typeof(AssemblyInformationalVersionAttribute))?
+                .ConstructorArguments[0].Value as string;
             List<KeyValuePair<string, object>> fields =
             [
                 new("ext.app.id", "XboxMultiplayerAnalysisTool"),

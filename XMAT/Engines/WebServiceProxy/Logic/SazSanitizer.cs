@@ -13,9 +13,12 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Text.Unicode;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
+using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Privacy;
 
 namespace XMAT.WebServiceCapture
 {
@@ -26,6 +29,10 @@ namespace XMAT.WebServiceCapture
         internal int OmittedBodies { get; set; }
         internal int OmittedHeaders { get; set; }
         internal int WorkBudgetOmissions { get; set; }
+
+        // Written sessions whose header history is unknown (HeaderProvenance.Unknown): sanitized as stored, but earlier
+        // processing may have dropped what would have identified a secret.
+        internal int UnknownHeaderProvenanceSessions { get; set; }
     }
 
     internal readonly record struct SanitizedHttpMessage(string Headers, byte[] Body, bool BodyOmitted);
@@ -33,6 +40,8 @@ namespace XMAT.WebServiceCapture
     internal sealed class SazSanitizer
     {
         internal const string Redacted = "[REDACTED]";
+        // Fixed English, so the headless export never needs the GUI's strings; the export codes this failure.
+        private const string InvalidStartLine = "A captured HTTP start line is malformed.";
         internal const int MaximumBodyBytes = 4 * 1024 * 1024;
         internal const int MaximumStructuredDepth = 64;
         private const long MaximumInspectionWork = 64L * 1024 * 1024;
@@ -74,18 +83,6 @@ namespace XMAT.WebServiceCapture
             @"(?<prefix>/(?:token|secret|password|api[-_]?key|session[-_]?id)/)[^/?#]+",
             PatternOptions | RegexOptions.IgnoreCase, PatternTimeout);
         private static readonly Regex ParameterSeparator = new(@"([&;])", PatternOptions, PatternTimeout);
-        private static readonly string[] SensitiveNames =
-        {
-            "authorization", "authenticate", "authentication", "cookie", "password", "passwd", "passphrase", "secret", "token",
-            "credential", "apikey", "subscriptionkey", "accountkey", "accesskey", "privatekey",
-            "sharedkey", "functionkey", "functionskey", "encryptionkey", "connectionstring", "signature", "sessionid", "userid", "username",
-            "email", "xuid", "gamertag", "deviceid", "codeverifier", "codechallenge", "authcode",
-            "passcode", "securitycode", "verificationcode", "ticket", "devicecode", "usercode", "gamedisplayname", "appdisplayname"
-        };
-        private static readonly HashSet<string> SensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "Forwarded", "X-Forwarded-For", "X-Real-IP", "X-Client-IP", "X-MS-Client-Principal"
-        };
         private static readonly HashSet<string> PrivateJwkMembers = new(StringComparer.OrdinalIgnoreCase)
         {
             "d", "p", "q", "dp", "dq", "qi", "oth", "k"
@@ -126,13 +123,26 @@ namespace XMAT.WebServiceCapture
         }
 
         internal (SanitizedHttpMessage Request, SanitizedHttpMessage? Response) SanitizeSession(
-            string requestHeaders, byte[] requestBody, string responseHeaders, byte[] responseBody, string method)
+            string requestHeaders, byte[] requestBody, string responseHeaders, byte[] responseBody, string method,
+            string responseTrailers = null, HeaderProvenance headerProvenance = HeaderProvenance.NoKnownLoss)
         {
             ResetSession();
+            // An import couldn't read every header line (HeaderProvenance.Uninspectable); one it couldn't read could hold
+            // a secret the other message echoes, so nothing here can be learned completely. A history that is unknown is
+            // inspected as stored, which is all there is; the export reports it.
+            _unsafeInspection = headerProvenance == HeaderProvenance.Uninspectable;
             var request = InspectMessage(requestHeaders, requestBody, true, method);
             MessageInspection? response = string.IsNullOrEmpty(responseHeaders)
                 ? null : InspectMessage(responseHeaders, responseBody, false, method);
+            var trailers = InspectTrailers(responseTrailers, response?.RemainingWork ?? MaximumInspectionWork);
+            if (response.HasValue)
+            {
+                // The response is rendered with what its inspection and its trailers left of its budget.
+                response = response.Value with { RemainingWork = trailers.RemainingWork };
+            }
             PrepareKnownSecrets();
+            // Trailers are never written; each line left out counts as an omitted header.
+            Summary.OmittedHeaders += trailers.OmittedLines;
             var before = (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions);
             var renderedRequest = OpaqueSession ? default : RenderMessage(requestHeaders, requestBody, true, method, request);
             SanitizedHttpMessage? renderedResponse = !OpaqueSession && response is { } inspected
@@ -191,6 +201,93 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Trailers are never written, but a value that is secret only because of its trailer's name can be echoed in
+        // either body, so each field is inspected as a header of that name would be before either message is rendered.
+        // They spend the response's remaining work and the pair's capacity, and never change how a body is read. Lines
+        // of nothing but spaces and tabs only separate fields; any other line that is not a field could hide a secret, so
+        // it makes the pair opaque. Returns the work left and the lines left out; as for an opaque message's headers, a
+        // block that could not be read through counts at least once.
+        private (long RemainingWork, int OmittedLines) InspectTrailers(string trailers, long remainingWork)
+        {
+            if (string.IsNullOrEmpty(trailers))
+            {
+                return (remainingWork, 0);
+            }
+            _remainingWork = remainingWork;
+            if (OpaqueSession)
+            {
+                return (_remainingWork, 1);
+            }
+            var lines = 0;
+            var before = (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions);
+            _discovering = true;
+            try
+            {
+                SpendWork(trailers.Length);
+                using var reader = new StringReader(trailers);
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    if (line.AsSpan().IndexOfAnyExcept(' ', '\t') < 0)
+                    {
+                        continue;
+                    }
+                    lines++;
+                    InspectTrailerField(line);
+                }
+                return (_remainingWork, lines);
+            }
+            catch (InvalidDataException) when (OpaqueSession)
+            {
+                return (_remainingWork, Math.Max(lines, 1));
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                _unsafeInspection = true;
+                return (_remainingWork, Math.Max(lines, 1));
+            }
+            finally
+            {
+                _discovering = false;
+                (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions) = before;
+            }
+        }
+
+        // One trailer field, checked like a header field and, while discovering, inspected as a header of that name; the
+        // caller has already charged for the line.
+        private void InspectTrailerField(string line)
+        {
+            var colon = line.IndexOf(':');
+            var name = colon > 0 ? line.Substring(0, colon) : string.Empty;
+            if (name.Length == 0 || !name.All(IsHeaderNameCharacter))
+            {
+                _unsafeInspection = true;
+                throw new InvalidDataException();
+            }
+            var value = FieldValue(line.Substring(colon + 1));
+            if (_discovering)
+            {
+                _ = SanitizeHeaderValue(name, value);
+            }
+        }
+
+        // A stored field value without the spaces and tabs around it. Any other character outside the field-value grammar
+        // makes the pair opaque: learning the value with it would miss an echo of the rest, and dropping it would learn a
+        // value that no receiver reads.
+        private string FieldValue(string value)
+        {
+            foreach (var character in value)
+            {
+                if (!IsFieldValueCharacter(character))
+                {
+                    _unsafeInspection = true;
+                    throw new InvalidDataException();
+                }
+            }
+            return value.Trim(' ', '\t');
+        }
+
         private SanitizedHttpMessage RenderMessage(
             string rawHeaders, byte[] body, bool request, string method, MessageInspection inspection)
         {
@@ -247,35 +344,39 @@ namespace XMAT.WebServiceCapture
             using var reader = new StringReader(rawHeaders ?? string.Empty);
             var firstLine = reader.ReadLine() ?? string.Empty;
             var headers = new List<KeyValuePair<string, string>>();
-            var canContinue = false;
             string line;
             while (!string.IsNullOrEmpty(line = reader.ReadLine()))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 if (line[0] == ' ' || line[0] == '\t')
                 {
-                    if (canContinue && headers.Count > 0)
+                    // A continuation of the field before it; with no field before it, it can't be read.
+                    if (headers.Count == 0)
                     {
-                        var previous = headers[^1];
-                        SpendWork(previous.Value.Length + line.Length);
-                        headers[^1] = new(previous.Key, previous.Value + " " + line.Trim());
+                        _unsafeInspection = true;
+                        throw new InvalidDataException();
                     }
-                    else
-                    {
-                        Summary.OmittedHeaders++;
-                    }
+                    var previous = headers[^1];
+                    SpendWork(previous.Value.Length + line.Length);
+                    headers[^1] = new(previous.Key, previous.Value + " " + FieldValue(line));
                     continue;
                 }
                 _messageHeaderCount++;
                 var colon = line.IndexOf(':');
                 if (colon <= 0 || !line.Substring(0, colon).All(IsHeaderNameCharacter))
                 {
-                    Summary.OmittedHeaders++;
-                    canContinue = false;
-                    continue;
+                    // A line that isn't a field could hide a secret that would go unlearned if it were only dropped.
+                    _unsafeInspection = true;
+                    throw new InvalidDataException();
                 }
-                headers.Add(new(line.Substring(0, colon), line.Substring(colon + 1).Trim()));
-                canContinue = true;
+                headers.Add(new(line.Substring(0, colon), FieldValue(line.Substring(colon + 1))));
+            }
+            if (firstLine.AsSpan().ContainsAnyExceptInRange('\u0000', '\u00FF'))
+            {
+                // As for a header value (see FieldValue), a character above U+00FF in the start line, which no single byte
+                // decodes to, leaves the pair out.
+                _unsafeInspection = true;
+                throw new InvalidDataException();
             }
 
             var status = request ? 0 : ParseStatusCode(firstLine);
@@ -334,20 +435,7 @@ namespace XMAT.WebServiceCapture
                 }
                 var rawValue = header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) && contentType != null
                     ? contentType : header.Value;
-                var sensitive = IsSensitiveName(header.Key) || SensitiveHeaders.Contains(header.Key);
-                if (_discovering && sensitive)
-                {
-                    RememberHeaderValue(header.Key, rawValue);
-                }
-                var value = sensitive
-                    ? Redact(rawValue, false)
-                    : header.Key.Equals("Location", StringComparison.OrdinalIgnoreCase) ||
-                      header.Key.Equals("Content-Location", StringComparison.OrdinalIgnoreCase) ||
-                      header.Key.Equals("Referer", StringComparison.OrdinalIgnoreCase)
-                        ? SanitizeUri(rawValue, 0)
-                        : SanitizeText(rawValue, 0,
-                            !header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
-                            !header.Key.Equals("Host", StringComparison.OrdinalIgnoreCase));
+                var value = SanitizeHeaderValue(header.Key, rawValue);
                 if (header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
                     !MediaTypeHeaderValue.TryParse(value, out _))
                 {
@@ -379,6 +467,31 @@ namespace XMAT.WebServiceCapture
             return new(output.ToString(), outputBody, Summary.OmittedBodies != omissionsBefore);
         }
 
+        // A header or trailer field's value as it can be written; while discovering, learns what the value holds.
+        private string SanitizeHeaderValue(string name, string value)
+        {
+            var sensitive = SecretNames.IsSensitiveHeaderName(name);
+            if (_discovering && sensitive)
+            {
+                RememberHeaderValue(name, value);
+                var trimmed = value.Trim();
+                if (trimmed.Length != 0 && trimmed.Length != value.Length)
+                {
+                    // Also as a receiver that trims a NEL or no-break space would parse it, such as a credential's scheme.
+                    RememberHeaderValue(name, trimmed);
+                }
+            }
+            return sensitive
+                ? Redact(value, false)
+                : name.Equals("Location", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("Content-Location", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("Referer", StringComparison.OrdinalIgnoreCase)
+                    ? SanitizeUri(value, 0)
+                    : SanitizeText(value, 0,
+                        !name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
+                        !name.Equals("Host", StringComparison.OrdinalIgnoreCase));
+        }
+
         private byte[] SanitizeBody(
             byte[] body, List<KeyValuePair<string, string>> headers, out string contentType)
         {
@@ -389,13 +502,19 @@ namespace XMAT.WebServiceCapture
             }
             var redactionsBefore = Summary.RedactedValues;
             var workBefore = _remainingWork;
+            var usedJsonChunkFallback = false;
             try
             {
                 if (body.Length > MaximumBodyBytes || _secretCapacityExceeded)
                 {
+                    if (body.Length > MaximumBodyBytes && DeclaresChunked(headers))
+                    {
+                        // Its trailer section can't be reached within the limit, and its fields can hold secrets.
+                        _unsafeInspection = true;
+                    }
                     throw new InvalidDataException();
                 }
-                var decoded = NormalizeTransferBody(body, headers);
+                var decoded = NormalizeTransferBody(body, headers, out usedJsonChunkFallback);
                 var encodings = headers.Where(header => header.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase))
                     .SelectMany(header => header.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                     .ToArray();
@@ -532,6 +651,10 @@ namespace XMAT.WebServiceCapture
                 XmlException or RegexMatchTimeoutException)
             {
                 Summary.RedactedValues = redactionsBefore;
+                if (usedJsonChunkFallback)
+                {
+                    _unsafeInspection = true;
+                }
                 if (exception is RegexMatchTimeoutException)
                 {
                     _unsafeInspection = true;
@@ -546,8 +669,15 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private byte[] NormalizeTransferBody(byte[] body, List<KeyValuePair<string, string>> headers)
+        private static bool DeclaresChunked(List<KeyValuePair<string, string>> headers) =>
+            headers.Any(header => header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) &&
+                header.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Any(coding => coding.Equals("chunked", StringComparison.OrdinalIgnoreCase)));
+
+        private byte[] NormalizeTransferBody(
+            byte[] body, List<KeyValuePair<string, string>> headers, out bool usedJsonFallback)
         {
+            usedJsonFallback = false;
             var codings = headers.Where(header => header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
                 .SelectMany(header => header.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 .ToArray();
@@ -579,7 +709,8 @@ namespace XMAT.WebServiceCapture
                     (type.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
                      type.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
                 {
-                    // JSON parsing rejects malformed framing and preserves already-dechunked structured captures.
+                    // Preserve already-dechunked JSON, but fail closed if it cannot be parsed.
+                    usedJsonFallback = true;
                     return body;
                 }
                 if (HasChunkFraming(body))
@@ -589,60 +720,8 @@ namespace XMAT.WebServiceCapture
                 return body;
             }
 
-            using var output = new MemoryStream();
-            var position = 0;
-            while (true)
-            {
-                SpendWork(1);
-                var lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                if (lineEnd < 0 || lineEnd > 8192)
-                {
-                    throw new InvalidDataException();
-                }
-                var line = Encoding.ASCII.GetString(body, position, lineEnd);
-                position += lineEnd + 2;
-                extension = line.IndexOf(';');
-                sizeText = extension < 0 ? line : line.Substring(0, extension);
-                if (!int.TryParse(sizeText, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var size) ||
-                    size < 0 || size > body.Length - position)
-                {
-                    throw new InvalidDataException();
-                }
-                if (size == 0)
-                {
-                    while (true)
-                    {
-                        SpendWork(1);
-                        lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                        if (lineEnd < 0 || lineEnd > 8192)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        if (lineEnd == 0)
-                        {
-                            if (position + 2 != body.Length)
-                            {
-                                throw new InvalidDataException();
-                            }
-                            return output.ToArray();
-                        }
-                        var trailer = body.AsSpan(position, lineEnd);
-                        if (trailer.IndexOf((byte)':') <= 0)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        position += lineEnd + 2;
-                    }
-                }
-                if (output.Length + size > MaximumBodyBytes || position + size + 2 > body.Length ||
-                    body[position + size] != 13 || body[position + size + 1] != 10)
-                {
-                    throw new InvalidDataException();
-                }
-                SpendWork(size);
-                output.Write(body, position, size);
-                position += size + 2;
-            }
+            return ChunkedBodyDecoder.Decode(
+                body, MaximumBodyBytes, SpendWork, InspectTrailerField, () => _unsafeInspection = true);
         }
 
         private bool HasChunkFraming(ReadOnlySpan<byte> body)
@@ -804,7 +883,9 @@ namespace XMAT.WebServiceCapture
                         var latin = Encoding.Latin1.GetString(bytes, 0, length);
                         if (latin != decoded)
                         {
-                            RememberUserInfo(latin);
+                            // The Latin-1 reading of bytes that are UTF-8 is the other reading of the UTF-8 text, so like
+                            // any reading it is learned trimmed but not read again.
+                            RememberUserInfo(latin, readings: false);
                         }
                     }
                 }
@@ -819,14 +900,14 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void RememberUserInfo(string value)
+        private void RememberUserInfo(string value, bool readings = true)
         {
-            RememberSecret(value);
+            RememberSecret(value, readings);
             var colon = value.IndexOf(':');
             if (colon >= 0)
             {
-                RememberSecret(value.Substring(0, colon));
-                RememberSecret(value.Substring(colon + 1));
+                RememberSecret(value.Substring(0, colon), readings);
+                RememberSecret(value.Substring(colon + 1), readings);
             }
         }
 
@@ -915,9 +996,64 @@ namespace XMAT.WebServiceCapture
             return start > name && start < value.Length && value[start] == '=';
         }
 
-        private void RememberSecret(string value)
+        // A secret is learned as found and in a fixed set of forms a receiver could hold it in instead, all held to the same
+        // work, length and capacity limits, the value itself first so that no form rescues it: the value trimmed
+        // (String.Trim, which also drops a NEL or a no-break space that HTTP keeps), and the other readings of the value's
+        // bytes and of the trimmed form's (see LearnEncodingReadings), each also trimmed. No reading is read again.
+        private void RememberSecret(string value, bool readings = true)
         {
             if (string.IsNullOrEmpty(value) || value == Redacted)
+            {
+                return;
+            }
+            var trimmed = LearnSecretAndTrimmed(value);
+            if (readings)
+            {
+                LearnEncodingReadings(value);
+                if (trimmed != null)
+                {
+                    LearnEncodingReadings(trimmed);
+                }
+            }
+        }
+
+        // Stored text can't show whether its bytes were meant as Latin-1 or UTF-8 (an import's encoding flag can be absent
+        // or forged), so a secret whose characters are all Latin-1 but not all ASCII is also learned as the other readings
+        // of its bytes, by strict conversions that never substitute a character: its Latin-1 bytes decoded as UTF-8, when
+        // they are valid UTF-8, and its UTF-8 bytes read as Latin-1. The conversions are charged before they run, at most
+        // two UTF-8 bytes per character, and each reading as it is learned.
+        private void LearnEncodingReadings(string value)
+        {
+            if (!value.AsSpan().ContainsAnyInRange('\u0080', '\u00FF') ||
+                value.AsSpan().ContainsAnyExceptInRange('\u0000', '\u00FF'))
+            {
+                return;
+            }
+            SpendWork(value.Length * 4);
+            var latin1 = Encoding.Latin1.GetBytes(value);
+            if (Utf8.IsValid(latin1))
+            {
+                LearnSecretAndTrimmed(Encoding.UTF8.GetString(latin1));
+            }
+            LearnSecretAndTrimmed(Encoding.Latin1.GetString(Encoding.UTF8.GetBytes(value)));
+        }
+
+        // Learns the value and, when String.Trim shortens it without emptying it, the trimmed form, which it returns.
+        private string LearnSecretAndTrimmed(string value)
+        {
+            LearnSecret(value);
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0 || trimmed.Length == value.Length)
+            {
+                return null;
+            }
+            LearnSecret(trimmed);
+            return trimmed;
+        }
+
+        private void LearnSecret(string value)
+        {
+            if (value == Redacted)
             {
                 return;
             }
@@ -1143,7 +1279,7 @@ namespace XMAT.WebServiceCapture
         private static bool IsSchemaName(string name)
         {
             var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-            return SchemaNames.Contains(normalized) || SensitiveNames.Contains(normalized, StringComparer.Ordinal) ||
+            return SchemaNames.Contains(normalized) || SecretNames.SensitiveNames.Contains(normalized, StringComparer.Ordinal) ||
                 normalized is "id" or "data" or "members" or "value" or "values" or "type" or "name" or "key" or "keys" or
                     "auth" or "sig" or "sas" or "pwd" or "user" or "otp" or "pin" or "nonce";
         }
@@ -1209,7 +1345,7 @@ namespace XMAT.WebServiceCapture
             var space = line.IndexOf(' ');
             if (space <= 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             var method = line.Substring(0, space);
             return method + " " +
@@ -1226,7 +1362,7 @@ namespace XMAT.WebServiceCapture
                 if (firstSpace <= 0 || lastSpace <= firstSpace ||
                     !line.Substring(lastSpace + 1).StartsWith("HTTP/", StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                    throw new InvalidDataException(InvalidStartLine);
                 }
                 var target = line.Substring(firstSpace + 1, lastSpace - firstSpace - 1);
                 var portSeparator = target.LastIndexOf(':');
@@ -1243,7 +1379,7 @@ namespace XMAT.WebServiceCapture
             }
             if (!line.StartsWith("HTTP/", StringComparison.Ordinal) || firstSpace < 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             var statusStart = firstSpace + 1;
             while (statusStart < line.Length && line[statusStart] == ' ')
@@ -1262,7 +1398,7 @@ namespace XMAT.WebServiceCapture
                 !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var status) ||
                 status is < 100 or > 999)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             return status;
         }
@@ -1933,16 +2069,14 @@ namespace XMAT.WebServiceCapture
                 attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase) &&
                 attribute.Value.Trim().Equals("password", StringComparison.OrdinalIgnoreCase));
 
-        private static bool IsSensitiveName(string name)
-        {
-            var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-            return normalized is "key" or "keys" or "auth" or "sig" or "sas" or "pwd" or "user" or
-                "otp" or "pin" or "nonce" or "assertion" or "samlresponse" or "samlrequest" or "gtg" or "xid" ||
-                normalized.EndsWith("auth", StringComparison.Ordinal) ||
-                SensitiveNames.Any(normalized.Contains);
-        }
+        private static bool IsSensitiveName(string name) => SecretNames.IsSensitiveName(name);
 
         private static bool IsHeaderNameCharacter(char character) =>
             char.IsAsciiLetterOrDigit(character) || "!#$%&'*+-.^_`|~".Contains(character);
+
+        // HTTP's field-value characters, one per received byte (Latin-1): HTAB, space and visible ASCII, and obs-text
+        // (U+0080-U+00FF, C1 controls included).
+        private static bool IsFieldValueCharacter(char character) =>
+            character is '\t' or (>= ' ' and <= '~') or (>= '\u0080' and <= '\u00FF');
     }
 }

@@ -7,21 +7,31 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataTable : IDataTable, IImportedCaptureTable
+    internal class SqLtDataTable :
+        IDataTable,
+        IImportedCaptureTable,
+        IVersionedCaptureTable,
+        IExactCaptureRowDelete,
+        ICaptureTextSourceProvider
     {
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
         public event Action<IDataTable, Int64> RowsRemoved;
-        private readonly object _lockObj = new object();
+        private readonly object _lockObj;
 
         public string Name { get { return _name; } }
 
         public IDataset Dataset { get { return GetDataset(); } }
+
+        public CaptureTextSource CaptureTextSource { get; }
 
         public IDataset Subset(params string[] fieldNames)
         {
@@ -44,23 +54,32 @@ namespace XMAT.DataAbstractionLayer
                 _commandBuilder.Append(_name);
                 _commandBuilder.Append("(");
 
-                string fieldNames = String.Join(",", _fieldDefinitions.Values.Select(x => x.Name));
+                FieldDefinition[] fields =
+                    _fieldDefinitions.Values
+                        .Cast<FieldDefinition>()
+                        .ToArray();
+                string fieldNames = String.Join(
+                    ",",
+                    fields.Select(x => x.Name));
                 _commandBuilder.Append(fieldNames);
 
                 _commandBuilder.Append(") VALUES(");
-
-                var valueEnumerator = fieldValueArgs.GetEnumerator();
-                string fieldValues = String.Join(",", _fieldDefinitions.Values.Select(
-                    (x) =>
-                    {
-                        valueEnumerator.MoveNext();
-                        return (x as FieldDefinition).FieldValueAsString(valueEnumerator.Current);
-                    }));
-                _commandBuilder.Append(fieldValues);
+                string[] parameters = fields.Select(
+                    (_, index) => $"$value{index}").ToArray();
+                _commandBuilder.Append(
+                    string.Join(",", parameters));
 
                 _commandBuilder.Append(")");
 
+                _command.Parameters.Clear();
                 _command.CommandText = _commandBuilder.ToString();
+                for (int index = 0; index < fields.Length; index++)
+                {
+                    _command.Parameters.AddWithValue(
+                        parameters[index],
+                        fields[index].ValueAsParameter(
+                            fieldValueArgs[index]));
+                }
 
                 int rowsModified = 0;
 
@@ -70,8 +89,10 @@ namespace XMAT.DataAbstractionLayer
 
                     if (rowsModified > 0)
                     {
+                        _command.Parameters.Clear();
                         _command.CommandText = "SELECT last_insert_rowid()";
                         lastRowId = (Int64)_command.ExecuteScalar();
+                        _rowVersions[lastRowId] = 1;
                         RowAdded?.Invoke(this, lastRowId);
                     }
                     else
@@ -91,24 +112,42 @@ namespace XMAT.DataAbstractionLayer
 
                 _commandBuilder.Append($"UPDATE {_name} SET");
 
-                string updateValues = String.Join(",", fieldNamesAndValues.Select(
-                    (x) =>
-                    {
-                        var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
-                        var fieldName = fieldDef.Name;
-                        var fieldValue = fieldDef.FieldValueAsString(x.Value);
-                        return string.Format(" {0} = {1}", fieldName, fieldValue);
-                    }));
+                FieldDefinition[] fields = fieldNamesAndValues.Select(
+                    value =>
+                        (FieldDefinition)_fieldDefinitions[value.Name])
+                    .ToArray();
+                string[] parameters = fields.Select(
+                    (_, index) => $"$value{index}").ToArray();
+                string updateValues = String.Join(
+                    ",",
+                    fields.Select(
+                        (field, index) =>
+                            $" {field.Name} = {parameters[index]}"));
                 _commandBuilder.Append(updateValues);
 
-                _commandBuilder.Append($" WHERE id = {rowId}");
+                _commandBuilder.Append(" WHERE id = $rowId");
 
+                _command.Parameters.Clear();
                 _command.CommandText = _commandBuilder.ToString();
+                for (int index = 0; index < fields.Length; index++)
+                {
+                    _command.Parameters.AddWithValue(
+                        parameters[index],
+                        fields[index].ValueAsParameter(
+                            fieldNamesAndValues[index].Value));
+                }
+                _command.Parameters.AddWithValue(
+                    "$rowId",
+                    rowId);
 
                 var rowsModified = _command.ExecuteNonQuery();
 
                 if (rowsModified > 0)
                 {
+                    if (fieldNamesAndValues.Any(field => !IsProcessField(field.Name)))
+                    {
+                        _rowVersions[rowId] = VersionOfCore(rowId) + 1;
+                    }
                     RowUpdated?.Invoke(this, rowsModified);
                 }
             }
@@ -126,15 +165,32 @@ namespace XMAT.DataAbstractionLayer
                 {
                     _commandBuilder.Append(@" WHERE");
 
-                    string whereValues = String.Join(" AND ", fieldNamesAndValues.Select(
-                        (x) =>
-                        {
-                            var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
-                            var fieldName = fieldDef.Name;
-                            var fieldValue = fieldDef.FieldValueAsString(x.Value);
-                            return string.Format(" {0} = {1}", fieldName, fieldValue);
-                        }));
+                    FieldDefinition[] fields =
+                        fieldNamesAndValues.Select(
+                            value =>
+                                (FieldDefinition)_fieldDefinitions[value.Name])
+                            .ToArray();
+                    string[] parameters = fields.Select(
+                        (_, index) => $"$value{index}").ToArray();
+                    string whereValues = String.Join(
+                        " AND ",
+                        fields.Select(
+                            (field, index) =>
+                                $" {field.Name} = {parameters[index]}"));
                     _commandBuilder.Append(whereValues);
+
+                    _command.Parameters.Clear();
+                    for (int index = 0; index < fields.Length; index++)
+                    {
+                        _command.Parameters.AddWithValue(
+                            parameters[index],
+                            fields[index].ValueAsParameter(
+                                fieldNamesAndValues[index].Value));
+                    }
+                }
+                else
+                {
+                    _command.Parameters.Clear();
                 }
 
                 _command.CommandText = _commandBuilder.ToString();
@@ -142,15 +198,76 @@ namespace XMAT.DataAbstractionLayer
 
                 if (rowsModified > 0)
                 {
+                    _rowVersions.Clear();
                     RowsRemoved?.Invoke(this, rowsModified);
                 }
             }
         }
 
+        public IReadOnlyList<long> DeleteRows(string deviceName, IReadOnlyList<long> rowIds)
+        {
+            ArgumentNullException.ThrowIfNull(rowIds);
+            if (rowIds.Count == 0)
+            {
+                return Array.Empty<long>();
+            }
+            lock (_lockObj)
+            {
+                var deleted = new List<long>();
+                FieldDefinition device =
+                    (FieldDefinition)_fieldDefinitions[WebServiceCaptureMethod.FieldKey_DeviceName];
+                using (SqliteCommand command = _connection.CreateCommand())
+                {
+                    command.CommandText =
+                        $"DELETE FROM {_name} " +
+                        $"WHERE {device.Name} = $device " +
+                        "AND id IN (SELECT value FROM json_each($ids)) " +
+                        "RETURNING id";
+                    command.Parameters.AddWithValue("$device", device.ValueAsParameter(deviceName));
+                    command.Parameters.AddWithValue(
+                        "$ids",
+                        JsonSerializer.Serialize(rowIds));
+                    using SqliteDataReader reader = command.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        deleted.Add(reader.GetInt64(0));
+                    }
+                }
+                foreach (long rowId in deleted)
+                {
+                    _rowVersions.Remove(rowId);
+                }
+                return deleted;
+            }
+        }
+
+        public IDisposable EnterRead()
+        {
+            Monitor.Enter(_lockObj);
+            return new ReadLease(_lockObj);
+        }
+
+        public long VersionOf(long rowId)
+        {
+            lock (_lockObj)
+            {
+                return VersionOfCore(rowId);
+            }
+        }
+
         public IReadOnlyList<long> ReplaceImportedRows(
+            CaptureTextSource source,
             IFieldValue capture,
             IEnumerable<object[]> rows)
         {
+            ArgumentNullException.ThrowIfNull(source);
+            if (source.Semantics !=
+                CaptureTextSemantics.Literal)
+            {
+                throw new InvalidOperationException(
+                    "Ambiguous capture text cannot be copied into a marked capture.");
+            }
+
             lock (_lockObj)
             {
                 var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
@@ -168,7 +285,8 @@ namespace XMAT.DataAbstractionLayer
                         $"DELETE FROM {_name} WHERE {captureField.Name} = $capture";
                     deleteCommand.Parameters.AddWithValue(
                         "$capture",
-                        ImportedFieldValueAsParameter(captureField, capture.Value));
+                        captureField.ValueAsParameter(
+                            capture.Value));
                     deleteCommand.ExecuteNonQuery();
                 }
 
@@ -198,7 +316,8 @@ namespace XMAT.DataAbstractionLayer
                     for (int index = 0; index < fields.Length; index++)
                     {
                         parameters[index].Value =
-                            ImportedFieldValueAsParameter(fields[index], row[index]);
+                            fields[index].ValueAsParameter(
+                                row[index]);
                     }
 
                     insertCommand.ExecuteNonQuery();
@@ -210,30 +329,16 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
-        private static object ImportedFieldValueAsParameter(
-            FieldDefinition field,
-            object value)
-        {
-            if (value == null)
-            {
-                return string.Empty;
-            }
-
-            if (field.ValueType != FieldValueType.String)
-            {
-                return value;
-            }
-
-            // Preserve FieldValueAsString's stored text: doubled single quotes
-            // were SQL syntax, while doubled double quotes became data.
-            return value.ToString().Replace("\"", "\"\"");
-        }
-
         private IDataset GetDataset()
         {
             lock (_lockObj)
             {
-                return new SqLtDataset(_connection, Name, _fieldDefinitions);
+                return new SqLtDataset(
+                    _connection,
+                    Name,
+                    _fieldDefinitions,
+                    _columns,
+                    CaptureTextSource);
             }
         }
 
@@ -241,13 +346,15 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_lockObj)
             {
-                return new SqLtDataset(_connection, Name,
-                    _fieldDefinitions.Where(
-                        (x) =>
-                        {
-                            return fieldNames.Contains(x.Key);
-                        }
-                    ).ToDictionary(dict => dict.Key, dict => dict.Value));
+                Dictionary<string, IFieldDefinition> fields = _fieldDefinitions
+                    .Where(item => fieldNames.Contains(item.Key))
+                    .ToDictionary(item => item.Key, item => item.Value);
+                return new SqLtDataset(
+                    _connection,
+                    Name,
+                    fields,
+                    _columns.Where(column => fields.ContainsKey(column.Name)).ToList(),
+                    CaptureTextSource);
             }
         }
 
@@ -255,12 +362,34 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string name,
             IEnumerable<IField> fields)
+            : this(
+                connection,
+                new object(),
+                name,
+                fields,
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal)
         {
+        }
+
+        internal SqLtDataTable(
+            SqliteConnection connection,
+            object connectionGate,
+            string name,
+            IEnumerable<IField> fields,
+            CaptureTextSource captureTextSource)
+        {
+            ArgumentNullException.ThrowIfNull(connectionGate);
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             _name = name;
+            _lockObj = connectionGate;
+            CaptureTextSource = captureTextSource;
 
             var columnIndex = 1;
             foreach (var field in fields)
             {
+                _columns.Add(new SqLtSchemaColumn(
+                    field.Name,
+                    field.ValueType == typeof(long) ? SqLtDeclaredType.Integer : SqLtDeclaredType.Text));
                 _fieldDefinitions.Add(
                     field.Name,
                     FieldDefinition.CreateFromSchema(field.Name, field.ValueType, columnIndex));
@@ -291,9 +420,39 @@ namespace XMAT.DataAbstractionLayer
             _command.ExecuteNonQuery();
         }
 
+        private long VersionOfCore(long rowId) =>
+            _rowVersions.TryGetValue(rowId, out long version) ? version : 0;
+
+        private static bool IsProcessField(string name) =>
+            name == WebProxyCaptureSchema.ClientProcessName ||
+            name == WebProxyCaptureSchema.ClientProcessId ||
+            name == WebProxyCaptureSchema.ClientProcessStartTime ||
+            name == WebProxyCaptureSchema.ClientProcessStatus;
+
+        private sealed class ReadLease : IDisposable
+        {
+            private object _gate;
+
+            internal ReadLease(object gate)
+            {
+                _gate = gate;
+            }
+
+            public void Dispose()
+            {
+                object gate = Interlocked.Exchange(ref _gate, null);
+                if (gate != null)
+                {
+                    Monitor.Exit(gate);
+                }
+            }
+        }
+
         private string _name;
         private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions =
             new Dictionary<string, IFieldDefinition>();
+        private readonly List<SqLtSchemaColumn> _columns = new();
+        private readonly Dictionary<long, long> _rowVersions = new();
         private SqliteConnection _connection;
         private SqliteCommand _command;
         private StringBuilder _commandBuilder;

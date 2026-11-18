@@ -8,32 +8,56 @@
              DataContext="{Binding RelativeSource={RelativeSource Self}}"
              d:DesignHeight="450" d:DesignWidth="800">
     <UserControl.Resources>
-        <local:BodyConverter x:Key="BodyConverter"/>
-        <local:JsonConverter x:Key="JsonConverter"/>
+        <!-- Hidden when there is nothing to show, such as for a complete response without trailers. -->
+        <Style x:Key="CollapsedWhenEmptyTextBlock" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CollapsedWhenEmptyTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
     <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
         <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
-        <TabControl SelectionChanged="InspectionTab_SelectionChanged" x:Name="RequestTabs">
+        <TextBlock x:Name="NoticeText" DockPanel.Dock="Top" Margin="10,0,10,4" TextWrapping="Wrap"
+                   Style="{StaticResource CollapsedWhenEmptyTextBlock}"
+                   Foreground="{DynamicResource CapturePendingForegroundBrush}"
+                   Text="{Binding Notice, Mode=OneWay, TargetNullValue=''}"/>
+        <TabControl x:Name="RequestTabs" SelectionChanged="InspectionTab_SelectionChanged">
             <TabItem x:Name="HeadersTab" Header="Headers">
                 <ScrollViewer>
-                    <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                    <DockPanel>
+                        <TextBox x:Name="TrailersText" DockPanel.Dock="Bottom" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas"
+                                 Style="{StaticResource CollapsedWhenEmptyTextBox}"
+                                 Text="{Binding Trailers, Mode=OneWay, TargetNullValue=''}"/>
+                        <TextBlock x:Name="TrailersLabel" DockPanel.Dock="Bottom" Margin="0,8,0,2" FontWeight="Bold" Text="Trailers"
+                                   Visibility="{Binding Visibility, ElementName=TrailersText}"/>
+                        <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                    </DockPanel>
                 </ScrollViewer>
             </TabItem>
+            <!-- The Body and JSON tabs show one preview of the body, made in the background (RequestResponseView.xaml.cs);
+                 what it says about the body (empty, not kept, cut, shown as bytes) is in a message bar, apart from the body. -->
             <TabItem x:Name="BodyTab" Header="Body">
-                <ScrollViewer>
-                    <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True">
-                        <TextBox.Text>
-                            <MultiBinding Converter="{StaticResource BodyConverter}">
-                                <Binding Path="HeaderDictionary"/>
-                                <Binding Path="BodyBytes"/>
-                            </MultiBinding>
-                        </TextBox.Text>
-                    </TextBox>
-                </ScrollViewer>
+                <DockPanel>
+                    <TextBlock x:Name="BodyMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                               Visibility="Collapsed"/>
+                    <TextBox x:Name="BodyTextBox" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas"
+                             HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                </DockPanel>
             </TabItem>
             <TabItem x:Name="JsonTab" Header="JSON">
-                <ScrollViewer>
-                    <TreeView Name="TestTreeView" ItemsSource="{Binding BodyText, Converter={StaticResource JsonConverter}}">
+                <DockPanel>
+                    <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                               Visibility="Collapsed"/>
+                    <TreeView x:Name="JsonTree" VirtualizingPanel.IsVirtualizing="True">
                         <TreeView.ItemTemplate>
                             <HierarchicalDataTemplate
                                 DataType="{x:Type local:JsonTreeViewItem}"
@@ -47,7 +71,7 @@
                             </Style>
                         </TreeView.ItemContainerStyle>
                     </TreeView>
-                </ScrollViewer>
+                </DockPanel>
             </TabItem>
             <!--<TabItem Header="Image">
                     <Image Source="{Binding BodyBytes, Mode=OneWay}" Stretch="Uniform"/>

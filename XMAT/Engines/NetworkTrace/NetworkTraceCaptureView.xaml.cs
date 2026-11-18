@@ -26,9 +26,17 @@ namespace NetworkTraceCaptureControls
     /// </summary>
     public partial class NetworkTraceCaptureView : UserControl
     {
+        private readonly Action<Exception> _reportError;
+
         // Potential TODO: Move this to the CaptureController to save state between tabs?
         public NetworkTraceCaptureView()
+            : this(ex => MessageBox.Show(ex.Message, XMAT.Localization.GetLocalizedString("NETCAP_ERROR")))
         {
+        }
+
+        internal NetworkTraceCaptureView(Action<Exception> reportError)
+        {
+            _reportError = reportError ?? throw new ArgumentNullException(nameof(reportError));
             InitializeComponent();
 
             AnalyzeCaptureButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_ANALYZE");
@@ -78,6 +86,11 @@ namespace NetworkTraceCaptureControls
                 return;
             }
 
+            if (ntdcc.DeviceStatus != (ntdcc.IsCapturing ? DeviceStatusEnum.Tracing : DeviceStatusEnum.Idle))
+            {
+                return;
+            }
+
             IDisposable operationLease = null;
             if (ntdcc.IsCapturing)
             {
@@ -108,7 +121,7 @@ namespace NetworkTraceCaptureControls
                         }
 
                         ntdcc.ClearAllCaptures();
-                        await ntdcc.StartCapture(captureDeviceContext);
+                        await ntdcc.StartCapture(captureDeviceContext, operationLease);
                     }
                 }
             }
@@ -125,18 +138,10 @@ namespace NetworkTraceCaptureControls
                 {
                     PublicUtilities.RestartAsAdmin();
                 }
-                else
-                {
-                    await ntdcc.DisconnectFromDevice(captureDeviceContext);
-                    ntdcc.Initialize();
-                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
-                await ntdcc.DisconnectFromDevice(captureDeviceContext);
-                ntdcc.Initialize();
-                CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
+                _reportError(ex);
             }
         }
 
@@ -184,7 +189,11 @@ namespace NetworkTraceCaptureControls
 
         private void Ntdcc_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
+            if (e.PropertyName == nameof(NetworkTraceCaptureController.DeviceStatus))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
             {
                 UpdateFilteredData();
             }

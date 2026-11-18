@@ -25,14 +25,16 @@ namespace XMAT.Telemetry
         TimelineByHost, TimelineSelection, PerEndpointReport, StatisticsReport, NetworkReport,
         ReportDrillDown, ReportRequestNavigation, ClearCaptures, DebugLogs, RootCertificate,
         GdkInfo, Preferences, LightTheme, DarkTheme, EnglishLanguage, SslScript,
-        RequestScript, ResponseScript, ScriptLoad, ScriptSave, ScriptRevert
+        RequestScript, ResponseScript, ScriptLoad, ScriptSave, ScriptRevert,
+        RequestComposer, ReplayRequests, RequestVerification, VerificationDiff, RequestFileOpen,
+        RequestFileSave, CurlCopy, CurlSave, ReplayHistory, DeleteSessions
     }
 
     internal enum TelemetryOperationKind
     {
         None, DeviceAdd, EnableProxy, DisableProxy, Capture, Analysis, LoadCaptures, SaveCaptures,
         ImportSaz, ExportSaz, CompileScript, LoadScript, SaveScript, CollectLogs,
-        ExportRootCertificate, StatisticsRender, AnalyzerInitialize
+        ExportRootCertificate, StatisticsRender, AnalyzerInitialize, Replay, ExportCaptures, ExportSanitizedSaz
     }
 
     internal enum TelemetryOutcome

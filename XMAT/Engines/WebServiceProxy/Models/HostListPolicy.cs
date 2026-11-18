@@ -2,10 +2,17 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
 {
+    internal readonly record struct HostMatchCandidates(
+        string Host,
+        string HostAndPath,
+        string AlternateHost,
+        string AlternateHostAndPath);
+
     /// <summary>
     /// The one validator and normalizer behind the Block and Bypass lists and their editors,
     /// used for adding, exact membership, removal and matching. DNS hosts keep their trimmed
@@ -20,8 +27,17 @@ namespace XMAT.WebServiceCapture.Models
 
         internal static bool TryNormalize(string text, out string entry, out string error)
         {
+            bool valid = TryNormalizeValue(text, out entry, out bool portNotAllowed);
+            error = portNotAllowed
+                ? Localization.GetLocalizedString("HOST_LIST_PORT_NOT_ALLOWED", text?.Trim())
+                : null;
+            return valid;
+        }
+
+        internal static bool TryNormalizeValue(string text, out string entry, out bool portNotAllowed)
+        {
             entry = null;
-            error = null;
+            portNotAllowed = false;
             if (string.IsNullOrWhiteSpace(text))
             {
                 return false;
@@ -41,7 +57,7 @@ namespace XMAT.WebServiceCapture.Models
             if (IsPortAttempt(value))
             {
                 // Entries apply to every port; silently dropping the port would broaden the rule.
-                error = Localization.GetLocalizedString("HOST_LIST_PORT_NOT_ALLOWED", value);
+                portNotAllowed = true;
                 return false;
             }
 
@@ -71,7 +87,7 @@ namespace XMAT.WebServiceCapture.Models
         // host of an authority as sent (trimmed, without its port), otherwise the trimmed text.
         // DNS spelling and a final dot are kept so that dotted and dotless names match different
         // patterns, and IPv6 is canonical text without brackets.
-        internal static string MatchCandidate(string host)
+        private static string MatchCandidate(string host)
         {
             if (HostAuthority.TryNormalizeHost(host, out string identity) ||
                 HostAuthority.TryParse(host, out identity, out _))
@@ -81,9 +97,122 @@ namespace XMAT.WebServiceCapture.Models
             return host?.Trim();
         }
 
+        internal static bool IsSupportedTargetScheme(string scheme) =>
+            string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, Uri.UriSchemeWs, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, Uri.UriSchemeWss, StringComparison.OrdinalIgnoreCase);
+
+        internal static string DestinationHost(Uri uri)
+        {
+            try
+            {
+                string host = uri?.HostNameType == UriHostNameType.IPv6 ? uri.Host : uri?.IdnHost;
+                return string.IsNullOrEmpty(host) ? null : MatchCandidate(host);
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
+
+        internal static HostMatchCandidates LiteralHostCandidates(string host)
+        {
+            string candidate = MatchCandidate(host) ?? string.Empty;
+            return new HostMatchCandidates(candidate, null, null, null);
+        }
+
         internal static Regex CreatePattern(string entry) =>
             new("^" + Regex.Escape(entry).Replace("\\*", ".*") + "$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+        internal static HostMatchCandidates MatchCandidates(
+            string host,
+            string path = null)
+        {
+            string candidate = MatchCandidate(host) ?? string.Empty;
+            string matchingPath = path;
+            string alternateHost = null;
+            if (!string.IsNullOrEmpty(path) && Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
+            {
+                if (IsSupportedTargetScheme(absolute.Scheme))
+                {
+                    matchingPath = absolute.PathAndQuery;
+                    alternateHost = DestinationHost(absolute);
+                }
+                else if (TryCreateCanonicalUri(candidate, null, out Uri claimed))
+                {
+                    alternateHost = DestinationHost(claimed);
+                }
+            }
+            else
+            {
+                if (TryCreateCanonicalUri(candidate, path, out Uri supplied))
+                {
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        matchingPath = supplied.PathAndQuery;
+                    }
+                    alternateHost = DestinationHost(supplied);
+                }
+                else if (!string.IsNullOrEmpty(path) &&
+                    TryCreateCanonicalUri("xmat.invalid", path, out Uri inert))
+                {
+                    matchingPath = inert.PathAndQuery;
+                }
+            }
+            if (string.Equals(candidate, alternateHost, StringComparison.OrdinalIgnoreCase))
+            {
+                alternateHost = null;
+            }
+            string normalizedPath = string.IsNullOrEmpty(matchingPath)
+                ? null
+                : matchingPath.StartsWith('/') ? matchingPath : "/" + matchingPath;
+            return new HostMatchCandidates(
+                candidate,
+                normalizedPath == null ? null : candidate + normalizedPath,
+                alternateHost,
+                alternateHost == null || normalizedPath == null ? null : alternateHost + normalizedPath);
+        }
+
+        private static bool TryCreateCanonicalUri(string host, string path, out Uri uri)
+        {
+            string localPath = path ?? string.Empty;
+            string extra = string.Empty;
+            if (localPath.Contains('?'))
+            {
+                string[] parts = localPath.Split('?', 2);
+                localPath = parts[0];
+                extra = "?" + parts[1];
+            }
+            else if (localPath.Contains('#'))
+            {
+                string[] parts = localPath.Split('#', 2);
+                localPath = parts[0];
+                extra = "#" + parts[1];
+            }
+            try
+            {
+                uri = new UriBuilder(
+                    Uri.UriSchemeHttp,
+                    host,
+                    -1,
+                    localPath,
+                    extra).Uri;
+                return true;
+            }
+            catch (UriFormatException)
+            {
+                uri = null;
+                return false;
+            }
+        }
+
+        internal static bool Matches(Regex pattern, HostMatchCandidates candidates) =>
+            pattern.IsMatch(candidates.Host) ||
+            (candidates.HostAndPath != null && pattern.IsMatch(candidates.HostAndPath)) ||
+            (candidates.AlternateHost != null && pattern.IsMatch(candidates.AlternateHost)) ||
+            (candidates.AlternateHostAndPath != null && pattern.IsMatch(candidates.AlternateHostAndPath));
     }
 
     /// <summary>

@@ -11,10 +11,13 @@ namespace XMAT.DataAbstractionLayer
     internal enum SqLtSchemaFailure
     {
         Invalid,
+        NotXmat,
         Unsupported,
         Limit,
         Sidecar,
         UnsupportedLocation,
+        WriteAheadLog,
+        UnsupportedVersion,
     }
 
     internal sealed class SqLtSchemaException : Exception
@@ -31,6 +34,12 @@ namespace XMAT.DataAbstractionLayer
                         "The capture database has SQLite journal or write-ahead log files next to it.",
                     SqLtSchemaFailure.UnsupportedLocation =>
                         "The capture database's location has no normalized path and cannot be opened safely.",
+                    SqLtSchemaFailure.WriteAheadLog =>
+                        "The capture database uses write-ahead logging.",
+                    SqLtSchemaFailure.UnsupportedVersion =>
+                        SqLtSchemaProfile.UnsupportedVersionMessage,
+                    SqLtSchemaFailure.NotXmat =>
+                        "The database is not a native XMAT capture.",
                     _ => "The capture database schema is unsupported or invalid.",
                 },
                 innerException)
@@ -67,12 +76,16 @@ namespace XMAT.DataAbstractionLayer
     internal sealed class SqLtValidatedSchema
     {
         internal SqLtValidatedSchema(
-            IReadOnlyDictionary<string, SqLtValidatedTable> tables)
+            IReadOnlyDictionary<string, SqLtValidatedTable> tables,
+            CaptureTextSemantics textSemantics)
         {
             Tables = tables;
+            TextSemantics = textSemantics;
         }
 
         internal IReadOnlyDictionary<string, SqLtValidatedTable> Tables { get; }
+
+        internal CaptureTextSemantics TextSemantics { get; }
     }
 
     internal sealed record SqLtExpectedColumn(
@@ -85,6 +98,9 @@ namespace XMAT.DataAbstractionLayer
 
     internal sealed class SqLtSchemaProfile
     {
+        internal const string UnsupportedVersionMessage =
+            "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.";
+
         internal const int MaxSchemaRecords = 16;
         internal const int MaxSchemaRecordBytes = 64 * 1024;
         internal const int MaxTotalSchemaBytes = 256 * 1024;
@@ -98,10 +114,14 @@ namespace XMAT.DataAbstractionLayer
         internal const int MaxSqlLength = 64 * 1024;
         internal const int MaxColumns = 81;
         internal const int MaxExpressionDepth = 16;
+        internal const int CliMaxDatabaseBytes = 512 * 1024 * 1024;
+        internal const int SqliteRowOverheadBytes = 1024 * 1024;
 
         private SqLtSchemaProfile(
             IReadOnlyCollection<string> requiredTables,
-            IReadOnlyCollection<string> materializedTables)
+            IReadOnlyCollection<string> materializedTables,
+            long? maxDatabaseBytes,
+            int? maxValueBytes)
         {
             RequiredTables = new HashSet<string>(
                 requiredTables,
@@ -109,11 +129,17 @@ namespace XMAT.DataAbstractionLayer
             MaterializedTables = new HashSet<string>(
                 materializedTables,
                 StringComparer.Ordinal);
+            MaxDatabaseBytes = maxDatabaseBytes;
+            MaxValueBytes = maxValueBytes;
         }
 
         internal IReadOnlySet<string> RequiredTables { get; }
 
         internal IReadOnlySet<string> MaterializedTables { get; }
+
+        internal long? MaxDatabaseBytes { get; }
+
+        internal int? MaxValueBytes { get; }
 
         internal static IReadOnlyDictionary<string, SqLtExpectedTable> KnownTables { get; } =
             new Dictionary<string, SqLtExpectedTable>(
@@ -157,11 +183,102 @@ namespace XMAT.DataAbstractionLayer
                     Text("Payload")),
             };
 
-        // The profile of a capture opened in XMAT: it needs only CaptureDevices and reads every known table.
+        private static IReadOnlyDictionary<
+            string,
+            SqLtExpectedColumn>
+            WebProxyOptionalColumns { get; } =
+                new Dictionary<
+                    string,
+                    SqLtExpectedColumn>(
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [WebProxyCaptureSchema
+                        .ClientProcessName] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessName),
+                    [WebProxyCaptureSchema
+                        .ClientProcessId] =
+                        Integer(
+                            WebProxyCaptureSchema
+                                .ClientProcessId),
+                    [WebProxyCaptureSchema
+                        .ClientProcessStartTime] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessStartTime),
+                    [WebProxyCaptureSchema
+                        .ClientProcessStatus] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessStatus),
+                    [WebProxyCaptureSchema.ResponseTrailers] = Text(WebProxyCaptureSchema.ResponseTrailers),
+                    [WebProxyCaptureSchema.ResponseBodyTruncatedAt] =
+                        Integer(WebProxyCaptureSchema.ResponseBodyTruncatedAt),
+                    [WebProxyCaptureSchema.HeadersUninspectable] =
+                        Integer(WebProxyCaptureSchema.HeadersUninspectable),
+                };
+
+        // The profile of a capture opened in XMAT: it needs only CaptureDevices, reads every known table, and has
+        // no size limit of its own.
         internal static SqLtSchemaProfile CreateGui() =>
             new(
                 new[] { "CaptureDevices" },
-                KnownTables.Keys.ToArray());
+                KnownTables.Keys.ToArray(),
+                null,
+                null);
+
+        // The CLI profile at the default database size (512 MiB).
+        internal static SqLtSchemaProfile CreateCli(long maxRecordBytes) =>
+            CreateCli(
+                CliMaxDatabaseBytes,
+                maxRecordBytes);
+
+        // The CLI profile of xmat analyze: the database may be as large as the input limit (--max-input-mib), and
+        // SQLite's value limit (SQLITE_LIMIT_LENGTH, read back after it is set) is the record limit (--max-record-mib)
+        // plus SQLite's row overhead.
+        internal static SqLtSchemaProfile CreateCli(
+            long maxDatabaseBytes,
+            long maxRecordBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxDatabaseBytes);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxRecordBytes);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(
+                maxRecordBytes,
+                (long)int.MaxValue -
+                    SqliteRowOverheadBytes);
+
+            return new SqLtSchemaProfile(
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                maxDatabaseBytes,
+                checked(
+                    (int)maxRecordBytes +
+                    SqliteRowOverheadBytes));
+        }
+
+        // The mark operation validates every known table that is present, but materializes none.
+        internal static SqLtSchemaProfile CreateRepair(
+            long maxDatabaseBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxDatabaseBytes);
+            return new SqLtSchemaProfile(
+                new[] { "CaptureDevices" },
+                Array.Empty<string>(),
+                maxDatabaseBytes,
+                null);
+        }
 
         internal static SqLtExpectedTable GetKnownTable(string name)
         {
@@ -169,6 +286,17 @@ namespace XMAT.DataAbstractionLayer
                 KnownTables.TryGetValue(name, out SqLtExpectedTable table)
                     ? table
                     : null;
+        }
+
+        internal static SqLtExpectedColumn GetKnownOptionalColumn(string tableName, string columnName)
+        {
+            if (!string.Equals(tableName, "WebProxyConnections", StringComparison.OrdinalIgnoreCase) ||
+                columnName == null)
+            {
+                return null;
+            }
+            WebProxyOptionalColumns.TryGetValue(columnName, out SqLtExpectedColumn column);
+            return column;
         }
 
         private static SqLtExpectedTable Table(

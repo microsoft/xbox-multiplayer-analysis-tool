@@ -27,6 +27,7 @@ namespace XMAT.Tests
             Assert.False(item.IsInGameEvent);
             Assert.Equal(string.Empty, item.ConsoleIP);
             Assert.NotNull(item.BreadCrumb);
+            Assert.Null(item.BodyIdentity);
         }
 
         [Fact]
@@ -55,6 +56,8 @@ namespace XMAT.Tests
                 IsShoulderTap = true,
                 IsInGameEvent = true
             };
+            original.BodyIdentity =
+                new RequestBodyIdentity(9);
 
             var copy = original.Copy();
 
@@ -69,6 +72,9 @@ namespace XMAT.Tests
             Assert.Equal(original.ConsoleIP, copy.ConsoleIP);
             Assert.Equal(original.HttpStatusCode, copy.HttpStatusCode);
             Assert.Equal(original.ReqBodyHash, copy.ReqBodyHash);
+            Assert.Same(
+                original.BodyIdentity,
+                copy.BodyIdentity);
             Assert.Equal(original.ElapsedCallTimeMs, copy.ElapsedCallTimeMs);
             Assert.Equal(original.ReqTimeUTC, copy.ReqTimeUTC);
             Assert.Equal(original.Method, copy.Method);

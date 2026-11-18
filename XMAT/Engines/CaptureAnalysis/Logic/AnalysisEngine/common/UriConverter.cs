@@ -5,12 +5,21 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace CaptureAnalysisEngine
 {
     internal class UriToMethodConverter
     {
+        private static readonly Regex OptionalSegment =
+            new(
+                "\\[.*?\\]");
+        private static readonly Regex RequiredSegment =
+            new(
+                "\\{.*?\\}");
+
         public void LoadMap(String filePath)
         {
             using (var mapFile = new StreamReader(filePath))
@@ -47,11 +56,19 @@ namespace CaptureAnalysisEngine
 
                     if (uriSplit[0] == "GET")
                     {
-                        m_getMethods.Add(ConvertUriToRegex(uriSplit[1]), methodTuple);
+                        m_getMethods.Add(
+                            new MethodPattern(
+                                ConvertUriToRegex(
+                                    uriSplit[1]),
+                                methodTuple));
                     }
                     else
                     {
-                        m_nonGetMethods.Add(ConvertUriToRegex(uriSplit[1]), methodTuple);
+                        m_nonGetMethods.Add(
+                            new MethodPattern(
+                                ConvertUriToRegex(
+                                    uriSplit[1]),
+                                methodTuple));
                     }
                 }
                 else
@@ -61,22 +78,24 @@ namespace CaptureAnalysisEngine
             }
         }
 
-        private Regex ConvertUriToRegex(String uri)
+        private InputRegex ConvertUriToRegex(String uri)
         {
-            Regex dotReplace = new Regex("\\.");
-            uri = dotReplace.Replace(uri, "\\.");
+            uri = uri.Replace(
+                ".",
+                "\\.",
+                StringComparison.Ordinal);
+            uri = uri.Replace(
+                "?",
+                "\\?",
+                StringComparison.Ordinal);
+            uri = OptionalSegment.Replace(
+                uri,
+                ".*");
+            uri = RequiredSegment.Replace(
+                uri,
+                ".+");
 
-            Regex questionReplace = new Regex("\\?");
-            uri = questionReplace.Replace(uri, "\\?");
-
-            Regex optionalReplace = new Regex("\\[.*?\\]");
-            uri = optionalReplace.Replace(uri, ".*");
-
-            Regex requiredReplace = new Regex("\\{.*?\\}");
-
-            uri = requiredReplace.Replace(uri, ".+");
-
-            return new Regex(uri);
+            return new InputRegex(uri);
         }
 
         public Tuple<String, String, String> GetService(String service)
@@ -95,23 +114,69 @@ namespace CaptureAnalysisEngine
 
         public Tuple<String, String, String> GetMethod(String uri, bool get)
         {
-            return FindMatch(get ? m_getMethods : m_nonGetMethods, uri);
+            return GetMethod(
+                uri,
+                get,
+                null,
+                CancellationToken.None);
         }
 
-        private Tuple<String, String, String> FindMatch(Dictionary<Regex, Tuple<String, String, String>> map, String match)
+        internal Tuple<String, String, String> GetMethod(
+            String uri,
+            bool get,
+            AnalysisWorkBudget budget,
+            CancellationToken cancellationToken)
+        {
+            return FindMatch(
+                get
+                    ? m_getMethods
+                    : m_nonGetMethods,
+                uri,
+                budget,
+                cancellationToken);
+        }
+
+        internal int MatcherCreationCount =>
+            m_getMethods.Count(
+                pattern =>
+                    pattern.Pattern.MatcherCreated) +
+            m_nonGetMethods.Count(
+                pattern =>
+                    pattern.Pattern.MatcherCreated);
+
+        internal int ExactEvaluationCount =>
+            m_getMethods.Sum(
+                pattern =>
+                    pattern.Pattern.ExactEvaluationCount) +
+            m_nonGetMethods.Sum(
+                pattern =>
+                    pattern.Pattern.ExactEvaluationCount);
+
+        private static Tuple<String, String, String> FindMatch(
+            IEnumerable<MethodPattern> map,
+            String match,
+            AnalysisWorkBudget budget,
+            CancellationToken cancellationToken)
         {
             foreach (var value in map)
             {
-                if (value.Key.IsMatch(match))
+                if (value.Pattern.IsMatch(
+                        match,
+                        budget,
+                        cancellationToken))
                 {
-                    return value.Value;
+                    return value.Methods;
                 }
             }
             return null;
         }
 
+        private sealed record MethodPattern(
+            InputRegex Pattern,
+            Tuple<String, String, String> Methods);
+
         private Dictionary<String, Tuple<String, String, String>> m_services = new Dictionary<String, Tuple<String, String, String>>();
-        private Dictionary<Regex, Tuple<String, String, String>> m_getMethods = new Dictionary<Regex, Tuple<String, String, String>>();
-        private Dictionary<Regex, Tuple<String, String, String>> m_nonGetMethods = new Dictionary<Regex, Tuple<String, String, String>>();
+        private List<MethodPattern> m_getMethods = new();
+        private List<MethodPattern> m_nonGetMethods = new();
     }
 }

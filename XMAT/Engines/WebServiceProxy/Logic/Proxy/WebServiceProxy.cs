@@ -47,6 +47,17 @@ namespace XMAT.WebServiceCapture.Proxy
         public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
         public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
+        // Capture-only notice for streamed responses: raised when their headers have been sent and
+        // when the captured body reaches the capture limit, before the response ends. It cannot
+        // change or block the response; WebResponsePolicyAsync still runs once the body ends.
+        internal Func<HttpResponseEventArgs, CancellationToken, Task> WebResponseProgressAsync { get; set; }
+
+        // This proxy's streaming options; null follows the preferences (ResponseStreamingOptions.Current).
+        internal ResponseStreamingOptions ResponseStreaming { get; set; }
+
+        internal ResponseStreamingOptions EffectiveResponseStreaming =>
+            ResponseStreaming ?? ResponseStreamingOptions.Current;
+
         internal ProxyState State
         {
             get { lock (_stateLock) { return _state; } }
@@ -64,11 +75,18 @@ namespace XMAT.WebServiceCapture.Proxy
         // Test seam: called with the phase name after each startup step so tests can inject failures.
         internal Action<string> StartupFaultInjection { get; set; }
 
+        internal Func<string, X509Certificate2> InterceptedCertificateOverride { get; set; }
+
+        internal Func<HttpMessageHandler> UpstreamHandlerFactory { get; set; }
+
         // Test seam: called during teardown, after the hosts are stopped.
         internal Action ShutdownFaultInjection { get; set; }
 
         // Test seam: called at the end of teardown, just before the log is closed.
         internal Action LogCloseFaultInjection { get; set; }
+
+        // Test seam: pause after a live policy rejection, before committing the abort.
+        internal Func<Task> BeforeSslConnectionRecheckAbortAsync { get; set; }
 
         private bool _logOpen;
 
@@ -85,6 +103,66 @@ namespace XMAT.WebServiceCapture.Proxy
         internal Exception FaultException { get; private set; }
 
         private readonly ConcurrentDictionary<int, byte> _openConnections = new();
+        private readonly ConcurrentDictionary<Guid, ActiveSslConnection> _sslConnections = new();
+
+        private sealed record ActiveSslConnection(
+            SslConnectionRequestEventArgs Request,
+            Action Abort,
+            CancellationToken Cancellation);
+
+        internal sealed class StreamedResponseFinalizer
+        {
+            private readonly WebServiceProxy _owner;
+            private readonly TaskCompletionSource _completion =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private Action _prepareResponse;
+            private Task _work;
+            private int _completed;
+
+            internal StreamedResponseFinalizer(
+                WebServiceProxy owner,
+                int connectionId,
+                ClientRequest request,
+                ServerResponse response,
+                ClientProcessContext processContext,
+                bool proxyGenerated,
+                CancellationToken cancellationToken)
+            {
+                _owner = owner;
+                ConnectionId = connectionId;
+                Request = request;
+                Response = response;
+                ProcessContext = processContext;
+                CancellationToken = cancellationToken;
+                ProxyGenerated = proxyGenerated;
+            }
+
+            internal int ConnectionId { get; }
+            internal ClientRequest Request { get; }
+            internal ServerResponse Response { get; }
+            internal ClientProcessContext ProcessContext { get; }
+            internal CancellationToken CancellationToken { get; }
+            internal bool ProxyGenerated { get; }
+            internal Task Completion => Volatile.Read(ref _work) ?? _completion.Task;
+
+            internal void Complete(DateTime timestamp, Action prepareResponse)
+            {
+                if (Interlocked.Exchange(ref _completed, 1) != 0)
+                    return;
+                _prepareResponse = prepareResponse;
+                Volatile.Write(
+                    ref _work,
+                    _owner.RunStreamedResponseFinalizerAsync(this, timestamp));
+            }
+
+            internal void PrepareResponse()
+            {
+                Action prepare = Interlocked.Exchange(ref _prepareResponse, null);
+                prepare?.Invoke();
+            }
+
+            internal void MarkFinished() => _completion.TrySetResult();
+        }
 
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
@@ -94,12 +172,19 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly InterceptedTunnelRegistry _interceptedTunnels = new();
         private HttpClient _httpClient;
         private CancellationTokenSource _cts;
+        private readonly object _streamedResponseFinalizersLock = new();
+        private readonly HashSet<StreamedResponseFinalizer> _streamedResponseFinalizers = new();
+        private CancellationTokenSource _streamedResponseFinalizationCancellation;
+        private bool _acceptingStreamedResponseFinalizers;
         private int _port = -1;
 
         private int _availableConnectionId;
         private int _availableRequestId;
+        private Guid _runId = Guid.NewGuid();
 
         internal BypassListModel BypassList { get; set; }
+        internal ClientProcessResolver ProcessResolver { get; set; } = ClientProcessResolverHost.Shared;
+        internal Guid RunId => _runId;
 
         BypassListModel IWebServiceProxy.BypassList
         {
@@ -127,6 +212,153 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             _availableConnectionId = 999;
             _availableRequestId = 0;
+            _runId = Guid.NewGuid();
+            ResetStreamedResponseFinalizers();
+        }
+
+        private void ResetStreamedResponseFinalizers()
+        {
+            CancellationTokenSource previous;
+            lock (_streamedResponseFinalizersLock)
+            {
+                if (_streamedResponseFinalizers.Count != 0)
+                    throw new InvalidOperationException("The previous run still has streamed response finalizers.");
+
+                previous = _streamedResponseFinalizationCancellation;
+                _streamedResponseFinalizationCancellation = new CancellationTokenSource();
+                _acceptingStreamedResponseFinalizers = true;
+            }
+            previous?.Dispose();
+        }
+
+        internal StreamedResponseFinalizer RegisterStreamedResponseFinalizer(
+            int connectionId,
+            ClientRequest request,
+            ServerResponse response,
+            ClientProcessContext processContext,
+            bool proxyGenerated = false)
+        {
+            if (TryRegisterStreamedResponseFinalizer(
+                    connectionId,
+                    request,
+                    response,
+                    processContext,
+                    out StreamedResponseFinalizer finalizer,
+                    proxyGenerated))
+            {
+                return finalizer;
+            }
+            throw new InvalidOperationException("The proxy is not accepting streamed response finalizers.");
+        }
+
+        internal bool TryRegisterStreamedResponseFinalizer(
+            int connectionId,
+            ClientRequest request,
+            ServerResponse response,
+            ClientProcessContext processContext,
+            out StreamedResponseFinalizer finalizer,
+            bool proxyGenerated = false)
+        {
+            lock (_streamedResponseFinalizersLock)
+            {
+                if (!_acceptingStreamedResponseFinalizers ||
+                    _streamedResponseFinalizationCancellation == null)
+                {
+                    finalizer = null;
+                    return false;
+                }
+
+                finalizer = new StreamedResponseFinalizer(
+                    this,
+                    connectionId,
+                    request,
+                    response,
+                    processContext,
+                    proxyGenerated,
+                    _streamedResponseFinalizationCancellation.Token);
+                _streamedResponseFinalizers.Add(finalizer);
+                return true;
+            }
+        }
+
+        private async Task RunStreamedResponseFinalizerAsync(
+            StreamedResponseFinalizer finalizer,
+            DateTime timestamp)
+        {
+            await Task.Yield();
+            try
+            {
+                try
+                {
+                    finalizer.PrepareResponse();
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    _logger.Log(
+                        finalizer.ConnectionId,
+                        LogLevel.ERROR,
+                        $"Preparing a streamed response capture failed: {ex}");
+                }
+
+                try
+                {
+                    await RaiseReceivedWebResponseAsync(
+                        finalizer.ConnectionId,
+                        finalizer.Request,
+                        finalizer.Response,
+                        finalizer.CancellationToken,
+                        finalizer.ProcessContext,
+                        responseForwarded: true,
+                        timestamp: timestamp,
+                        proxyGenerated: finalizer.ProxyGenerated).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    _logger.Log(
+                        finalizer.ConnectionId,
+                        LogLevel.ERROR,
+                        $"Streamed response finalization failed: {ex}");
+                }
+            }
+            finally
+            {
+                lock (_streamedResponseFinalizersLock)
+                {
+                    _streamedResponseFinalizers.Remove(finalizer);
+                }
+                finalizer.MarkFinished();
+            }
+        }
+
+        private async Task DrainStreamedResponseFinalizersAsync()
+        {
+            Task[] pending;
+            lock (_streamedResponseFinalizersLock)
+            {
+                _acceptingStreamedResponseFinalizers = false;
+                pending = new Task[_streamedResponseFinalizers.Count];
+                var index = 0;
+                foreach (StreamedResponseFinalizer finalizer in _streamedResponseFinalizers)
+                {
+                    pending[index++] = finalizer.Completion;
+                }
+            }
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+
+        private void DisposeStreamedResponseFinalization()
+        {
+            CancellationTokenSource cancellation;
+            lock (_streamedResponseFinalizersLock)
+            {
+                if (_streamedResponseFinalizers.Count != 0)
+                    throw new InvalidOperationException("Streamed response finalizers are still active.");
+
+                cancellation = _streamedResponseFinalizationCancellation;
+                _streamedResponseFinalizationCancellation = null;
+                _acceptingStreamedResponseFinalizers = false;
+            }
+            cancellation?.Dispose();
         }
 
         // Upstream handler shared by production and tests. Cookies are disabled so a
@@ -271,7 +503,7 @@ namespace XMAT.WebServiceCapture.Proxy
             _port = options.Port;
             _openConnections.Clear();
 
-            _httpClient = new HttpClient(CreateUpstreamHandler());
+            _httpClient = new HttpClient(UpstreamHandlerFactory?.Invoke() ?? CreateUpstreamHandler());
 
             // The public listener handles forward-proxy CONNECT requests. The
             // private listener terminates the tunneled TLS and lets Kestrel
@@ -281,7 +513,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 _httpClient,
                 _interceptedTunnels,
                 _logger,
-                _cts.Token);
+                stoppingToken: _cts.Token);
             _interceptedHost = new InterceptedHttpHost(
                 SelectInterceptedCertificate,
                 interceptedApplication.InvokeAsync);
@@ -377,7 +609,8 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 RaiseCompletedSslConnectionRequest(
                     tunnel.ConnectionId,
-                    tunnel.ConnectRequest);
+                    tunnel.ConnectRequest,
+                    tunnel.ProcessContext);
             }
 
             // Prefer SNI, but CONNECT still supplies the destination for clients
@@ -385,7 +618,8 @@ namespace XMAT.WebServiceCapture.Proxy
             string certificateHost = !string.IsNullOrWhiteSpace(hostName)
                 ? hostName
                 : tunnel?.ConnectRequest.Host ?? "localhost";
-            return _certManager.GetCertificateForHost(certificateHost);
+            return InterceptedCertificateOverride?.Invoke(certificateHost) ??
+                _certManager.GetCertificateForHost(certificateHost);
         }
 
         // Concurrent callers share one stop operation, and the first caller's progress wins.
@@ -395,7 +629,9 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             lock (_stateLock)
             {
-                if (_state == ProxyState.Stopped && Volatile.Read(ref _pendingStarts) == 0)
+                if (_state == ProxyState.Stopped &&
+                    Volatile.Read(ref _pendingStarts) == 0 &&
+                    !HasOutstandingResources)
                 {
                     return Task.CompletedTask;
                 }
@@ -414,7 +650,7 @@ namespace XMAT.WebServiceCapture.Proxy
             var stopped = false;
             try
             {
-                if (State == ProxyState.Stopped)
+                if (State == ProxyState.Stopped && !HasOutstandingResources)
                     return;
 
                 SetState(ProxyState.Stopping);
@@ -460,7 +696,7 @@ namespace XMAT.WebServiceCapture.Proxy
         // True while anything started by a run (hosts, client, token sources, log) is still owned.
         internal bool HasOutstandingResources =>
             _host != null || _interceptedHost != null || _httpClient != null ||
-            _cts != null || _logOpen;
+            _cts != null || _streamedResponseFinalizationCancellation != null || _logOpen;
 
         // The callbacks belong to in-flight work. One that throws must not abort the stop or a
         // rollback before cleanup (or before the shared stop task is retired), so the failure is
@@ -524,6 +760,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     disposalFailures.Add(failure);
             }
 
+            await DrainStreamedResponseFinalizersAsync().ConfigureAwait(false);
             ShutdownFaultInjection?.Invoke();
 
             if (disposalFailures.Count != 0)
@@ -537,14 +774,21 @@ namespace XMAT.WebServiceCapture.Proxy
             _httpClient = null;
             _cts?.Dispose();
             _cts = null;
+            DisposeStreamedResponseFinalization();
 
             _logger.Log(
                 0,
                 LogLevel.INFO,
                 $"Proxy hosts stopped in {totalStopwatch.Elapsed}.");
             LogCloseFaultInjection?.Invoke();
-            await Task.Run(_logger.CloseLog).ConfigureAwait(false);
-            _logOpen = false;
+            try
+            {
+                await Task.Run(_logger.CloseLog).ConfigureAwait(false);
+            }
+            finally
+            {
+                _logOpen = false;
+            }
         }
 
         // Returns a disposal failure to report, or null. A host that stopped but failed to
@@ -641,7 +885,10 @@ namespace XMAT.WebServiceCapture.Proxy
             return Interlocked.Increment(ref _availableRequestId);
         }
 
-        internal bool RaiseReceivedInitialConnection(int connectionID, string remoteEndPoint)
+        internal bool RaiseReceivedInitialConnection(
+            int connectionID,
+            string remoteEndPoint,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true)
             {
@@ -653,7 +900,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 ConnectionID = connectionID,
                 Timestamp = DateTime.Now,
                 RemoteEndPoint = remoteEndPoint,
-                AcceptConnection = true
+                AcceptConnection = true,
+                ProcessContext = processContext,
             };
 
             ReceivedInitialConnection?.Invoke(this, args);
@@ -669,7 +917,8 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             string clientIP,
             ClientRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -685,7 +934,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 Timestamp = DateTime.Now,
                 ClientIP = clientIP,
                 Request = request,
-                AcceptConnection = true
+                AcceptConnection = true,
+                ProcessContext = processContext,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -702,7 +952,119 @@ namespace XMAT.WebServiceCapture.Proxy
                 !cancellationToken.IsCancellationRequested;
         }
 
-        internal void RaiseCompletedSslConnectionRequest(int connectionID, ClientRequest request)
+        internal Guid TrackSslConnection(
+            int connectionID,
+            string clientIP,
+            ClientRequest request,
+            Action abort,
+            CancellationToken cancellationToken)
+        {
+            var args = new SslConnectionRequestEventArgs
+            {
+                ConnectionID = connectionID,
+                Timestamp = DateTime.Now,
+                ClientIP = clientIP,
+                Request = CopyConnectRequest(request),
+                AcceptConnection = true
+            };
+            Guid registration = Guid.NewGuid();
+            if (!_sslConnections.TryAdd(
+                registration,
+                new ActiveSslConnection(args, abort, cancellationToken)))
+            {
+                throw new InvalidOperationException("The SSL connection registration already exists.");
+            }
+            return registration;
+        }
+
+        internal void UntrackSslConnection(Guid registration) =>
+            _sslConnections.TryRemove(registration, out _);
+
+        public Task RecheckSslConnectionsAsync(
+            Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+            Action<Action> applyRejection,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            ArgumentNullException.ThrowIfNull(applyRejection);
+            // Registration precedes the initial policy check. A connection is either in
+            // this snapshot or checks the newly enabled script as a new CONNECT.
+            return Parallel.ForEachAsync(
+                _sslConnections.ToArray(),
+                cancellationToken,
+                async (entry, token) =>
+                {
+                    ActiveSslConnection connection = entry.Value;
+                    if (connection.Cancellation.IsCancellationRequested)
+                        return;
+
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                        token, connection.Cancellation);
+                    var args = new SslConnectionRequestEventArgs
+                    {
+                        ConnectionID = connection.Request.ConnectionID,
+                        Timestamp = connection.Request.Timestamp,
+                        ClientIP = connection.Request.ClientIP,
+                        Request = CopyConnectRequest(connection.Request.Request),
+                        AcceptConnection = true
+                    };
+                    bool accepted = await policy(args, linked.Token).ConfigureAwait(false);
+                    if (accepted || linked.IsCancellationRequested)
+                        return;
+
+                    if (BeforeSslConnectionRecheckAbortAsync != null)
+                        await BeforeSslConnectionRecheckAbortAsync().ConfigureAwait(false);
+
+                    bool aborted = false;
+                    applyRejection(() =>
+                    {
+                        if (!linked.IsCancellationRequested &&
+                            _sslConnections.TryGetValue(entry.Key, out var current) &&
+                            ReferenceEquals(current, connection))
+                        {
+                            connection.Abort();
+                            aborted = true;
+                        }
+                    });
+                    if (aborted)
+                    {
+                        _logger.Log(connection.Request.ConnectionID, LogLevel.INFO,
+                            "Aborted active SSL connection rejected by the enabled script.");
+                    }
+                });
+        }
+
+        private static ClientRequest CopyConnectRequest(ClientRequest request)
+        {
+            var copy = new ClientRequest
+            {
+                RequestNumber = request.RequestNumber,
+                Version = request.Version,
+                StreamId = request.StreamId,
+                Scheme = request.Scheme,
+                Host = request.Host,
+                Port = request.Port,
+                Method = request.Method,
+                Path = request.Path,
+                BodyBytes = request.BodyBytes == null ? null : (byte[])request.BodyBytes.Clone()
+            };
+            foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
+            {
+                foreach (string value in header.Value)
+                    copy.Headers.Add(header.Key, value);
+            }
+            foreach (KeyValuePair<string, IEnumerable<string>> header in request.ContentHeaders)
+            {
+                foreach (string value in header.Value)
+                    copy.ContentHeaders.Add(header.Key, value);
+            }
+            return copy;
+        }
+
+        internal void RaiseCompletedSslConnectionRequest(
+            int connectionID,
+            ClientRequest request,
+            ClientProcessContext processContext = null)
         {
             if (TelemetryTraffic.IsExcluded(request.Host, request.Port))
             {
@@ -713,25 +1075,31 @@ namespace XMAT.WebServiceCapture.Proxy
                 {
                     ConnectionID = connectionID,
                     Timestamp = DateTime.Now,
-                    Request = request
+                    Request = request,
+                    ProcessContext = processContext,
                 });
         }
 
-        internal void RaiseFailedSslConnectionRequest(int connectionID, Exception ex)
+        internal void RaiseFailedSslConnectionRequest(
+            int connectionID,
+            Exception ex,
+            ClientProcessContext processContext = null)
         {
             FailedSslConnectionRequest?.Invoke(this,
                 new ConnectionFailureEventArgs
                 {
                     ConnectionID = connectionID,
                     Timestamp = DateTime.Now,
-                    Exception = ex
+                    Exception = ex,
+                    ProcessContext = processContext,
                 });
         }
 
         internal async Task<bool> RaiseReceivedWebRequestAsync(
             int connectionID,
             ClientRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -746,7 +1114,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 ConnectionID = connectionID,
                 Timestamp = DateTime.Now,
                 Request = request,
-                AcceptRequest = true
+                AcceptRequest = true,
+                ProcessContext = processContext,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -767,9 +1136,14 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             ClientRequest request,
             ServerResponse response,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null,
+            bool responseForwarded = false,
+            DateTime? timestamp = null,
+            bool proxyGenerated = false)
         {
-            if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
+            if ((!responseForwarded && _cts?.IsCancellationRequested == true) ||
+                cancellationToken.IsCancellationRequested)
             {
                 return false;
             }
@@ -780,10 +1154,13 @@ namespace XMAT.WebServiceCapture.Proxy
             var args = new HttpResponseEventArgs
             {
                 ConnectionID = connectionID,
-                Timestamp = DateTime.Now,
+                Timestamp = timestamp ?? DateTime.Now,
                 Request = request,
                 Response = response,
-                SendResponse = true
+                SendResponse = true,
+                ProcessContext = processContext,
+                ResponseForwarded = responseForwarded,
+                ProxyGenerated = proxyGenerated,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -796,8 +1173,47 @@ namespace XMAT.WebServiceCapture.Proxy
                 await policy(args, cancellationToken).ConfigureAwait(false);
             args.SendResponse = observersAccepted && policyAccepted;
             return args.SendResponse &&
-                _cts?.IsCancellationRequested != true &&
+                (responseForwarded || _cts?.IsCancellationRequested != true) &&
                 !cancellationToken.IsCancellationRequested;
+        }
+
+        // Capture-only: failures are logged and never interrupt the stream being forwarded.
+        internal async Task RaiseWebResponseProgressAsync(
+            int connectionID,
+            ClientRequest request,
+            ServerResponse response,
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
+        {
+            var progress = WebResponseProgressAsync;
+            if (progress == null ||
+                _cts?.IsCancellationRequested == true ||
+                cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await progress(new HttpResponseEventArgs
+                {
+                    ConnectionID = connectionID,
+                    Timestamp = DateTime.Now,
+                    Request = request,
+                    Response = response,
+                    SendResponse = true,
+                    ProcessContext = processContext,
+                    ResponseForwarded = true,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response capture update was canceled.");
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Streamed response capture update failed: {ex}");
+            }
         }
 
         private bool InvokeVetoObservers<TEventArgs>(
@@ -820,14 +1236,15 @@ namespace XMAT.WebServiceCapture.Proxy
             return accepted;
         }
 
-        internal void RaiseConnectionClosed(int connectionID)
+        internal void RaiseConnectionClosed(int connectionID, ClientProcessContext processContext = null)
         {
             _openConnections.TryRemove(connectionID, out _);
             ConnectionClosed?.Invoke(this,
                 new ConnectionClosedEventArgs
                 {
                     ConnectionID = connectionID,
-                    Timestamp = DateTime.Now
+                    Timestamp = DateTime.Now,
+                    ProcessContext = processContext,
                 });
         }
 

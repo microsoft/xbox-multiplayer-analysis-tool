@@ -4,6 +4,7 @@
 
 using System.Collections.Concurrent;
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
 using XMAT.Telemetry;
@@ -12,6 +13,19 @@ namespace XMAT.Tests
 {
     public class TelemetryTests
     {
+        [Fact]
+        public void AssemblyConfigurationPreservesTheDeclaredBuildGates()
+        {
+            var declared = typeof(App).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .ToDictionary(attribute => attribute.Key, attribute => attribute.Value);
+            var configuration = TelemetryConfiguration.FromAssembly();
+
+            Assert.Equal(bool.Parse(declared["Xmat.Telemetry.Enabled"]), configuration.Enabled);
+            Assert.Equal(bool.Parse(declared["Xmat.Telemetry.Approved"]), configuration.Approved);
+            Assert.Equal(Enum.Parse<TelemetryBuildChannel>(declared["Xmat.Telemetry.Channel"]), configuration.Channel);
+            Assert.Equal(declared.GetValueOrDefault("Xmat.Telemetry.Key", string.Empty), configuration.InstrumentationKey);
+        }
+
         [Fact]
         public void DisabledBuildDoesNotReadMetadataOrCreateTransport()
         {

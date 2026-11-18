@@ -60,6 +60,9 @@ namespace XMAT.Tests
             var result = converter.GetMethod("/users/12345/profile", true);
             Assert.NotNull(result);
             Assert.Equal("GetProfileCpp", result.Item1);
+            Assert.Equal(
+                1,
+                converter.MatcherCreationCount);
         }
 
         [Fact]
@@ -82,6 +85,90 @@ namespace XMAT.Tests
             );
 
             Assert.Null(converter.GetMethod("/users/12345/profile", false));
+        }
+
+        [Fact]
+        public void GetMethod_PreservesFirstMatchOrder()
+        {
+            var converter = LoadConverterFromCsv(
+                "\"GET /users/{first}\",\"FirstCpp\",\"FirstWinRT\",\"FirstC\"\n" +
+                "\"GET /users/{second}\",\"SecondCpp\",\"SecondWinRT\",\"SecondC\"\n");
+
+            var result = converter.GetMethod(
+                "/users/12345",
+                true);
+
+            Assert.NotNull(result);
+            Assert.Equal("FirstCpp", result.Item1);
+        }
+
+        [Fact]
+        public void GetMethod_DoesNotDiscardCustomBacktrackingPattern()
+        {
+            var converter = LoadConverterFromCsv(
+                "\"GET /(a)\\1\",\"BackrefCpp\",\"BackrefWinRT\",\"BackrefC\"\n");
+
+            var result = converter.GetMethod(
+                "/aa",
+                true,
+                new AnalysisWorkBudget(),
+                CancellationToken.None);
+
+            Assert.NotNull(result);
+            Assert.Equal("BackrefCpp", result.Item1);
+            Assert.Equal(
+                1,
+                converter.MatcherCreationCount);
+        }
+
+        [Fact]
+        public void GetMethod_ExactPrefilterBuildsOnlyPlausibleMatcher()
+        {
+            var converter = LoadConverterFromCsv(
+                "\"GET https://first.test/users/{xuid}\",\"FirstCpp\",\"FirstWinRT\",\"FirstC\"\n" +
+                "\"GET https://second.test/users/{xuid}\",\"SecondCpp\",\"SecondWinRT\",\"SecondC\"\n" +
+                "\"GET https://third.test/users/{xuid}\",\"ThirdCpp\",\"ThirdWinRT\",\"ThirdC\"\n");
+
+            var result = converter.GetMethod(
+                "https://second.test/users/12345",
+                true);
+
+            Assert.NotNull(result);
+            Assert.Equal("SecondCpp", result.Item1);
+            Assert.Equal(
+                1,
+                converter.MatcherCreationCount);
+        }
+
+        [Fact]
+        public void GetMethod_RepeatedShortAdversarialInputReusesExactMatcher()
+        {
+            var converter = LoadConverterFromCsv(
+                "\"GET /users/{xuid}/profile\",\"ProfileCpp\",\"ProfileWinRT\",\"ProfileC\"\n");
+            string uri =
+                "/users/" +
+                new string(
+                    'a',
+                    256) +
+                "/not-profile";
+            Tuple<string, string, string> result = null;
+
+            for (var index = 0;
+                index < 10_000;
+                index++)
+            {
+                result = converter.GetMethod(
+                    uri,
+                    true);
+            }
+
+            Assert.Null(result);
+            Assert.Equal(
+                1,
+                converter.MatcherCreationCount);
+            Assert.Equal(
+                1,
+                converter.ExactEvaluationCount);
         }
 
         [Fact]

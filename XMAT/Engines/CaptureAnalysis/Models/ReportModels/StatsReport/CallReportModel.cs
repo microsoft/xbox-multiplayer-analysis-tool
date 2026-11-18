@@ -27,15 +27,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
                 "Resources/html/xlta/calls.js",
                 analysisStorageDirectory);
 
-            // populate the newly copied "calls.js" file's token with
-            // the actual JSON from the report
-
-            string statsJsonText = reportDocument.ToJson();
-
             string templatefilepath = Path.Combine(analysisStorageDirectory, @"calls.js");
-            string templateText = File.ReadAllText(templatefilepath);
-            string replacedText = templateText.Replace(TemplateToken, statsJsonText);
-            File.WriteAllText(templatefilepath, replacedText);
+            WriteJsonTemplate(
+                templatefilepath,
+                TemplateToken,
+                reportDocument);
         }
     }
 }

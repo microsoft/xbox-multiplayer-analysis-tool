@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,6 +14,12 @@ namespace CaptureAnalysisEngine
 {
     public class StatsReportDocument : ReportDocument
     {
+        private static readonly JsonSerializerOptions
+            SerializerOptions = new()
+            {
+                IncludeFields = true,
+            };
+
         internal StatsReportDocument()
         {
             StatsResults = new();
@@ -20,14 +27,21 @@ namespace CaptureAnalysisEngine
 
         public override string ToJson()
         {
-            var options = new JsonSerializerOptions
-            {
-                IncludeFields = true,
-            };
             return JsonSerializer.Serialize(
                 this.StatsResults,
                 typeof(List<Host>),
-                options);
+                SerializerOptions);
+        }
+
+        public override void WriteJson(
+            Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            JsonSerializer.Serialize(
+                output,
+                this.StatsResults,
+                typeof(List<Host>),
+                SerializerOptions);
         }
 
         public class Host

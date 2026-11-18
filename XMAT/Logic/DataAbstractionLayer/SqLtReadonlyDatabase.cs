@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32.SafeHandles;
 using SQLitePCL;
@@ -20,7 +23,10 @@ namespace XMAT.DataAbstractionLayer
         int Columns,
         int ExpressionDepth);
 
-    internal class SqLtReadonlyDatabase : IReadonlyDatabase, IDisposable
+    internal class SqLtReadonlyDatabase :
+        IReadonlyDatabase,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
         // FILE_NAME_NORMALIZED with VOLUME_NAME_DOS, then with VOLUME_NAME_GUID for volumes without a drive letter. The
         // opened name is never used: it is not normalized, so it could still lead SQLite through a link.
@@ -29,12 +35,14 @@ namespace XMAT.DataAbstractionLayer
             0x0,
             0x1,
         };
+        private const int HashBufferBytes = 64 * 1024;
 
         private readonly FileStream _snapshot;
         private readonly SqliteConnection _connection;
         private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables =
             new(StringComparer.Ordinal);
         private bool _disposed;
+        private volatile bool _sourceAvailable = true;
 
         internal SqLtReadonlyDatabase(string filepath)
             : this(
@@ -80,6 +88,8 @@ namespace XMAT.DataAbstractionLayer
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.Read);
+                Identity = SqLtFileIdentity.FromHandle(
+                    _snapshot.SafeFileHandle);
                 // SQLite opens the file by the final path of this handle, which has no junction or symbolic link left
                 // that could be retargeted after the check.
                 string checkedPath = ToVerbatimPath(
@@ -95,6 +105,13 @@ namespace XMAT.DataAbstractionLayer
                     SqLtSchemaPreflight.Validate(
                         _snapshot,
                         profile);
+                ValidatedSchema = schema;
+                CaptureTextSource =
+                    global::XMAT.DataAbstractionLayer.CaptureTextSource.CreateFile(
+                        schema.TextSemantics,
+                        Identity,
+                        ComputeSha256,
+                        () => _sourceAvailable);
                 beforeSqliteOpens?.Invoke(databasePath);
                 var connectionString =
                     new SqliteConnectionStringBuilder
@@ -111,7 +128,8 @@ namespace XMAT.DataAbstractionLayer
                     _connection,
                     checkedPath);
                 AppliedLimits = ApplyLimits(
-                    _connection);
+                    _connection,
+                    profile);
                 InitializeTables(
                     schema,
                     profile);
@@ -131,6 +149,19 @@ namespace XMAT.DataAbstractionLayer
         }
 
         internal SqLtAppliedLimits AppliedLimits { get; }
+
+        internal SqLtFileIdentity Identity { get; }
+
+        public CaptureTextSource CaptureTextSource { get; }
+
+        internal SqLtValidatedSchema ValidatedSchema { get; }
+
+        internal SqliteConnection Connection =>
+            _connection;
+
+        internal long SnapshotLength =>
+            RandomAccess.GetLength(
+                _snapshot.SafeFileHandle);
 
         public IEnumerable<string> TableNames() =>
             _dataTables.Keys;
@@ -152,12 +183,178 @@ namespace XMAT.DataAbstractionLayer
             return command.ExecuteScalar() as string;
         }
 
+        // The SHA-256 of the guarded file from its start to its end: the handle that was checked and that keeps writers
+        // out, so these are the bytes SQLite reads. Positional reads leave the handle's position unchanged.
+        internal byte[] ComputeSha256(
+            CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            return ComputeSha256(
+                _snapshot.SafeFileHandle,
+                cancellationToken);
+        }
+
+        internal byte[] ComputeSha256(
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            return ComputeSha256(
+                _snapshot.SafeFileHandle,
+                progress,
+                cancellationToken);
+        }
+
+        internal static byte[] ComputeSha256(
+            SafeFileHandle file,
+            CancellationToken cancellationToken) =>
+            ComputeSha256(
+                file,
+                null,
+                cancellationToken);
+
+        private static byte[] ComputeSha256(
+            SafeFileHandle file,
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(file);
+            long length =
+                RandomAccess.GetLength(file);
+            using var hash =
+                IncrementalHash.CreateHash(
+                    HashAlgorithmName.SHA256);
+            byte[] buffer =
+                ArrayPool<byte>.Shared.Rent(
+                    HashBufferBytes);
+            try
+            {
+                long offset = 0;
+                while (offset < length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read =
+                        RandomAccess.Read(
+                            file,
+                            buffer.AsSpan(
+                                0,
+                                (int)Math.Min(
+                                    HashBufferBytes,
+                                    length - offset)),
+                            offset);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException();
+                    }
+                    hash.AppendData(
+                        buffer,
+                        0,
+                        read);
+                    offset += read;
+                    progress?.Invoke(
+                        offset,
+                        length);
+                }
+                return hash.GetHashAndReset();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        internal void CopySnapshotToExisting(
+            SafeFileHandle output,
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            SafeFileHandle input =
+                _snapshot.SafeFileHandle;
+            long length =
+                RandomAccess.GetLength(input);
+            RandomAccess.SetLength(
+                output,
+                length);
+            byte[] buffer =
+                ArrayPool<byte>.Shared.Rent(
+                    HashBufferBytes);
+            try
+            {
+                long offset = 0;
+                while (offset < length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read =
+                        RandomAccess.Read(
+                            input,
+                            buffer.AsSpan(
+                                0,
+                                (int)Math.Min(
+                                    HashBufferBytes,
+                                    length - offset)),
+                            offset);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException();
+                    }
+
+                    RandomAccess.Write(
+                        output,
+                        buffer.AsSpan(
+                            0,
+                            read),
+                        offset);
+                    offset += read;
+                    progress?.Invoke(
+                        offset,
+                        length);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(
+                    buffer);
+            }
+        }
+
+        internal static int ApplyRepairLengthLimit(
+            SqliteConnection connection,
+            long maxValueBytes)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxValueBytes);
+            int current =
+                raw.sqlite3_limit(
+                    connection.Handle,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    -1);
+            int requested =
+                checked(
+                    (int)Math.Min(
+                        maxValueBytes,
+                        current));
+            return SetLimit(
+                connection,
+                raw.SQLITE_LIMIT_LENGTH,
+                requested);
+        }
+
         public void Dispose()
         {
             if (_disposed)
             {
                 return;
             }
+            _sourceAvailable = false;
 
             try
             {
@@ -336,18 +533,27 @@ namespace XMAT.DataAbstractionLayer
                     new SqLtReadonlyDataTable(
                         _connection,
                         table.SqliteName,
-                        fields));
+                        fields,
+                        table.Columns,
+                        CaptureTextSource));
             }
         }
 
-        // SQLite's value limit is left at its default: opening a capture in XMAT has no size quota. The SQL, column and
-        // expression limits bound statement parsing, and each is read back after it is set.
+        // The GUI profile leaves SQLite's value limit at its default: opening a capture in XMAT has no size quota.
+        // The CLI profile sets it to its record limit. The SQL, column and expression limits bound statement
+        // parsing, and each limit that is set is read back.
         private static SqLtAppliedLimits ApplyLimits(
-            SqliteConnection connection)
+            SqliteConnection connection,
+            SqLtSchemaProfile profile)
         {
-            int length = ReadLimit(
-                connection,
-                raw.SQLITE_LIMIT_LENGTH);
+            int length = profile.MaxValueBytes.HasValue
+                ? SetLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    profile.MaxValueBytes.Value)
+                : ReadLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH);
             int sqlLength = SetLimit(
                 connection,
                 raw.SQLITE_LIMIT_SQL_LENGTH,

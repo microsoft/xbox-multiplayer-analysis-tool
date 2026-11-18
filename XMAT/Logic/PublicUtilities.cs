@@ -10,7 +10,6 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -23,11 +22,17 @@ namespace XMAT
     {
         private static readonly Logger _appLog = new();
         private const string DefaultAppName = "Xbox Multiplayer Analysis Tool";
+        private static readonly string _headlessStorageRoot;
         private static string _appName;
 
         static PublicUtilities()
         {
-            _appLog.InitLog("application.log", LogLevel.DEBUG);
+            // A headless run (xmat.exe) keeps no application log and never opens the GUI's (see HeadlessStorage).
+            _headlessStorageRoot = HeadlessStorage.Freeze();
+            if (_headlessStorageRoot == null)
+            {
+                _appLog.InitLog("application.log", LogLevel.DEBUG);
+            }
         }
 
         public static void AppLog(LogLevel level, string log)
@@ -64,7 +69,8 @@ namespace XMAT
         {
             get
             {
-                var storageDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", AppName);
+                var storageDirectory = _headlessStorageRoot ??
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", AppName);
                 Directory.CreateDirectory(storageDirectory);
                 return storageDirectory;
             }
@@ -191,58 +197,6 @@ namespace XMAT
             }
         }
 
-        public static byte[] DecodeGzippedData(byte[] gzipData)
-        {
-            byte[] bytes = new byte[8192];
-            byte[] decoded;
-
-            using (var stream = new GZipStream(new MemoryStream(gzipData), CompressionMode.Decompress))
-            {
-                using (var memory = new MemoryStream())
-                {
-                    int count = 0;
-                    do
-                    {
-                        count = stream.Read(bytes, 0, bytes.Length);
-                        if (count > 0)
-                        {
-                            memory.Write(bytes, 0, count);
-                        }
-                    }
-                    while (count > 0);
-                    decoded = memory.ToArray();
-                }
-            }
-
-            return decoded;
-        }
-
-        public static byte[] DecodeDeflatedData(byte[] deflateData)
-        {
-            byte[] bytes = new byte[8192];
-            byte[] decoded;
-
-            using (var stream = new DeflateStream(new MemoryStream(deflateData), CompressionMode.Decompress))
-            {
-                using (var memory = new MemoryStream())
-                {
-                    int count = 0;
-                    do
-                    {
-                        count = stream.Read(bytes, 0, bytes.Length);
-                        if (count > 0)
-                        {
-                            memory.Write(bytes, 0, count);
-                        }
-                    }
-                    while (count > 0);
-                    decoded = memory.ToArray();
-                }
-            }
-
-            return decoded;
-        }
-
         public static MemoryStream DecompressZipEntryToMemory(ZipArchiveEntry entry)
         {
             var memory = new MemoryStream();
@@ -288,56 +242,57 @@ namespace XMAT
         {
             return new BlockingOperationDisposable();
         }
+    }
 
-        public static string BodyAsText(Dictionary<string, string> headers, byte[] body)
+    // Where the legacy statics keep their files (logs, settings, analysis folders) during a headless run. xmat.exe
+    // points it at a private folder of the run before anything uses PublicUtilities, so the command line never opens,
+    // truncates or reads the GUI's logs and settings under %APPDATA%. The GUI never configures it. Once PublicUtilities
+    // is in use the location is fixed for the life of the process.
+    internal static class HeadlessStorage
+    {
+        private static readonly object _gate = new();
+        private static string _root;
+        private static bool _frozen;
+
+        internal static string Root
         {
-            if (body == null)
+            get
             {
-                body = new byte[0];
-            }
-
-            if (headers.TryGetValue("Content-Encoding", out string encoding))
-            {
-                switch (encoding.ToLower())
+                lock (_gate)
                 {
-                    case "gzip":
-                        try
-                        {
-                            body = DecodeGzippedData(body);
-                        }
-                        catch
-                        {
-                            // header isn't correct, treat the body as something not encoded
-                        }
-                        break;
-                    case "deflate":
-                        try
-                        {
-                            body = DecodeDeflatedData(body);
-                        }
-                        catch
-                        {
-                            // header isn't correct, treat the body as something not encoded
-                        }
-                        break;
+                    return _root;
                 }
             }
+        }
 
-            if (headers.TryGetValue("Content-Type", out string type))
+        internal static void Configure(string root)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(root);
+            if (!Path.IsPathFullyQualified(root))
             {
-                if (type.Contains("json"))
-                {
-                    try
-                    {
-                        return Encoding.UTF8.GetString(body);
-                    }
-                    catch
-                    {
-                    }
-                }
+                throw new ArgumentException("The headless storage folder must be a full path.", nameof(root));
             }
 
-            return Encoding.ASCII.GetString(body);
+            lock (_gate)
+            {
+                if (_frozen || _root != null)
+                {
+                    throw new InvalidOperationException(
+                        "Headless storage must be configured once, before PublicUtilities is used.");
+                }
+
+                _root = root;
+            }
+        }
+
+        // Called by PublicUtilities' static constructor: returns the configured folder (null for the GUI) and fixes it.
+        internal static string Freeze()
+        {
+            lock (_gate)
+            {
+                _frozen = true;
+                return _root;
+            }
         }
     }
 }

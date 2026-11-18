@@ -29,6 +29,30 @@ and then displays report tabs.
 
 ![Xbox Live Trace analysis progress](../ReadmeImages/16.png)
 
+### Analyze only the sessions shown by the process filter
+
+Analysis covers the full capture by default, including sessions that the capture
+tab's process filter hides. To analyze one program's traffic, set the tab's process
+filter (see [Filter by process](web-proxy.md#filter-by-process)), then check **Analyze
+only the sessions shown by the process filter** in the analyzer selector, which lists
+the filter's selectors. The option is available only while the tab has a process
+filter. The status, host and method filters never limit analysis.
+
+A process-filtered analysis:
+
+- uses the process filter as it was when the analysis started;
+- adds **(process-filtered)** to its result tab's name;
+- shows a banner at the top of the Statistics report with how many of the captured
+  sessions were analyzed, how many were hidden, how many had no process information,
+  and the selectors;
+- writes `scope.json` to its working folder, with the selectors and the same counts
+  for the capture and for each device (`d1`, `d2`, ...), in the format of
+  [xmat's](cli.md#output) `processFilter`. Exported reports include it.
+
+Sessions without process information are never analyzed while **Show only** has
+selectors. If the process filter hides every session, there is nothing to analyze and
+XMAT reports that the capture has no suitable data.
+
 Analysis creates a timestamped `xlca_*` working folder in XMAT's roaming application
 data directory, under `Microsoft\Xbox Multiplayer Analysis Tool`.
 
@@ -48,8 +72,11 @@ indicates issues were found.
 
 1. Click a summary cell to scroll to the host/rule combination.
 2. Expand it to see the rule description, related data, and individual warnings.
-3. Click a warning's request-number button to open the corresponding capture tab
-   and select that request.
+3. Click a warning's request-number button to open the capture tab that was analyzed
+   and select that request. It is always that tab, never another tab with the same
+   name: if the analyzed tab has been closed, or no longer shows the requests that were
+   analyzed (for example after **Clear Capture**, or after loading a capture into it),
+   XMAT says so and selects nothing.
 
 ![Rule description and individual warnings](../ReadmeImages/19.png)
 
@@ -59,6 +86,12 @@ Each related call has its own row, request number, and URL. In the example, an A
 that supports multiple users was called with only one user, visible in the request
 body JSON. Reducing unnecessary service calls helps avoid throttling and reduces
 bandwidth, service load, and latency.
+
+Request-number buttons open the capture tab that the analysis read, never another tab
+with the same name. A button is disabled while that tab has no request, or more than one,
+with its number. Once that tab is closed, or its sessions are deleted, cleared or reloaded,
+the analysis says that its results are historical and the buttons are disabled; analyze
+the capture again to link to its current sessions.
 
 ## Read the Statistics report
 
@@ -89,7 +122,7 @@ The Stats and Call report files record each endpoint's numeric `Kind` (0 unknown
 
 **Warning:** analysis exports are **not sanitized**. They can contain request bodies,
 sign-in tokens, URLs, Xbox user IDs, console IP addresses, and telemetry.
-**File > Export Sanitized Capture...** sanitizes `.SAZ` captures, not analysis reports.
+**File > Export Selected Tab Sanitized...** sanitizes `.SAZ` captures, not analysis reports.
 
 XMAT creates a child folder named `XMAT Analysis - <capture> - <yyyy-MM-dd HHmmss>`.
 If it exists, XMAT adds ` (2)`, ` (3)`, and so on without merging or overwriting exports.

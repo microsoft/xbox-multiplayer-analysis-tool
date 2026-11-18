@@ -30,7 +30,6 @@ namespace XMAT.Tests
                 {
                     Assert.Empty(uses);
                     response.FirstLineAndHeaders = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n";
-                    response.BodyText = "{}";
                     response.BodyBytes = "{}"u8.ToArray();
                     DrainDispatcher(window);
                     Assert.Equal([Enum.Parse<TelemetryFeature>(feature)], uses);

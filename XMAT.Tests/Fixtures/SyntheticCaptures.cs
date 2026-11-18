@@ -6,6 +6,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Analysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -22,8 +23,22 @@ namespace XMAT.Tests.Fixtures
         int Devices = 1,
         int RequestsPerDevice = 4,
         bool IncludeCanaries = false,
-        bool IncludeXr049Violation = false);
+        bool IncludeXr049Violation = false,
+        uint UserVersion = CaptureTextFormat.LiteralUserVersion);
 
+    internal sealed record SyntheticProcessXmatcapOptions(
+        int Devices = 1,
+        int RequestsPerDevice = 4,
+        string ProcessName = "game.exe",
+        int ProcessId = 4242,
+        string ProcessStatus = "local");
+
+    // A frame for the SAZ readers. Valid frames, and those with a malformed start line, have an absolute https request
+    // target; the hostless kinds have an origin-form target (a path), so the Host header alone could name the host, and the
+    // AbsoluteTarget kinds keep the absolute target, whose authority names the host whatever the Host header says
+    // (missing, malformed, another host's, empty or whitespace-only); but AbsoluteTargetIdnTooLong's URL has a host that
+    // Uri parses and IDN cannot convert (IdnTooLongHost), so its Host header names the host. Requests are written as
+    // Latin-1, as the readers read them.
     public enum SyntheticSazFrameKind
     {
         Valid,
@@ -32,11 +47,31 @@ namespace XMAT.Tests.Fixtures
         MissingHost,
         MalformedHost,
         EmptyHostWithPort,
+        RequestOnly,
+        AbsoluteTargetMissingHost,
+        AbsoluteTargetMalformedHost,
+        AbsoluteTargetConflictingHost,
+        AbsoluteTargetEmptyHost,
+        AbsoluteTargetBlankHost,
+        AbsoluteTargetIdnTooLong,
     }
 
     internal static class SyntheticCaptures
     {
         internal const string Canary = "XMATCANARY7f3c";
+        internal const string ConflictingHost = "other.example.invalid";
+
+        // A host that Uri parses but whose first label, 55 letters and four U+00E9, is longer than 63 characters in
+        // punycode, so its IDN conversion fails (Uri.IdnHost throws). Every character is Latin-1.
+        internal const string IdnTooLongHost =
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabc\u00e9\u00e9\u00e9\u00e9.example.test";
+
+        // A host that Uri parses as a Basic (UNC) name instead of a DNS one: its first label, 60 letters and a U+00E9, fails
+        // Uri's preliminary DNS check (61 characters and the four of xn-- exceed 63), so Uri keeps the name as written, and
+        // its IdnHost returns that Unicode text without throwing. It has no ASCII form, though reading its IDN host succeeds.
+        // Every character is Latin-1.
+        internal const string NonAsciiBasicHost =
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefgh\u00e9.example.test";
         private const string PresenceHost = "userpresence.xboxlive.com";
         private static readonly DateTime SyntheticStartUtc =
             new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -173,6 +208,107 @@ namespace XMAT.Tests.Fixtures
             }
 
             database.SaveToFile(path);
+            if (options.UserVersion !=
+                CaptureTextFormat.LiteralUserVersion)
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    path,
+                    options.UserVersion);
+            }
+            return path;
+        }
+
+        internal static string WriteProcessXmatcap(
+            string directory,
+            string fileName,
+            SyntheticProcessXmatcapOptions options = null)
+        {
+            options ??= new SyntheticProcessXmatcapOptions();
+            ValidateCounts(options.Devices, options.RequestsPerDevice);
+            Directory.CreateDirectory(directory);
+            string path = Path.Join(directory, fileName);
+
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable devices = database.CreateTable(
+                "CaptureDevices",
+                new Field<long>("DeviceType"),
+                new Field<string>("DeviceName"),
+                new Field<long>("CaptureType"));
+            IDataTable captures = database.CreateTable(
+                WebServiceCaptureMethod.TableName,
+                new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessName),
+                new Field<long>(WebProxyCaptureSchema.ClientProcessId),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessStartTime),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessStatus));
+
+            long requestNumber = 0;
+            for (var device = 0; device < options.Devices; device++)
+            {
+                string deviceName = $"Synthetic process device {device + 1}";
+                devices.AddRow((long)DeviceType.LocalPC, deviceName, (long)CaptureType.WebProxy);
+                for (var request = 0; request < options.RequestsPerDevice; request++)
+                {
+                    requestNumber++;
+                    RequestData data = CreateRequestData(device, request, options.RequestsPerDevice, false, false);
+                    DateTime started = SyntheticStartUtc.AddSeconds(requestNumber);
+                    captures.AddRow(
+                        deviceName,
+                        requestNumber,
+                        requestNumber,
+                        ProxyConnectionModel.ToDateTimeString(started),
+                        ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)),
+                        "https",
+                        data.Host,
+                        "443",
+                        "POST",
+                        data.PathAndQuery,
+                        "200",
+                        data.RequestHeaders,
+                        Convert.ToBase64String(data.RequestBody),
+                        data.ResponseHeaders,
+                        Convert.ToBase64String(data.ResponseBody),
+                        "127.0.0.1",
+                        options.ProcessName ?? string.Empty,
+                        options.ProcessId > 0 ? options.ProcessId : 0,
+                        ProxyConnectionModel.ToDateTimeString(started.AddMinutes(-5)),
+                        options.ProcessStatus ?? string.Empty);
+                }
+            }
+
+            database.SaveToFile(path);
+            return path;
+        }
+
+        internal static string WriteCorruptSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            File.WriteAllBytes(
+                path,
+                Encoding.ASCII.GetBytes(
+                    "not a zip archive"));
             return path;
         }
 
@@ -298,15 +434,33 @@ namespace XMAT.Tests.Fixtures
                         request,
                         $"Malformed skipped header {Canary}");
                 }
+                if (frames[index] is
+                    SyntheticSazFrameKind.MissingHost or
+                    SyntheticSazFrameKind.MalformedHost or
+                    SyntheticSazFrameKind.EmptyHostWithPort)
+                {
+                    request = ReplaceStartLine(
+                        request,
+                        $"POST {data.PathAndQuery} HTTP/1.1");
+                }
                 if (frames[index] ==
-                    SyntheticSazFrameKind.MissingHost)
+                    SyntheticSazFrameKind.AbsoluteTargetIdnTooLong)
+                {
+                    request = ReplaceStartLine(
+                        request,
+                        $"POST http://{IdnTooLongHost}{data.PathAndQuery} HTTP/1.1");
+                }
+                if (frames[index] is
+                    SyntheticSazFrameKind.MissingHost or
+                    SyntheticSazFrameKind.AbsoluteTargetMissingHost)
                 {
                     request = RemoveHeader(
                         request,
                         "Host:");
                 }
-                else if (frames[index] ==
-                    SyntheticSazFrameKind.MalformedHost)
+                else if (frames[index] is
+                    SyntheticSazFrameKind.MalformedHost or
+                    SyntheticSazFrameKind.AbsoluteTargetMalformedHost)
                 {
                     request = ReplaceHeader(
                         request,
@@ -320,6 +474,30 @@ namespace XMAT.Tests.Fixtures
                         request,
                         "Host:",
                         "Host: :8080");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetConflictingHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        $"Host: {ConflictingHost}");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetEmptyHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        "Host:");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetBlankHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        "Host:   ");
                 }
                 string response = frames[index] ==
                     SyntheticSazFrameKind.MalformedResponseStartLine
@@ -338,12 +516,15 @@ namespace XMAT.Tests.Fixtures
                     archive,
                     $"raw/{frame:D4}_c.txt",
                     request,
-                    Encoding.ASCII);
-                WriteTextEntry(
-                    archive,
-                    $"raw/{frame:D4}_s.txt",
-                    response,
-                    Encoding.ASCII);
+                    Encoding.Latin1);
+                if (frames[index] != SyntheticSazFrameKind.RequestOnly)
+                {
+                    WriteTextEntry(
+                        archive,
+                        $"raw/{frame:D4}_s.txt",
+                        response,
+                        Encoding.ASCII);
+                }
                 WriteTextEntry(
                     archive,
                     $"raw/{frame:D4}_m.xml",
@@ -351,6 +532,49 @@ namespace XMAT.Tests.Fixtures
                     Encoding.UTF8);
             }
 
+            return path;
+        }
+
+        internal static string WriteZipBombSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            ZipArchiveEntry entry =
+                archive.CreateEntry(
+                    "raw/1_c.txt",
+                    CompressionLevel.Optimal);
+            using Stream stream =
+                entry.Open();
+            var buffer =
+                new byte[64 * 1024];
+            long remaining =
+                AnalysisLimits
+                    .Default
+                    .MaxEntryBytes +
+                1;
+            while (remaining > 0)
+            {
+                int count =
+                    (int)Math.Min(
+                        buffer.Length,
+                        remaining);
+                stream.Write(
+                    buffer,
+                    0,
+                    count);
+                remaining -= count;
+            }
             return path;
         }
 
@@ -565,6 +789,154 @@ namespace XMAT.Tests.Fixtures
             return path;
         }
 
+        internal static string WriteOpaqueEncodedBodySaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            WriteTextEntry(
+                archive,
+                "_index.htm",
+                "<html><body>Synthetic capture</body></html>",
+                Encoding.UTF8);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            byte[] body =
+                CompressGzip(
+                    new byte[64 * 1024]);
+            byte[] headers =
+                Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Encoding: gzip\r\n" +
+                    $"Content-Length: {body.Length}\r\n\r\n");
+            var response =
+                new byte[
+                    headers.Length +
+                    body.Length];
+            Buffer.BlockCopy(
+                headers,
+                0,
+                response,
+                0,
+                headers.Length);
+            Buffer.BlockCopy(
+                body,
+                0,
+                response,
+                headers.Length,
+                body.Length);
+            WriteBytesEntry(
+                archive,
+                "raw/0001_s.txt",
+                response);
+            WriteTextEntry(
+                archive,
+                "raw/0001_m.xml",
+                CreateMetadata(
+                    1,
+                    "10.0.0.1"),
+                Encoding.UTF8);
+            return path;
+        }
+
+        internal static string WriteMixedIncompleteSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            WriteTextEntry(
+                archive,
+                "raw/0001_s.txt",
+                request.ResponseText,
+                Encoding.ASCII);
+            WriteTextEntry(
+                archive,
+                "raw/0001_m.xml",
+                CreateMetadata(
+                    1,
+                    "10.0.0.1"),
+                Encoding.UTF8);
+            WriteTextEntry(
+                archive,
+                "raw/0002_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            return path;
+        }
+
+        internal static string WriteIncompleteSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            return path;
+        }
+
         private static RequestData CreateRequestData(
             int group,
             int request,
@@ -703,6 +1075,25 @@ namespace XMAT.Tests.Fixtures
             entry.LastWriteTime = new DateTimeOffset(SyntheticStartUtc);
             using var stream = entry.Open();
             stream.Write(bytes, 0, bytes.Length);
+        }
+
+        private static byte[] CompressGzip(
+            byte[] value)
+        {
+            using var output =
+                new MemoryStream();
+            using (var gzip =
+                new GZipStream(
+                    output,
+                    CompressionLevel.Optimal,
+                    true))
+            {
+                gzip.Write(
+                    value,
+                    0,
+                    value.Length);
+            }
+            return output.ToArray();
         }
 
         private static int FindEndOfCentralDirectory(byte[] bytes)

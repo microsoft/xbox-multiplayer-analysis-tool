@@ -37,6 +37,59 @@ namespace XMAT.Tests
                 schema.Tables.Keys.OrderBy(
                     name => name,
                     StringComparer.Ordinal));
+            Assert.Equal(
+                CaptureTextSemantics.Literal,
+                schema.TextSemantics);
+        }
+
+        [Theory]
+        [InlineData(
+            CaptureTextFormat.AmbiguousUserVersion,
+            (int)CaptureTextSemantics.AmbiguousUnmarked)]
+        [InlineData(
+            CaptureTextFormat.LiteralUserVersion,
+            (int)CaptureTextSemantics.Literal)]
+        public void Preflight_ClassifiesTheCaptureTextMarker(
+            int userVersion,
+            int expectedSemantics)
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory.Path,
+                    "marker.xmatcap",
+                    userVersion: checked((uint)userVersion));
+
+            SqLtValidatedSchema schema =
+                ValidateGui(path);
+
+            Assert.Equal(
+                (CaptureTextSemantics)expectedSemantics,
+                schema.TextSemantics);
+        }
+
+        [Fact]
+        public void FutureMarker_IsRefusedBeforeSqliteOpens()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory.Path,
+                    "future.xmatcap",
+                    userVersion: 2);
+            bool sqliteOpening = false;
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () => new SqLtReadonlyDatabase(
+                        path,
+                        SqLtSchemaProfile.CreateGui(),
+                        _ => sqliteOpening = true));
+
+            Assert.Equal(
+                SqLtSchemaFailure.UnsupportedVersion,
+                exception.Failure);
+            Assert.False(sqliteOpening);
         }
 
         [Fact]
@@ -72,6 +125,84 @@ namespace XMAT.Tests
                 16 + SqLtSchemaProfile.MaxExtensionColumns,
                 schema.Tables["WebProxyConnections"]
                     .Columns.Count);
+            Assert.Equal(
+                CaptureTextSemantics.AmbiguousUnmarked,
+                schema.TextSemantics);
+        }
+
+        [Fact]
+        public void Preflight_AcceptsKnownOptionalProcessColumnsInAnyTrailingOrder()
+        {
+            using var directory = new TestDirectory();
+            string webDdl = HostileSqliteSchemas.AppendWebProxyColumns(
+                $"{WebProxyCaptureSchema.ClientProcessStatus} TEXT",
+                "UnrelatedExtension INTEGER",
+                $"{WebProxyCaptureSchema.ClientProcessStartTime} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessName} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessId} INTEGER");
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-columns-permuted.xmatcap",
+                webDdl);
+
+            SqLtValidatedSchema schema = ValidateGui(path);
+
+            Assert.Equal(
+                new[]
+                {
+                    WebProxyCaptureSchema.ClientProcessStatus,
+                    "UnrelatedExtension",
+                    WebProxyCaptureSchema.ClientProcessStartTime,
+                    WebProxyCaptureSchema.ClientProcessName,
+                    WebProxyCaptureSchema.ClientProcessId,
+                },
+                schema.Tables["WebProxyConnections"].Columns.Skip(16).Select(column => column.Name));
+        }
+
+        [Theory]
+        [InlineData("ClientProcessName INTEGER")]
+        [InlineData("ClientProcessId TEXT")]
+        [InlineData("ClientProcessStartTime INTEGER")]
+        [InlineData("ClientProcessStatus INTEGER")]
+        [InlineData("ClientProcessName")]
+        public void Preflight_RejectsMistypedKnownOptionalProcessColumns(string wrongDeclaration)
+        {
+            using var directory = new TestDirectory();
+            string columnName = wrongDeclaration.Split(' ')[0];
+            string expectedDeclaration = columnName == WebProxyCaptureSchema.ClientProcessId
+                ? columnName + " INTEGER"
+                : columnName + " TEXT";
+            string webDdl = HostileSqliteSchemas.WebProxyConnectionsWithProcessDdl.Replace(
+                expectedDeclaration,
+                wrongDeclaration,
+                StringComparison.Ordinal);
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-column-wrong-type.xmatcap",
+                webDdl);
+
+            SqLtSchemaException exception = Assert.Throws<SqLtSchemaException>(() => ValidateGui(path));
+
+            Assert.Equal(SqLtSchemaFailure.Unsupported, exception.Failure);
+        }
+
+        [Theory]
+        [InlineData("ResponseTrailers INTEGER")]
+        [InlineData("ResponseBodyTruncatedAt TEXT")]
+        [InlineData("ResponseBodyTruncatedAt")]
+        [InlineData("HeadersUninspectable TEXT")]
+        [InlineData("HeadersUninspectable")]
+        public void Preflight_RejectsMistypedKnownOptionalResponseAndHeaderColumns(string wrongDeclaration)
+        {
+            using var directory = new TestDirectory();
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "response-column-wrong-type.xmatcap",
+                HostileSqliteSchemas.AppendWebProxyColumns(wrongDeclaration));
+
+            SqLtSchemaException exception = Assert.Throws<SqLtSchemaException>(() => ValidateGui(path));
+
+            Assert.Equal(SqLtSchemaFailure.Unsupported, exception.Failure);
         }
 
         [Theory]
@@ -99,6 +230,49 @@ namespace XMAT.Tests
 
             Assert.Equal(
                 SqLtSchemaFailure.Unsupported,
+                exception.Failure);
+        }
+
+        [Fact]
+        public void Preflight_DistinguishesSqliteWithoutXmatTables()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateDatabase(
+                    directory.Path,
+                    "not-xmat.sqlite",
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.NotXmat,
+                exception.Failure);
+        }
+
+        [Fact]
+        public void Preflight_UnsupportedMarkerPrecedesUtf16Classification()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateUtf16Database(
+                    directory.Path,
+                    "utf16-future.sqlite",
+                    2,
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.UnsupportedVersion,
                 exception.Failure);
         }
 
@@ -179,17 +353,26 @@ namespace XMAT.Tests
                 exception.Failure);
         }
 
-        [Fact]
-        public void Preflight_TinyFilesAreInvalid()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Preflight_TinyFilesAreInvalid(
+            bool cliProfile)
         {
             using var stream =
                 new MemoryStream(new byte[100]);
 
+            // The CLI profile's database limit is smaller than the file, but a file too small to be a database is
+            // reported as invalid rather than as over the limit.
             SqLtSchemaException exception =
                 Assert.Throws<SqLtSchemaException>(
                     () => SqLtSchemaPreflight.Validate(
                         stream,
-                        SqLtSchemaProfile.CreateGui()));
+                        cliProfile
+                            ? SqLtSchemaProfile.CreateCli(
+                                64,
+                                1024 * 1024)
+                            : SqLtSchemaProfile.CreateGui()));
 
             Assert.Equal(
                 SqLtSchemaFailure.Invalid,
@@ -342,6 +525,56 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void CliProfile_MaterializesOnlyItsTablesAndReadsBackLimits()
+        {
+            using var directory = new TestDirectory();
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "profiles.xmatcap",
+                HostileSqliteSchemas.LongExtensionDdl(
+                    SqLtSchemaProfile.MaxExtensionColumns),
+                includeNetworkTrace: true);
+
+            using var database =
+                new SqLtReadonlyDatabase(
+                    path,
+                    SqLtSchemaProfile.CreateCli(
+                        32L * 1024 * 1024));
+
+            Assert.Equal(
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                database.TableNames().OrderBy(
+                    name => name,
+                    StringComparer.Ordinal));
+            Assert.Null(
+                database.TableByName(
+                    "NetworkTracePackets"));
+            Assert.Equal(
+                33 * 1024 * 1024,
+                database.AppliedLimits.Length);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxSqlLength,
+                database.AppliedLimits.SqlLength);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxColumns,
+                database.AppliedLimits.Columns);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxExpressionDepth,
+                database.AppliedLimits.ExpressionDepth);
+
+            SqLtSchemaProfile gui =
+                SqLtSchemaProfile.CreateGui();
+            Assert.Null(
+                gui.MaxDatabaseBytes);
+            Assert.Null(
+                gui.MaxValueBytes);
+        }
+
+        [Fact]
         public void QuotedKeywordExtensionColumn_RemainsReadable()
         {
             using var directory = new TestDirectory();
@@ -465,8 +698,12 @@ namespace XMAT.Tests
                         SqLtSchemaProfile.CreateGui()));
 
             Assert.Equal(
-                SqLtSchemaFailure.Unsupported,
+                SqLtSchemaFailure.WriteAheadLog,
                 exception.Failure);
+            Assert.Equal(
+                "CAPTURE_OPEN_SCHEMA_ERROR",
+                MainWindow.CaptureOpenErrorKey(
+                    exception.Failure));
             Assert.Equal(
                 before,
                 DirectoryState(directory.Path));
@@ -788,6 +1025,11 @@ namespace XMAT.Tests
                         .TableByName("WebProxyConnections")
                         .Dataset.DataRecords
                         .Count());
+                // The hash is taken through the guarded handle, not the path that now leads to the other capture.
+                Assert.Equal(
+                    SHA256.HashData(
+                        File.ReadAllBytes(checkedCapture)),
+                    database.ComputeSha256());
             }
             finally
             {
@@ -887,6 +1129,84 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Open_RefusesADatabaseLargerThanTheCliProfileAllows()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "capture.xmatcap");
+            long length = new FileInfo(path).Length;
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () => new SqLtReadonlyDatabase(
+                        path,
+                        SqLtSchemaProfile.CreateCli(
+                            length - 1,
+                            1024 * 1024)));
+
+            Assert.Equal(
+                SqLtSchemaFailure.Limit,
+                exception.Failure);
+            using var database =
+                new SqLtReadonlyDatabase(
+                    path,
+                    SqLtSchemaProfile.CreateCli(
+                        length,
+                        1024 * 1024));
+            Assert.NotNull(
+                database.TableByName(
+                    "WebProxyConnections"));
+        }
+
+        [Fact]
+        public void ComputeSha256_HashesTheGuardedFileWithoutDisturbingReads()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "capture.xmatcap",
+                new SyntheticXmatcapOptions(
+                    RequestsPerDevice: 1000));
+            // Larger than one 64 KiB read, so the hash spans several reads.
+            Assert.True(
+                new FileInfo(path).Length > 64 * 1024);
+            byte[] expected =
+                SHA256.HashData(
+                    File.ReadAllBytes(path));
+            var database =
+                new SqLtReadonlyDatabase(path);
+            try
+            {
+                Assert.Equal(
+                    expected,
+                    database.ComputeSha256());
+                Assert.Equal(
+                    1000,
+                    database
+                        .TableByName("WebProxyConnections")
+                        .Dataset.DataRecords
+                        .Count());
+                Assert.Equal(
+                    expected,
+                    database.ComputeSha256());
+                using var cancellation =
+                    new CancellationTokenSource();
+                cancellation.Cancel();
+                Assert.Throws<OperationCanceledException>(
+                    () => database.ComputeSha256(
+                        cancellation.Token));
+            }
+            finally
+            {
+                database.Dispose();
+            }
+
+            Assert.Throws<ObjectDisposedException>(
+                () => database.ComputeSha256());
+        }
+
+        [Fact]
         public void PackagedSqliteBinary_HasThePinnedIdentity()
         {
             string path = System.IO.Path.Combine(
@@ -978,15 +1298,7 @@ namespace XMAT.Tests
 
             internal string Path { get; }
 
-            public void Dispose()
-            {
-                if (Directory.Exists(Path))
-                {
-                    Directory.Delete(
-                        Path,
-                        true);
-                }
-            }
+            public void Dispose() => TestFolderCleanup.Delete(Path);
         }
     }
 }

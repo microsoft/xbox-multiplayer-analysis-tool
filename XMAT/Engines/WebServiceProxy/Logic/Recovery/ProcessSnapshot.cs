@@ -6,6 +6,8 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.WebServiceCapture
 {
@@ -17,6 +19,9 @@ namespace XMAT.WebServiceCapture
         // The fixed part of an entry; the threads and image name of its process follow it.
         internal const int EntrySize = 256;
         internal const int CreateTimeOffset = 32;
+        internal const int ImageNameLengthOffset = 56;
+        internal const int ImageNameMaximumLengthOffset = 58;
+        internal const int ImageNamePointerOffset = 64;
         internal const int ProcessIdOffset = 80;
         private const int InitialSize = 1 << 20;
         private const int MaximumSize = 64 << 20;
@@ -64,7 +69,96 @@ namespace XMAT.WebServiceCapture
                 {
                     return times;
                 }
-                if (next < EntrySize)
+                if (next < EntrySize || (next & 7) != 0)
+                {
+                    return null;
+                }
+                offset += next;
+            }
+            return null;
+        }
+
+        internal static IReadOnlyDictionary<int, ProcessIdentityData> ParseIdentities(
+            byte[] buffer,
+            int length,
+            IntPtr pinnedBufferAddress)
+        {
+            if (buffer == null || length <= 0 || length > buffer.Length || pinnedBufferAddress == IntPtr.Zero)
+            {
+                return null;
+            }
+            long baseAddress = pinnedBufferAddress.ToInt64();
+            long endAddress;
+            try
+            {
+                endAddress = checked(baseAddress + length);
+            }
+            catch (OverflowException)
+            {
+                return null;
+            }
+            var identities = new Dictionary<int, ProcessIdentityData>();
+            long offset = 0;
+            while (offset + EntrySize <= length)
+            {
+                var entry = new ReadOnlySpan<byte>(buffer, (int)offset, EntrySize);
+                uint next = BinaryPrimitives.ReadUInt32LittleEndian(entry);
+                long created = BinaryPrimitives.ReadInt64LittleEndian(entry.Slice(CreateTimeOffset));
+                ulong rawId = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(ProcessIdOffset));
+                ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(entry.Slice(ImageNameLengthOffset));
+                ushort maximumNameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                    entry.Slice(ImageNameMaximumLengthOffset));
+                long nameAddress = BinaryPrimitives.ReadInt64LittleEndian(entry.Slice(ImageNamePointerOffset));
+                if (rawId > int.MaxValue ||
+                    created < 0 ||
+                    (nameLength & 1) != 0 ||
+                    (maximumNameLength & 1) != 0 ||
+                    maximumNameLength < nameLength)
+                {
+                    return null;
+                }
+                string name;
+                if (nameLength == 0)
+                {
+                    name = string.Empty;
+                }
+                else
+                {
+                    long nameEnd;
+                    try
+                    {
+                        nameEnd = checked(nameAddress + nameLength);
+                    }
+                    catch (OverflowException)
+                    {
+                        return null;
+                    }
+                    if (nameAddress < baseAddress || nameEnd > endAddress || ((nameAddress - baseAddress) & 1) != 0)
+                    {
+                        return null;
+                    }
+                    int nameOffset = checked((int)(nameAddress - baseAddress));
+                    name = Encoding.Unicode.GetString(buffer, nameOffset, nameLength);
+                }
+                DateTimeOffset startTime;
+                try
+                {
+                    startTime = DateTimeOffset.FromFileTime(created).ToUniversalTime();
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    return null;
+                }
+                int processId = (int)rawId;
+                if (!identities.TryAdd(processId, new ProcessIdentityData(processId, startTime, name)))
+                {
+                    return null;
+                }
+                if (next == 0)
+                {
+                    return identities;
+                }
+                if (next < EntrySize || (next & 7) != 0)
                 {
                     return null;
                 }

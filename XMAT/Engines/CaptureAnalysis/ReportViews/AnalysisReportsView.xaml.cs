@@ -17,6 +17,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
         public AnalysisReportsView()
         {
             InitializeComponent();
+            SourceStaleBanner.Text = Localization.GetLocalizedString("ANALYSIS_SOURCE_STALE");
             Loaded += (_, _) => RecordReport();
         }
 
