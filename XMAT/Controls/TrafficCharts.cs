@@ -385,7 +385,7 @@ namespace XMAT
     // Which cell of the traffic overview a TrafficOverviewPanel child belongs to.
     public enum TrafficOverviewCell
     {
-        // The requests and the divider after them.
+        // The requests count and the divider after the requests.
         Always,
         // The status bar with its legend.
         Chart,
@@ -395,6 +395,8 @@ namespace XMAT
         Text,
         // The busiest hosts and the divider before them.
         Hosts,
+        // The requests per second line beside the count, with the rate above its end while capturing.
+        RequestsLine,
     }
 
     // How much of the traffic overview fits its width, from all of it to the least.
@@ -405,11 +407,13 @@ namespace XMAT
         WithoutHosts,
         WithoutHostsOrNoStatus,
         StatusAsText,
+        StatusAsTextWithoutRequestsLine,
     }
 
     // Lays the traffic overview's cells side by side and drops what doesn't fit: first No status leaves the status chart,
-    // then the busiest hosts go, then the status chart gives way to the status as text. A dropped cell is hidden rather
-    // than collapsed, so it is still measured and returns as soon as it fits; hidden cells take no room, focus or clicks.
+    // then the busiest hosts go, then the status chart gives way to the status as text, and last the requests line goes
+    // before the status is cut off. A dropped cell is hidden rather than collapsed, so it is still measured and returns as
+    // soon as it fits; hidden cells take no room, focus or clicks.
     public sealed class TrafficOverviewPanel : Panel
     {
         public static readonly DependencyProperty CellProperty = DependencyProperty.RegisterAttached(
@@ -443,14 +447,21 @@ namespace XMAT
         // Raised during layout, once the cells that no longer fit are hidden.
         internal event EventHandler ReductionChanged;
 
-        // The fullest layout that fits WIDTH, from the widths of the cells. Without No status, the chart is never wider.
+        // The fullest layout that fits WIDTH, from the widths of the cells: the requests count (ALWAYS) and its line, the
+        // status chart with and without No status, the status as text, and the busiest hosts. Without No status, the
+        // chart is never wider.
         internal static TrafficOverviewReduction Reduce(
-            double width, double always, double chart, double compactChart, double hosts, double hostsReserve) =>
-            always + chart + hosts + hostsReserve <= width ? TrafficOverviewReduction.None
-            : always + compactChart + hosts + hostsReserve <= width ? TrafficOverviewReduction.WithoutNoStatus
-            : always + chart <= width ? TrafficOverviewReduction.WithoutHosts
-            : always + compactChart <= width ? TrafficOverviewReduction.WithoutHostsOrNoStatus
-            : TrafficOverviewReduction.StatusAsText;
+            double width, double always, double requestsLine, double chart, double compactChart, double text,
+            double hosts, double hostsReserve)
+        {
+            double requests = always + requestsLine;
+            return requests + chart + hosts + hostsReserve <= width ? TrafficOverviewReduction.None
+                : requests + compactChart + hosts + hostsReserve <= width ? TrafficOverviewReduction.WithoutNoStatus
+                : requests + chart <= width ? TrafficOverviewReduction.WithoutHosts
+                : requests + compactChart <= width ? TrafficOverviewReduction.WithoutHostsOrNoStatus
+                : requests + text <= width ? TrafficOverviewReduction.StatusAsText
+                : TrafficOverviewReduction.StatusAsTextWithoutRequestsLine;
+        }
 
         internal static bool IsShown(TrafficOverviewCell cell, TrafficOverviewReduction reduction) => cell switch
         {
@@ -458,15 +469,17 @@ namespace XMAT
                 reduction is TrafficOverviewReduction.None or TrafficOverviewReduction.WithoutHosts,
             TrafficOverviewCell.CompactChart =>
                 reduction is TrafficOverviewReduction.WithoutNoStatus or TrafficOverviewReduction.WithoutHostsOrNoStatus,
-            TrafficOverviewCell.Text => reduction == TrafficOverviewReduction.StatusAsText,
+            TrafficOverviewCell.Text =>
+                reduction is TrafficOverviewReduction.StatusAsText or TrafficOverviewReduction.StatusAsTextWithoutRequestsLine,
             TrafficOverviewCell.Hosts =>
                 reduction is TrafficOverviewReduction.None or TrafficOverviewReduction.WithoutNoStatus,
+            TrafficOverviewCell.RequestsLine => reduction != TrafficOverviewReduction.StatusAsTextWithoutRequestsLine,
             _ => true,
         };
 
         protected override Size MeasureOverride(Size availableSize)
         {
-            var widths = new double[5];
+            var widths = new double[Enum.GetValues<TrafficOverviewCell>().Length];
             double height = 0;
             foreach (UIElement child in InternalChildren)
             {
@@ -476,8 +489,9 @@ namespace XMAT
             }
 
             TrafficOverviewReduction reduction = Reduce(
-                availableSize.Width, widths[(int)TrafficOverviewCell.Always], widths[(int)TrafficOverviewCell.Chart],
-                widths[(int)TrafficOverviewCell.CompactChart], widths[(int)TrafficOverviewCell.Hosts], HostsReserve);
+                availableSize.Width, widths[(int)TrafficOverviewCell.Always], widths[(int)TrafficOverviewCell.RequestsLine],
+                widths[(int)TrafficOverviewCell.Chart], widths[(int)TrafficOverviewCell.CompactChart],
+                widths[(int)TrafficOverviewCell.Text], widths[(int)TrafficOverviewCell.Hosts], HostsReserve);
             bool changed = reduction != Reduction;
             SetValue(ReductionPropertyKey, reduction);
             double used = 0;
@@ -514,6 +528,38 @@ namespace XMAT
             }
 
             return finalSize;
+        }
+    }
+
+    // Asks for no width while Overhangs, so its child, laid out at full width, runs over the cell after it, as the traffic
+    // overview's Requests label runs over the requests line. Otherwise it asks for its child's width like any decorator.
+    public sealed class OverhangDecorator : Decorator
+    {
+        public static readonly DependencyProperty OverhangsProperty = DependencyProperty.Register(
+            nameof(Overhangs), typeof(bool), typeof(OverhangDecorator),
+            new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsMeasure));
+
+        public bool Overhangs
+        {
+            get => (bool)GetValue(OverhangsProperty);
+            set => SetValue(OverhangsProperty, value);
+        }
+
+        protected override Size MeasureOverride(Size constraint)
+        {
+            if (Child == null)
+            {
+                return default;
+            }
+
+            Child.Measure(new Size(double.PositiveInfinity, constraint.Height));
+            return new Size(Overhangs ? 0 : Child.DesiredSize.Width, Child.DesiredSize.Height);
+        }
+
+        protected override Size ArrangeOverride(Size arrangeSize)
+        {
+            Child?.Arrange(new Rect(0, 0, Math.Max(arrangeSize.Width, Child.DesiredSize.Width), arrangeSize.Height));
+            return arrangeSize;
         }
     }
 }

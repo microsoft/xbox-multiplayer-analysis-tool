@@ -52,27 +52,37 @@
     <Grid>
         <Border x:Name="Strip" Style="{DynamicResource TrafficOverviewStripStyle}">
             <Grid>
-                <local:TrafficOverviewPanel x:Name="Cells" Style="{DynamicResource TrafficOverviewCellsStyle}">
-                    <!-- Requests: the count, the rate in the last second while capturing, and requests per second over the
-                         capture. Screen readers read the cell as one line from the count. -->
+                <!-- The two requests cells share their rows' heights, so the count lines up with its line. -->
+                <local:TrafficOverviewPanel x:Name="Cells" Style="{DynamicResource TrafficOverviewCellsStyle}"
+                                            Grid.IsSharedSizeScope="True">
+                    <!-- Requests: the count. Screen readers read the cell as one line from the count. -->
                     <Grid x:Name="RequestsCell" VerticalAlignment="Top">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
                         </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <DockPanel Grid.ColumnSpan="2" Style="{DynamicResource TrafficOverviewLabelRowStyle}">
-                            <TextBlock x:Name="RateText" DockPanel.Dock="Right" Style="{DynamicResource TrafficOverviewRateStyle}"
-                                       Text="{Binding RateText}"
-                                       Visibility="{Binding IsRateShown, Converter={StaticResource VisibleWhenTrue}}"/>
-                            <TextBlock x:Name="RequestsLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                        <!-- While the line shows, the label runs over it, so the count keeps the line 10px away. -->
+                        <DockPanel Style="{DynamicResource TrafficOverviewLabelRowStyle}">
+                            <local:OverhangDecorator Overhangs="{Binding IsVisible, ElementName=RequestsLineCell}">
+                                <TextBlock x:Name="RequestsLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                            </local:OverhangDecorator>
                         </DockPanel>
                         <TextBlock x:Name="TotalText" Grid.Row="1" Style="{DynamicResource TrafficOverviewTotalStyle}"
                                    Text="{Binding TotalText}" AutomationProperties.Name="{Binding RequestsName}"/>
-                        <local:TrafficSparkline x:Name="Sparkline" Grid.Row="1" Grid.Column="1"
+                    </Grid>
+                    <!-- Requests per second over the capture, with the rate in the last second above the line's end while
+                         capturing. It is the last to go, when even the status as text doesn't fit. -->
+                    <Grid x:Name="RequestsLineCell" local:TrafficOverviewPanel.Cell="RequestsLine" VerticalAlignment="Top">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Style="{DynamicResource TrafficOverviewLabelRowStyle}">
+                            <TextBlock x:Name="RateText" DockPanel.Dock="Right" Style="{DynamicResource TrafficOverviewRateStyle}"
+                                       Text="{Binding RateText}"
+                                       Visibility="{Binding IsRateShown, Converter={StaticResource VisibleWhenTrue}}"/>
+                        </DockPanel>
+                        <local:TrafficSparkline x:Name="Sparkline" Grid.Row="1"
                                                 Style="{DynamicResource TrafficOverviewSparklineStyle}"
                                                 Values="{Binding RequestsPerSecond}"/>
                     </Grid>

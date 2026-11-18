@@ -238,7 +238,8 @@ Select a status class (in the bar or its legend) or a host to set the **Status**
 **Host** filter to it alone; select it again to clear that filter. From the keyboard,
 Tab moves to the status classes and to the hosts, the arrow keys move within them, and
 Enter selects. In a narrow pane the busiest hosts go first, then the status becomes a
-line of text with successes and errors. The arrow at the overview's top right hides it,
+line of text with successes and errors, and last the line of requests per second goes,
+so the status isn't cut off. The arrow at the overview's top right hides it,
 and **Show overview** brings it back in every capture tab; XMAT remembers the choice.
 
 ### Capture timeline

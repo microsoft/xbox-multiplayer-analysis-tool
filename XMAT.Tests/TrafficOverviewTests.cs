@@ -89,14 +89,17 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void NarrowWidths_DropNoStatusThenTheHostsThenShowTheStatusAsText()
+        public void NarrowWidths_DropNoStatusThenTheHostsThenShowTheStatusAsText_AndCutNothingOff()
         {
-            // Requests 213, chart 290 or 230 without No status, hosts 239 with 8 kept for the hide button.
-            Assert.Equal(TrafficOverviewReduction.None, TrafficOverviewPanel.Reduce(750, 213, 290, 230, 239, 8));
-            Assert.Equal(TrafficOverviewReduction.WithoutNoStatus, TrafficOverviewPanel.Reduce(700, 213, 290, 230, 239, 8));
-            Assert.Equal(TrafficOverviewReduction.WithoutHosts, TrafficOverviewPanel.Reduce(600, 213, 290, 230, 239, 8));
-            Assert.Equal(TrafficOverviewReduction.WithoutHostsOrNoStatus, TrafficOverviewPanel.Reduce(450, 213, 290, 230, 239, 8));
-            Assert.Equal(TrafficOverviewReduction.StatusAsText, TrafficOverviewPanel.Reduce(400, 213, 290, 230, 239, 8));
+            // Requests 63 and its line 150, chart 290 or 230 without No status, the status as text 160, and hosts 239 with
+            // 8 kept for the hide button.
+            Assert.Equal(TrafficOverviewReduction.None, TrafficOverviewPanel.Reduce(750, 63, 150, 290, 230, 160, 239, 8));
+            Assert.Equal(TrafficOverviewReduction.WithoutNoStatus, TrafficOverviewPanel.Reduce(700, 63, 150, 290, 230, 160, 239, 8));
+            Assert.Equal(TrafficOverviewReduction.WithoutHosts, TrafficOverviewPanel.Reduce(600, 63, 150, 290, 230, 160, 239, 8));
+            Assert.Equal(TrafficOverviewReduction.WithoutHostsOrNoStatus, TrafficOverviewPanel.Reduce(450, 63, 150, 290, 230, 160, 239, 8));
+            Assert.Equal(TrafficOverviewReduction.StatusAsText, TrafficOverviewPanel.Reduce(400, 63, 150, 290, 230, 160, 239, 8));
+            Assert.Equal(TrafficOverviewReduction.StatusAsTextWithoutRequestsLine,
+                TrafficOverviewPanel.Reduce(300, 63, 150, 290, 230, 160, 239, 8));
 
             _application.Run(window =>
             {
@@ -104,20 +107,43 @@ namespace XMAT.Tests
                 TrafficOverview overview = Show(window, SampleRows(), 1000);
                 Assert.Equal(TrafficOverviewReduction.None, overview.Cells.Reduction);
                 Assert.True(overview.HostList.IsVisible);
+                Assert.True(overview.Sparkline.IsVisible);
                 Assert.Contains(overview.StatusLegend.Items.Cast<TrafficOverviewPart>(),
                     part => part.StatusClass == TrafficStatusClass.None);
+                // The Requests label runs over the line, so the line keeps its place beside the count.
+                double countEnds = overview.TotalText.TransformToAncestor(overview.Cells)
+                    .Transform(new Point(overview.TotalText.ActualWidth + overview.TotalText.Margin.Right, 0)).X;
+                Assert.Equal(countEnds, overview.Sparkline.TransformToAncestor(overview.Cells).Transform(new Point()).X, 1);
 
                 ((FrameworkElement)overview.Parent).Width = 380;
                 WpfTestHost.Pump();
-                Assert.Equal(TrafficOverviewReduction.StatusAsText, overview.Cells.Reduction);
+                Assert.Equal(TrafficOverviewReduction.StatusAsTextWithoutRequestsLine, overview.Cells.Reduction);
                 Assert.False(overview.HostList.IsVisible);
                 Assert.False(overview.StatusBar.IsVisible);
+                Assert.False(overview.Sparkline.IsVisible);
                 Assert.True(overview.StatusText.IsVisible);
                 // Successes and errors, as in "2xx 1,102 · 4xx 63 · 5xx 14".
                 Assert.Equal(new[] { "2xx", "4xx", "5xx" },
                     overview.StatusText.Items.Cast<TrafficOverviewPart>().Select(part => part.Label));
                 Assert.Equal(new[] { false, true, true },
                     overview.StatusText.Items.Cast<TrafficOverviewPart>().Select(part => part.ShowSeparator));
+                // The line went rather than the status running past the overview's edge, where it would be cut off.
+                Assert.All(new FrameworkElement[] { overview.TotalText, overview.StatusText }, shown =>
+                    Assert.True(shown.TransformToAncestor(overview.Cells).TransformBounds(new Rect(shown.RenderSize)).Right
+                        <= overview.Cells.ActualWidth + 0.5, $"{shown.Name} runs past the overview's edge."));
+                // Without the line, the Requests label takes its own room rather than running over the divider.
+                Assert.True(overview.RequestsCell.ActualWidth + 0.5 >= overview.RequestsLabel.ActualWidth);
+
+                // With room for the status as text and the line, but not the chart, the line returns.
+                double CellWidth(TrafficOverviewCell cell) => overview.Cells.Children.Cast<UIElement>()
+                    .Where(child => TrafficOverviewPanel.GetCell(child) == cell).Sum(child => child.DesiredSize.Width);
+                double around = ((FrameworkElement)overview.Parent).Width - overview.Cells.ActualWidth;
+                double requests = CellWidth(TrafficOverviewCell.Always) + CellWidth(TrafficOverviewCell.RequestsLine);
+                Assert.True(CellWidth(TrafficOverviewCell.Text) + 1 < CellWidth(TrafficOverviewCell.CompactChart));
+                ((FrameworkElement)overview.Parent).Width = around + requests + CellWidth(TrafficOverviewCell.Text) + 1;
+                WpfTestHost.Pump();
+                Assert.Equal(TrafficOverviewReduction.StatusAsText, overview.Cells.Reduction);
+                Assert.True(overview.Sparkline.IsVisible);
             });
         }
 
