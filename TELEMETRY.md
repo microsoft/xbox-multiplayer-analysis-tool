@@ -1,13 +1,13 @@
 # Telemetry schema and sample generation
 
-This documents the **implemented local event contract, version 1**, not approved registry schemas.
+This documents the **implemented local event contract, version 1**, and draft registry schemas, not approved schemas.
 Names and enum values are
 case-sensitive. The source of truth is `XMAT\Logic\Telemetry\TelemetryEvents.cs`, with common metadata
 in `TelemetryEnvironmentProvider.cs`.
 
 No build currently exports telemetry. The obsolete OpenTelemetry/OneCollector exporter has been removed;
-the intended replacement is `Microsoft.Xbox.Telemetry`. The live adapter remains disabled until safe
-revocation/cache handling and event policy are resolved. An explicitly requested
+its replacement uses `Microsoft.Xbox.Telemetry`, but live export remains disabled pending schema and
+event/privacy policy approval. An explicitly requested
 **local sample run** records the same application events to a local file without creating a collector
 reporter or requiring a collector key.
 
@@ -24,64 +24,48 @@ Consent is independent of `EnableTelemetry`, `TelemetryApproved`, and build chan
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value overrides collection, including local sample mode.
 Neither build approval nor Optional-event SDK settings replace consent. Before opt-in there is no SDK,
 health/lifecycle emission, replay, device-metadata read, or event buffering for later upload.
-Opt-out discards the service session without normal shutdown summary/flush; a later opt-in starts fresh
-and cannot resume old operations. This is a service contract, not a claim that the blocked SDK adapter
-already implements it. Currently no SDK is created even after opt-in and enabled builds fail explicitly.
+Opt-out stops new XMAT event submission, clears the service session and emits no XMAT shutdown summary.
+Already queued SDK events may still be uploaded during teardown or later; cancellation and purge are not
+promised. A later opt-in starts a fresh service session and cannot resume old operations. Currently no SDK
+is created even after opt-in and enabled builds fail explicitly.
 
 Local file sampling is a separately requested, non-networked development action, not permission to
 upload. Its explicit command may read machine-ID/sandbox metadata and record local events without
 upload consent. GUI consent changes do not stop that requested local file recording.
 
-## SDK migration status and precise blocker
+## SDK migration status
 
 The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is **not** required.
 `Microsoft.Xbox.Telemetry` has a supported C#/WPF path; emitting API and key choice are resolved.
 No live SDK instance or production event was used to develop this change.
 
-Source inspected at Xbox.Experiences commit `a89ca852315fa35fa25267d61330c5387021dfe0`,
-under `src\telemetry`:
+The conditional SDK build uses `Microsoft.Xbox.Telemetry` `0.8.0.261118001`,
+`Microsoft.Windows.CsWinRT` `2.3.1` and `Microsoft.VCRTForwarders.140` `1.0.7`; it projects the
+package WinMD and includes the native DLL, PRI, CRT forwarders and activation manifest. Set
+`BuildTelemetrySdk=true` and provide an authorized internal package source to compile the integration.
+That option alone does not enable collection. SDK builds compile against Windows 10 19041 metadata
+while retaining a Windows 10 17763 runtime minimum. Default builds need no internal package.
 
-| Evidence | Consequence |
-|---|---|
-| `src\OneDSTelemetrySink.cpp`, `UpdateConfigOptions` | `Emission.DisableUpload` calls 1DS `PauseTransmission`, which can fail. The failure becomes an SDK health event. |
-| `src\TelemetryClient.cpp`, `UpdateConfigOptions` | The public operation returns void and catches failures; XMAT cannot verify that all uploads stopped. |
-| `src\TelemetryClient.cpp`, `Shutdown` and destructor | Required lifecycle events are emitted and the sink is flushed; disposal is not a no-upload revocation operation. Teardown persists remaining events. |
-| `src\OneDSTelemetrySink.cpp`, `Teardown` | Teardown uses `FlushAndTeardown`; no supported purge API or verified cancellation of an already-dispatched upload is exposed. |
-
-`SetCollectOptionalData(false)` does not stop Required health events or erase previously queued data.
-Pausing, calling Shutdown/Dispose, then deleting a guessed cache path would not prove upload
-cancellation or safe cache ownership/concurrency. No such workaround is implemented. No SDK cache is
-created, opened, deleted, or replayed by XMAT. A supported, observable revoke-and-purge lifecycle
-(including in-flight requests, shutdown and subsequent startup) is required before activating the adapter.
-
-Once that blocker is resolved, integration must condition package/projection/native assets on telemetry
-builds, leaving public CI feed-independent. The inspected WPF sample uses
-`Microsoft.Windows.CsWinRT` `2.3.1`, `Microsoft.VCRTForwarders.140` `1.0.7`, `.winmd` projection,
-the native DLL/PRI, and explicit activatable-class manifest entries. PerfLab demonstrates actual package
-consumption; these are integration references, not unimplemented XMAT package references.
-Pin and validate the chosen `Microsoft.Xbox.Telemetry` version then; no version is claimed validated
-by an XMAT adapter in this change.
-
-Use reviewed registry contracts, or explicitly reviewed `PassThroughInferred` policy (Optional,
-requiring consent). Do not use `AllowEventNamespace` to bypass Optional consent. Audit SDK-added
+The adapter admits unknown events with `PassThroughInferred` (Optional) and enables Optional data
+only after XMAT consent. It never uses `AllowEventNamespace`. SDK initialization and teardown may emit
+Required SDK health events; shutdown may flush queued events. SDK behavior has not been validated using
+a live client. Audit SDK-added
 identity/common/health fields against the privacy contract below before any release approval.
 Keep `mobile.events.data.microsoft.com:443` excluded from proxy capture from before SDK creation until
-all teardown is finished, including WinINet/system-proxy traffic.
+all teardown is finished, including WinINet/system-proxy traffic. If activation or disposal fails, the
+exclusion is retained rather than risking capture of an SDK that may still be active.
 
 ## Registry authoring and codegen handoff
 
-Registry documentation/tooling was inspected read-only at
-`xtech.data.events.schemaregistry` commit `2bf73ebf446888fb719bceee8cc410a6ed6173c7`.
-That checkout has no XMAT project or approved shared core contracts. GDKMiddleware's
-`SdkComponentInitialized` is not an XMAT schema and must not rename or replace these 11 events.
-Authoring needs a separately assigned writable registry checkout; no reference clone was modified.
-No draft has been labelled approved, and no handwritten C# has been labelled generated.
+The draft `xmat` registry inputs at `xtech.data.events.schemaregistry` commit
+`eb30ed93a844ab8c4e0c214a86472f364380425d` generate the checked-in C# contracts under
+`XMAT\Logic\Telemetry\Schema\generated`; `Schema\codegen.yaml` pins their inputs and the generated
+manifest records source hashes. The schemas and generated contracts are draft and do not imply approval.
+GDKMiddleware's `SdkComponentInitialized` is not an XMAT schema and does not replace these 11 events.
 
 The event table below maps all 11 existing suffixes one-for-one for proposed preservation under
-`Microsoft.Gaming.XMAT.`. In the registry, author a reviewed project `project.yaml`, versioned common
-fields/types, and per-event `schema.yaml`, `compliance.yaml`, and synthetic examples. Decide the project
-identifier/version pins during that authoring; there are no approved XMAT pins to place in `codegen.yaml`
-yet. The proposed field mapping is:
+`Microsoft.Gaming.Tooling.XMAT.`. The draft project has versioned common fields/types and per-event
+schemas, compliance files and synthetic examples. The field mapping is:
 
 | Existing contract | Registry representation / constraint to preserve |
 |---|---|
@@ -92,18 +76,15 @@ yet. The proposed field mapping is:
 | Capture context | Optional `CaptureMethod`, `DeviceType`, `CaptureOrigin`; no device names or addresses |
 | App/OS/build/machine-ID/sandbox fields | Separate reviewed common-field mapping; no assumption that SDK defaults match the former `ext.*` layout |
 
-In the XMAT client folder, after real registry inputs and versions exist, run the registry's
-`npm run codegen` setup, choose C#, and commit its `codegen.yaml`, generated payloads and manifest
-alongside the adapter. Regeneration is
-`npm --prefix <assigned-registry-checkout> run codegen -- --config <client-codegen.yaml>`;
-add `--check` for drift validation. Use explicit options to avoid changing remembered client setup.
+Regenerate using `npm run codegen -- --config <absolute-path-to-XMAT-Schema\codegen.yaml>` from
+the registry checkout at the pinned input commit; add `--check` for drift validation.
 Generated C# contracts serialize JSON; they do not send or approve telemetry. Registry authoring/codegen
 and SDK policy admission are separate steps. Production collection remains blocked until both are reviewed.
 
 ## Event names and semantics
 
-The namespace is `Microsoft.Gaming.XMAT`. For example, the launch event is
-`Microsoft.Gaming.XMAT.AppLaunched`. The following table lists the suffixes:
+The namespace is `Microsoft.Gaming.Tooling.XMAT`. For example, the launch event is
+`Microsoft.Gaming.Tooling.XMAT.AppLaunched`. The following table lists the suffixes:
 
 | Event | When emitted | Meaningful fields |
 |---|---|---|
@@ -154,9 +135,10 @@ notifications for the same continuously visible mode do not inflate those usage-
 
 ## Common metadata
 
-Common fields are explicit metadata in the application. Local samples preserve
-resource keys literally in their `resources` object. A future SDK adapter must define and validate its
-own common-field mapping; these keys are not a promise about that adapter's wire layout.
+Common fields are explicit metadata in the application. Local samples preserve resource keys literally
+in their `resources` object. The SDK adapter maps these to the draft generated `CommonFields` properties:
+`AppId`, `AppVersion`, `OsName`, `OsVersion`, `BuildChannel`, `DeviceLocalId`, `XboxSandbox`, and
+`MachineIdAvailable`.
 
 | Resource key | Type | Availability and meaning |
 |---|---|---|
@@ -354,7 +336,7 @@ This is an illustrative wire event with **synthetic identifiers**:
 ```json
 {
   "ver": "4.0",
-  "name": "Microsoft.Gaming.XMAT.AppLaunched",
+  "name": "Microsoft.Gaming.Tooling.XMAT.AppLaunched",
   "time": "2026-01-01T12:00:00.0000000Z",
   "iKey": "o:00000000000000000000000000000000",
   "data": {
@@ -392,12 +374,13 @@ Live collection still requires reviewed event policy/privacy and explicit user c
 safe SDK lifecycle. The authorized shared team key does not replace those gates.
 Local samples do not satisfy those approval gates.
 
-`XMAT\Data\TelemetryUsage.kql` expects an owner-defined normalized `XmatTelemetry` view:
+`XMAT\Data\TelemetryUsage.kql` expects an owner-defined normalized `XmatTelemetry` view. The collector
+mapping below is a provisional query contract, not a verified SDK ingestion layout:
 
 | Normalized column | Collector source | Local-sample source |
 |---|---|---|
 | `Timestamp` | `time` | `time` |
-| `EventName` | Suffix of `name` after `Microsoft.Gaming.XMAT.` | Same |
+| `EventName` | Suffix of `name` after `Microsoft.Gaming.Tooling.XMAT.` | Same |
 | `DeviceId` | `ext.device.localId` | `resources["ext.device.localId"]` |
 | `AppVersion` | `ext.app.ver` | `resources["ext.app.ver"]` |
 | `BuildChannel` | `data.BuildChannel` | `resources.BuildChannel` |
@@ -413,11 +396,10 @@ count as live-capture conversion.
 
 ### Collector traffic and report navigation
 
-The retained `TelemetryTraffic` helper excludes an exact destination host/port from capture/script
-events and tunnels HTTPS CONNECT without TLS interception. A future SDK adapter must hold that
-exclusion throughout initialization, upload and teardown. No live reporter currently creates it;
-local file sampling does not create it either. Other traffic to that exact destination would also be
-excluded while such a lease is held.
+The `TelemetryTraffic` helper excludes an exact destination host/port from capture/script events and
+tunnels HTTPS CONNECT without TLS interception. The SDK reporter holds that exclusion throughout
+initialization, upload and teardown; local file sampling does not create it. Other traffic to that
+exact destination is also excluded while such a lease is held. Live collection remains build-disabled.
 
 Statistics operations are correlated by WebView2 navigation ID. Redirects keep one operation, a
 replacement navigation cancels its predecessor, and stale completion notifications cannot finish the
@@ -480,10 +462,10 @@ After exiting normally, inspect the output:
 $process.WaitForExit()
 $events = @(Get-Content -LiteralPath $sampleFile | ForEach-Object { $_ | ConvertFrom-Json })
 $events | Group-Object name | Select-Object Name, Count
-$events | Where-Object name -eq "Microsoft.Gaming.XMAT.OperationCompleted" |
+$events | Where-Object name -eq "Microsoft.Gaming.Tooling.XMAT.OperationCompleted" |
   ForEach-Object { $_.data } |
   Format-Table Operation, Outcome, ErrorCategory, DurationMs, ItemCountBucket, FileSizeBucket
-$events | Where-Object name -eq "Microsoft.Gaming.XMAT.SessionSummary" |
+$events | Where-Object name -eq "Microsoft.Gaming.Tooling.XMAT.SessionSummary" |
   ForEach-Object { $_.data }
 ```
 
@@ -492,7 +474,7 @@ local envelope:
 
 ```json
 {
-  "name": "Microsoft.Gaming.XMAT.OperationCompleted",
+  "name": "Microsoft.Gaming.Tooling.XMAT.OperationCompleted",
   "time": "2026-01-01T12:00:01.0000000+00:00",
   "resources": {
     "ext.app.id": "XboxMultiplayerAnalysisTool",
@@ -558,7 +540,7 @@ be local-only and must cover SDK-added fields as well as XMAT's explicit attribu
 
 ## Live collector validation remains blocked
 
-No current build can send to a live collector, including a test channel. Resolve the lifecycle and
-schema/policy blockers above before adding an adapter; then validate locally before any separately
-authorized test ingestion. The test channel is a label, not an automatic safe destination, and the
+No current build can send to a live collector, including a test channel. Obtain schema and privacy/policy
+approval and validate the SDK lifecycle before any separately authorized test ingestion. The test channel
+is a label, not an automatic safe destination, and the
 authorized team key does not approve data collection, retention/access, or backend enrichment.

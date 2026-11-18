@@ -10,7 +10,7 @@ namespace XMAT.Telemetry
     {
         void Send(TelemetryEvent item, Guid sessionId);
 
-        // Stop without flushing; discard queued data and prevent replay in future sessions.
+        // Stop submitting new XMAT events. Already queued SDK events may still be uploaded.
         void Revoke();
     }
 }

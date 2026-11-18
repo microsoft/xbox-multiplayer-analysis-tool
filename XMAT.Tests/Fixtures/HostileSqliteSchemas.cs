@@ -248,7 +248,7 @@ namespace XMAT.Tests.Fixtures
                     new SqliteConnection(
                         new SqliteConnectionStringBuilder
                         {
-                            DataSource = copy,
+                            DataSource = WindowsPath.ToVerbatim(Path.GetFullPath(copy)),
                             Pooling = false,
                         }.ToString());
                 connection.Open();

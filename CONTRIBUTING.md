@@ -24,8 +24,8 @@ Any new functionality added, must include appropriate testing alongside the new 
 Telemetry is XMAT-owned code in `XMAT\Logic\Telemetry`, behind `ITelemetryReporter`.
 The obsolete OpenTelemetry/OneCollector exporter and its dependencies have been removed.
 The approved migration target is `Microsoft.Xbox.Telemetry` (the team's 1DS wrapper), with registry-generated
-C# payloads. The live adapter is disabled: the inspected SDK cannot yet demonstrate fail-closed revocation
-and removal of cached events. No internal package/feed is needed by current public/default/CI builds.
+C# payloads. The adapter is buildable for integration but live export remains disabled pending schema and
+event/privacy approval. No internal package/feed is needed by public/default/CI builds.
 
 Local, PR, and CI builds default to `EnableTelemetry=false`; a Release configuration alone does not enable
 export. Enabling telemetry currently fails the build even with approval. Focused tests use injected registry
@@ -46,6 +46,7 @@ when the value is absent; Options > Product Telemetry permits both changes later
 not accept. Failed registry writes stop collection for the session and show a warning.
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value suppresses telemetry, including local sampling.
 Ordinary runs read only consent, not machine-ID/sandbox metadata. No pre-consent events are retained.
+Opt-out stops new XMAT submissions; previously queued or dispatched SDK events may still be uploaded.
 
 The full schema and app sample-generation commands are in [TELEMETRY.md](TELEMETRY.md). Use
 `--telemetry-sample` with a new absolute output filename in a non-exporting build to inspect real

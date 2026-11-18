@@ -264,21 +264,19 @@ The service retains unfinished operations and finalizes them as cancelled before
 `AppClosed`, so normal exit does not abandon active capture measurements.
 
 The old OpenTelemetry/OneCollector reporter and packages are removed. No live adapter is instantiated,
-even with saved consent. Enabled builds are rejected pending SDK lifecycle and event-policy resolution.
+even with saved consent. Enabled builds are rejected pending schema and event/privacy policy approval.
 The injectable service factory requires accepted consent, valid build approval/channel/key, and no
 `XMAT_SUPPRESS_TELEMETRY` override before reading metadata or constructing a reporter.
-Revocation closes the service's send gate, invokes `ITelemetryReporter.Revoke` (discard, never flush),
-and clears pending operation registrations and counters. It does not emit closure/summary events.
-An adapter must implement safe upload cancellation and queue purging before satisfying that contract.
-The planned `Microsoft.Xbox.Telemetry` SDK pause is fallible, shutdown flushes, and cached events persist;
-therefore simply turning off Optional events or disposing the SDK does not implement revocation.
-`TelemetryTraffic` exclusion support remains for the future adapter: acquire it before SDK activation
-and retain it through teardown, including Required SDK health events and WinINet/system-proxy traffic.
+Revocation closes the service's send gate and clears pending operation registrations and counters without
+emitting XMAT closure/summary events. The SDK reporter shuts down and disposes its client; SDK shutdown
+may flush queued events and emit health events. Cancellation and purge are not promised.
+`TelemetryTraffic` exclusion is acquired before SDK activation and retained through teardown,
+including Required SDK health events and WinINet/system-proxy traffic.
 
 In this implementation, device metadata is read only for an explicitly requested local sample run.
 The host machine ID and sandbox are
 explicit permitted identifiers; no fallback machine/installation ID is generated. Field names and event names
-are case-sensitive. Current builds restore no internal telemetry packages; no DevTools code is vendored.
+are case-sensitive. Default builds restore no internal telemetry packages.
 
 Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
 interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.

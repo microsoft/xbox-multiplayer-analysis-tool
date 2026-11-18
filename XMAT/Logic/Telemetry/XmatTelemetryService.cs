@@ -73,13 +73,20 @@ namespace XMAT.Telemetry
 
         private static XmatTelemetryService CreateLive(TelemetryConfiguration configuration)
         {
-            // The SDK currently has no verified revoke-and-purge lifecycle. Never activate it,
-            // read device metadata, or load an earlier SDK cache, even with saved consent.
+#if XMAT_TELEMETRY_SDK
+            return Create(configuration, channel => TelemetryEnvironmentProvider.Read(channel, Diagnose),
+                (config, environment) =>
+                {
+                    var payload = new XboxTelemetryPayload(environment);
+                    return XboxTelemetryReporter.Create(() => XboxSdkClient.Create(config.InstrumentationKey), payload.Serialize);
+                }, Diagnose, Consent.State);
+#else
             if (configuration.Enabled)
             {
                 Diagnose("LiveAdapterUnavailable");
             }
             return new(null, Diagnose);
+#endif
         }
 
         private static void StopConsentedSession()

@@ -1,0 +1,16 @@
+project: xmat
+language: csharp
+output: generated
+common: "1.0.0"
+events:
+  AppClosed: "1.0.0"
+  AppLaunched: "1.0.0"
+  AppReady: "1.0.0"
+  CaptureFirstData: "1.0.0"
+  Counter: "1.0.0"
+  FeatureUsed: "1.0.0"
+  OperationCompleted: "1.0.0"
+  OperationStage: "1.0.0"
+  OperationStarted: "1.0.0"
+  SessionSummary: "1.0.0"
+  UnhandledFailure: "1.0.0"

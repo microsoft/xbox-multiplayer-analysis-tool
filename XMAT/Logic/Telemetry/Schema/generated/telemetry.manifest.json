@@ -1,0 +1,438 @@
+{
+  "generator": "npm run codegen (Xbox event schema registry)",
+  "formatVersion": 1,
+  "project": "xmat",
+  "language": "csharp",
+  "common": {
+    "project": "1.0.0"
+  },
+  "events": [
+    {
+      "event": "AppClosed",
+      "name": "Microsoft.Gaming.Tooling.XMAT.AppClosed",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "AppLaunched",
+      "name": "Microsoft.Gaming.Tooling.XMAT.AppLaunched",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "AppReady",
+      "name": "Microsoft.Gaming.Tooling.XMAT.AppReady",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "CaptureFirstData",
+      "name": "Microsoft.Gaming.Tooling.XMAT.CaptureFirstData",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "Counter",
+      "name": "Microsoft.Gaming.Tooling.XMAT.Counter",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "FeatureUsed",
+      "name": "Microsoft.Gaming.Tooling.XMAT.FeatureUsed",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "OperationCompleted",
+      "name": "Microsoft.Gaming.Tooling.XMAT.OperationCompleted",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "OperationStage",
+      "name": "Microsoft.Gaming.Tooling.XMAT.OperationStage",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "OperationStarted",
+      "name": "Microsoft.Gaming.Tooling.XMAT.OperationStarted",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "SessionSummary",
+      "name": "Microsoft.Gaming.Tooling.XMAT.SessionSummary",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    },
+    {
+      "event": "UnhandledFailure",
+      "name": "Microsoft.Gaming.Tooling.XMAT.UnhandledFailure",
+      "version": "1.0.0",
+      "deprecated": false,
+      "types": []
+    }
+  ],
+  "types": [
+    {
+      "type": "AppId@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "BuildChannel@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "CaptureDeviceType@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "CaptureMethod@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "CaptureOrigin@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "EntryPoint@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "ErrorCategory@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "FeatureName@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "FileSizeBucket@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "Interaction@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "ItemCountBucket@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "OperatingSystemName@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "OperationKind@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "Outcome@1.0.0",
+      "uses": []
+    },
+    {
+      "type": "StageName@1.0.0",
+      "uses": []
+    }
+  ],
+  "sources": [
+    {
+      "path": "schemas/xmat/common/1.0.0.yaml",
+      "sha256": "059ea93acf4723284def3bc03c0ea37e84f3648a95bc4e05b482cf8a009fb752"
+    },
+    {
+      "path": "schemas/xmat/events/AppClosed/1.0.0/compliance.yaml",
+      "sha256": "b49a5ea2d5ad071312edb89a9314407bca5fb5942714ff2ccc20e6df5ec59481"
+    },
+    {
+      "path": "schemas/xmat/events/AppClosed/1.0.0/schema.yaml",
+      "sha256": "75bc9a93ab054e034f4265f3a5b80864ef3654b00ef3b96d8e42f4e1ca997164"
+    },
+    {
+      "path": "schemas/xmat/events/AppLaunched/1.0.0/compliance.yaml",
+      "sha256": "ac6d207436a894062f220f2433c9bd0a65214f09e3aaa5cf9f573a9f522e6eb6"
+    },
+    {
+      "path": "schemas/xmat/events/AppLaunched/1.0.0/schema.yaml",
+      "sha256": "328daec5966e46a6d9195b84aef491c9bcffc211170213b7b1e4af0fa8f2b857"
+    },
+    {
+      "path": "schemas/xmat/events/AppReady/1.0.0/compliance.yaml",
+      "sha256": "0abcd81d76381d17ce50206679a751987d119066a3c17a4e8ba0277ea83ef5c2"
+    },
+    {
+      "path": "schemas/xmat/events/AppReady/1.0.0/schema.yaml",
+      "sha256": "3e00cc2eb6388f97f1ac9b706776f46ceda98fb3150507556b366b1acf8eec89"
+    },
+    {
+      "path": "schemas/xmat/events/CaptureFirstData/1.0.0/compliance.yaml",
+      "sha256": "39f24652093a70080eab4229de7c13b63435b9322d66d77d16063867b3e1225f"
+    },
+    {
+      "path": "schemas/xmat/events/CaptureFirstData/1.0.0/schema.yaml",
+      "sha256": "443d2f46ea2a017d82ed1532269b1e793e700e0090027fd3c37661130341992f"
+    },
+    {
+      "path": "schemas/xmat/events/Counter/1.0.0/compliance.yaml",
+      "sha256": "a98eb68ac810352924d7a614d861f6fc48b2e5569f4eb028689af16de5544078"
+    },
+    {
+      "path": "schemas/xmat/events/Counter/1.0.0/schema.yaml",
+      "sha256": "c92910ada77e5a70764d2583eeb049683360c01ddbea2153392972f82a8ea66d"
+    },
+    {
+      "path": "schemas/xmat/events/FeatureUsed/1.0.0/compliance.yaml",
+      "sha256": "a7089d1115020e39d84275dd615e8d72beb81774553b016c5d77b8e5f25bb846"
+    },
+    {
+      "path": "schemas/xmat/events/FeatureUsed/1.0.0/schema.yaml",
+      "sha256": "11d11f805faa8166c881398cdcb1434dabfa2299ed707eb55179c03707231269"
+    },
+    {
+      "path": "schemas/xmat/events/OperationCompleted/1.0.0/compliance.yaml",
+      "sha256": "a5b2682699259922a16ee7f7bfe4265c23b64b13454a5496596a8a367da9a829"
+    },
+    {
+      "path": "schemas/xmat/events/OperationCompleted/1.0.0/schema.yaml",
+      "sha256": "06097442a0dd71e9bfbda0c2d920626905ea63c4aa1d6cef08533d0174ab97eb"
+    },
+    {
+      "path": "schemas/xmat/events/OperationStage/1.0.0/compliance.yaml",
+      "sha256": "1acaaf932ec277e77c69c43b7a6e8a341c0313babfc4e13e9b5708c34c6624c1"
+    },
+    {
+      "path": "schemas/xmat/events/OperationStage/1.0.0/schema.yaml",
+      "sha256": "9b48b0ed7512035c1e46caf846d309e30a38e19864fad784be38142bb6f1476f"
+    },
+    {
+      "path": "schemas/xmat/events/OperationStarted/1.0.0/compliance.yaml",
+      "sha256": "163cdbd2cab1d131d97c489196be293295b8243e0edf2d4242914817b9bf54dd"
+    },
+    {
+      "path": "schemas/xmat/events/OperationStarted/1.0.0/schema.yaml",
+      "sha256": "1e525334b4d471399992a9a64bd7a5f306c4f265d91358a67bd5b17b72079b35"
+    },
+    {
+      "path": "schemas/xmat/events/SessionSummary/1.0.0/compliance.yaml",
+      "sha256": "6ce17c3794ad695430443369f67f630527092e61f9c5fca09920aaea59b7aa92"
+    },
+    {
+      "path": "schemas/xmat/events/SessionSummary/1.0.0/schema.yaml",
+      "sha256": "077033108a39c58004bb40b883e6e7ccf11af31d930798e6408b2ebc9b8c79e6"
+    },
+    {
+      "path": "schemas/xmat/events/UnhandledFailure/1.0.0/compliance.yaml",
+      "sha256": "4a653020403b03601a906b72f3c65ddf153f8503ba6f8a0c3cff9c2efa151add"
+    },
+    {
+      "path": "schemas/xmat/events/UnhandledFailure/1.0.0/schema.yaml",
+      "sha256": "5a9e8c712ec295ebf2de183cad85536d9787d54b6440225381e944aec4c41ace"
+    },
+    {
+      "path": "schemas/xmat/project.yaml",
+      "sha256": "587648e8eb05b62b446fcf00bfd5eff71004ba13d16e9a57ae608b371d1423bb"
+    },
+    {
+      "path": "schemas/xmat/types/AppId/1.0.0.yaml",
+      "sha256": "f9346df87987aef1f9556e33939b3b80573a8d44cc6b14b8593ddb9ff3e6dc7a"
+    },
+    {
+      "path": "schemas/xmat/types/BuildChannel/1.0.0.yaml",
+      "sha256": "ba8a6f3de8226798faeb0cb3c20a913de413e1234c9577b685260fb38b18d840"
+    },
+    {
+      "path": "schemas/xmat/types/CaptureDeviceType/1.0.0.yaml",
+      "sha256": "bc90b01d496119ba974e4d2a33564b330d10f23693b37145386e55a0eea88243"
+    },
+    {
+      "path": "schemas/xmat/types/CaptureMethod/1.0.0.yaml",
+      "sha256": "784d0220063fdc422429517ccd8f72f0b4022b070ae274ee973becb64a50ec5b"
+    },
+    {
+      "path": "schemas/xmat/types/CaptureOrigin/1.0.0.yaml",
+      "sha256": "8052d7f9ed47fa204f92544c32089eb22d06a85cfb29309a9a46fde2437de50a"
+    },
+    {
+      "path": "schemas/xmat/types/EntryPoint/1.0.0.yaml",
+      "sha256": "78a7cc05d6c8f1907d44d58956c77b3a076d9d1e36d48c1089c3b622b2cff759"
+    },
+    {
+      "path": "schemas/xmat/types/ErrorCategory/1.0.0.yaml",
+      "sha256": "a709c32772a76255664a47e50c599fbd323af11552669767594e6b807c703abc"
+    },
+    {
+      "path": "schemas/xmat/types/FeatureName/1.0.0.yaml",
+      "sha256": "6227bd7bbd7ff5dd68ab925bb5161b04130570a4eb414057604a9a9d42aecaee"
+    },
+    {
+      "path": "schemas/xmat/types/FileSizeBucket/1.0.0.yaml",
+      "sha256": "08a6a156578a3b5fd9e819bc486fb7a52c7c3ba5f0fd73fc7a24ec156081f52a"
+    },
+    {
+      "path": "schemas/xmat/types/Interaction/1.0.0.yaml",
+      "sha256": "a274bc8f221ca3a7e782bb5e4965eb3ea670fa5913c2cdc7f09a3ce5b4dafe90"
+    },
+    {
+      "path": "schemas/xmat/types/ItemCountBucket/1.0.0.yaml",
+      "sha256": "c37ea7c791a06c7f86f23eec7cedaa57c5d5a277e445dc407e5c61a0c22f27be"
+    },
+    {
+      "path": "schemas/xmat/types/OperatingSystemName/1.0.0.yaml",
+      "sha256": "29ea12b353f444aea680f4d8f9c39cc78f9e4be216813651f83efb1f02bb90fa"
+    },
+    {
+      "path": "schemas/xmat/types/OperationKind/1.0.0.yaml",
+      "sha256": "7f20746a78da61af0732f17f6cd449382af2359a02f7c13f5902f50f0683b2cb"
+    },
+    {
+      "path": "schemas/xmat/types/Outcome/1.0.0.yaml",
+      "sha256": "58bf872d862d08757daed331b5814b1b80b61c82a23c9080fb950bd57ec864cf"
+    },
+    {
+      "path": "schemas/xmat/types/StageName/1.0.0.yaml",
+      "sha256": "47a160a149ba8ae3e2ab66a350d89ae5e63cfaaa65627669d90f2e09834c9db1"
+    },
+    {
+      "path": "shared/taxonomies/categories.yaml",
+      "sha256": "eb56a5700b62522224e82ea06ae41f5236d5d744bc7ad8aa5b6da4b0167ce5ff"
+    },
+    {
+      "path": "shared/taxonomies/privacy-data-types.yaml",
+      "sha256": "b3f4af44dbd82b2c155d5f2699d0856909af8bed91f7217ee0a55ecb8d730f3e"
+    }
+  ],
+  "files": [
+    {
+      "path": "CommonFields.cs",
+      "sha256": "7fcc3397a0d006bf6c6f7a5587d0a8d25ea9cb1263cab732b528b62d53b50e49"
+    },
+    {
+      "path": "Events/AppClosed.cs",
+      "sha256": "cdf8b1328dc9f1fc7fad55b7c95b3a045c21bbb4ea4cd9a4f75dd34a7d1a3706"
+    },
+    {
+      "path": "Events/AppLaunched.cs",
+      "sha256": "1da7712340e60efe827acf1994ddafe0c05ab707e8d4da0114fe888ffd374b40"
+    },
+    {
+      "path": "Events/AppReady.cs",
+      "sha256": "2ca5547c1045fc8b390654ecbe1a882d9f5ac2148ebb066d80934d891d318a67"
+    },
+    {
+      "path": "Events/CaptureFirstData.cs",
+      "sha256": "1ec2c82f9054c9c31c6d6b950c181f90924f0214d550325aa30db0d7ef199b64"
+    },
+    {
+      "path": "Events/Counter.cs",
+      "sha256": "97ab235ddbe476758b0b4fbeaafca4322f37dda80744c480592074658e4a71ae"
+    },
+    {
+      "path": "Events/FeatureUsed.cs",
+      "sha256": "a3605ea51cd239d908cc7aa4e42512bad56e49f1177833b8b2a2956eddc2023c"
+    },
+    {
+      "path": "Events/OperationCompleted.cs",
+      "sha256": "20a6fe230aa951c701d941affefc02b070e8a5b425a596e0dab14aa1ef13c63a"
+    },
+    {
+      "path": "Events/OperationStage.cs",
+      "sha256": "bd8c843baa2341436bf347dd26e36a9f4d79a21e1313766e06d5e7c6754442fc"
+    },
+    {
+      "path": "Events/OperationStarted.cs",
+      "sha256": "49fbe123aa6dd9a61a4b5f9ee8c52905f2d1c7d94e4c5a180194158a2e2e5542"
+    },
+    {
+      "path": "Events/SessionSummary.cs",
+      "sha256": "6466e0485c71aa588c59230839f3222126ecd05219d2ea630a5488ea383a1fc0"
+    },
+    {
+      "path": "Events/UnhandledFailure.cs",
+      "sha256": "d014346b3e8765116de72bc194891890643b3bb7f7cec56e18877e94962983c5"
+    },
+    {
+      "path": "ITelemetryEvent.cs",
+      "sha256": "8c22f47de11679119aa307ccf97623140251de9ced33281889167789011f835c"
+    },
+    {
+      "path": "TelemetryEvent.cs",
+      "sha256": "b96bbc6e0253cbca59caa218d9f5bbbeca58730734763f5b9e42a3b843b1cb13"
+    },
+    {
+      "path": "TelemetryJson.cs",
+      "sha256": "930419b233b85e14452e2f295ede2791724306c28cc73083e1db323805e2cfd2"
+    },
+    {
+      "path": "Types/AppId.cs",
+      "sha256": "3cbe46583a1093c81b732972e0b9c1ddd393f77f9d691dc64cfb50035bfd55f7"
+    },
+    {
+      "path": "Types/BuildChannel.cs",
+      "sha256": "25751397e553ccb7d75fd19cc226c87cc7fa5c0d48ef79f5090eb9d17591e890"
+    },
+    {
+      "path": "Types/CaptureDeviceType.cs",
+      "sha256": "daf9161a65fd7ef4fc77c81b2327b6f682eec9273e09dd726686087f0a74143e"
+    },
+    {
+      "path": "Types/CaptureMethod.cs",
+      "sha256": "ff0923d65666df04448e32ecc7df6c95036537acd78e7c79d3e4b7186e142863"
+    },
+    {
+      "path": "Types/CaptureOrigin.cs",
+      "sha256": "a4c2b55c7ff9128d901be90fc6281860e161a3f6d20a122b777098a74f6f895c"
+    },
+    {
+      "path": "Types/EntryPoint.cs",
+      "sha256": "f9f440aa3a218fa46045ac6f181d54f42a2d61948355819340515bfaf0cf2ff0"
+    },
+    {
+      "path": "Types/ErrorCategory.cs",
+      "sha256": "852869b1f127b1c6ce0eb27d303d22da8068859cf84e51c24542536a1bd8169d"
+    },
+    {
+      "path": "Types/FeatureName.cs",
+      "sha256": "3932f2066608b828946d4d6f433a30c930a90d1ac14db4580abfd21d69b45f51"
+    },
+    {
+      "path": "Types/FileSizeBucket.cs",
+      "sha256": "4ca95c6ec25ee0bfdb2f03d189856f45d93d4238f39ac68521f42c26ae974a1c"
+    },
+    {
+      "path": "Types/Interaction.cs",
+      "sha256": "89cf2f3efe6e0e1e3b67e2d7c37c0d70d881d83abb64dc16a12c9832e0389ad1"
+    },
+    {
+      "path": "Types/ItemCountBucket.cs",
+      "sha256": "ad5ed49470c02dafddee74bbcc8330a99ec14614e01e3c51c8dbe5286bf7a654"
+    },
+    {
+      "path": "Types/OperatingSystemName.cs",
+      "sha256": "cfb2fdb5999240b2bf58b417c0a94f332dc8f573eeb302a7e5a721a2de874be8"
+    },
+    {
+      "path": "Types/OperationKind.cs",
+      "sha256": "6c61fc00e70d80010038ffa57cdd1cdd91ed0d103cd6836b075bdacbb7957d27"
+    },
+    {
+      "path": "Types/Outcome.cs",
+      "sha256": "3998f9774ffb6357286edad46b95178338f99cee3f6cfbb710aa3d472dfebc72"
+    },
+    {
+      "path": "Types/StageName.cs",
+      "sha256": "1d5b9d7815af7093cb7579de1e3913680ec9fcba3ab034ce806f1bc5e7782757"
+    }
+  ]
+}

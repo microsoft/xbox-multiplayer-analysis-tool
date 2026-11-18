@@ -128,7 +128,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void AcceptedConsentCreatesClientAndRevocationDiscardsWithoutFlushOrReplay()
+        public void AcceptedConsentCreatesClientAndFakeReporterRevocationDiscardsPendingEvents()
         {
             var reporter = new QueueReporter();
             using var service = XmatTelemetryService.Create(new(true, true, "test-key", TelemetryBuildChannel.Test),

@@ -159,7 +159,8 @@ The following security-sensitive operations require explicit user action:
 - Product telemetry requires explicit per-user consent (first-run prompt and Options preference),
   separately from build/release approval. Missing/corrupt/unreadable consent fails closed, and
   pre-consent usage is not buffered. The live adapter is currently disabled in every build,
-  even after opt-in, because SDK upload revocation and cached-event purge are not yet verified.
+  even after opt-in, pending schema and privacy approval. Opt-out stops new XMAT submissions;
+  SDK events already queued or dispatched may still be uploaded.
   Explicit local samples write only to the requested file; see [TELEMETRY.md](TELEMETRY.md).
 - The application does not auto-update or download remote resources.
 - Build output is a self-contained Windows desktop application with no web

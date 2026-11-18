@@ -90,7 +90,7 @@ namespace XMAT.Tests
                 sessionId ??= id;
                 Assert.Equal(sessionId, id);
                 names.Add(root.GetProperty("name").GetString());
-                if (root.GetProperty("name").GetString() == "Microsoft.Gaming.XMAT.OperationCompleted")
+                if (root.GetProperty("name").GetString() == "Microsoft.Gaming.Tooling.XMAT.OperationCompleted")
                 {
                     Assert.Equal("Analysis", data.GetProperty("Operation").GetString());
                     Assert.Equal("Imported", data.GetProperty("CaptureOrigin").GetString());
@@ -101,10 +101,10 @@ namespace XMAT.Tests
                 Assert.DoesNotContain("private-token-path-host", line);
                 Assert.DoesNotContain(SampleFile, line);
             }
-            Assert.Contains("Microsoft.Gaming.XMAT.AppLaunched", names);
-            Assert.Contains("Microsoft.Gaming.XMAT.AppReady", names);
-            Assert.Contains("Microsoft.Gaming.XMAT.SessionSummary", names);
-            Assert.Equal("Microsoft.Gaming.XMAT.AppClosed", names[^1]);
+            Assert.Contains("Microsoft.Gaming.Tooling.XMAT.AppLaunched", names);
+            Assert.Contains("Microsoft.Gaming.Tooling.XMAT.AppReady", names);
+            Assert.Contains("Microsoft.Gaming.Tooling.XMAT.SessionSummary", names);
+            Assert.Equal("Microsoft.Gaming.Tooling.XMAT.AppClosed", names[^1]);
             Assert.Empty(diagnostics);
         }
 

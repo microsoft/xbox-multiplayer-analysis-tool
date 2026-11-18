@@ -10,7 +10,7 @@ namespace XMAT.Telemetry
 {
     internal sealed record TelemetryConfiguration(bool Enabled, bool Approved, string InstrumentationKey, TelemetryBuildChannel Channel)
     {
-        internal const string EventNamespace = "Microsoft.Gaming.XMAT";
+        internal const string EventNamespace = "Microsoft.Gaming.Tooling.XMAT";
 
         internal bool IsValid => !Enabled || (Approved && Channel != TelemetryBuildChannel.Local &&
             Enum.IsDefined(Channel) && !string.IsNullOrWhiteSpace(InstrumentationKey) &&

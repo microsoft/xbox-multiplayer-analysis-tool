@@ -22,6 +22,7 @@
     <EnableTelemetry Condition="'$(EnableTelemetry)' == ''">false</EnableTelemetry>
     <TelemetryApproved Condition="'$(TelemetryApproved)' == ''">false</TelemetryApproved>
     <TelemetryBuildChannel Condition="'$(TelemetryBuildChannel)' == ''">Local</TelemetryBuildChannel>
+    <BuildTelemetrySdk Condition="'$(BuildTelemetrySdk)' == ''">false</BuildTelemetrySdk>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -35,6 +36,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <WarningLevel>9999</WarningLevel>
     <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BuildTelemetrySdk)' == 'true'">
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <DefineConstants>$(DefineConstants);XMAT_TELEMETRY_SDK</DefineConstants>
+    <ApplicationManifest>telemetry.manifest</ApplicationManifest>
+    <CsWinRTIncludes>Microsoft.Xbox.Telemetry</CsWinRTIncludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -71,6 +80,19 @@
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(BuildTelemetrySdk)' == 'true'">
+    <PackageReference Include="Microsoft.Xbox.Telemetry" Version="0.8.0.261118001" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.3.1" />
+    <PackageReference Include="Microsoft.VCRTForwarders.140" Version="1.0.7" GeneratePathProperty="true" ExcludeAssets="all" />
+    <CsWinRTInputs Include="$(PkgMicrosoft_Xbox_Telemetry)\build\native\lib\x64\Microsoft.Xbox.Telemetry.winmd" />
+    <Content Include="$(PkgMicrosoft_Xbox_Telemetry)\build\native\lib\x64\Microsoft.Xbox.Telemetry.dll"
+             Link="Microsoft.Xbox.Telemetry.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(PkgMicrosoft_Xbox_Telemetry)\build\native\lib\x64\Microsoft.Xbox.Telemetry.pri"
+             Link="Microsoft.Xbox.Telemetry.pri" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(PkgMicrosoft_VCRTForwarders_140)\runtimes\win10-x64\native\release\*.dll"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <AssemblyMetadata Include="Xmat.Telemetry.Enabled" Value="$(EnableTelemetry)" />
     <AssemblyMetadata Include="Xmat.Telemetry.Approved" Value="$(TelemetryApproved)" />
@@ -81,7 +103,8 @@
   <Target Name="ValidateTelemetryConfiguration" BeforeTargets="GenerateAssemblyInfo">
     <Error Condition="'$(EnableTelemetry)' != 'true' and '$(EnableTelemetry)' != 'false'" Text="EnableTelemetry must be true or false." />
     <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryApproved)' != 'true'" Text="Telemetry-enabled builds require TelemetryApproved=true after XMAT collector/privacy approval." />
-    <Error Condition="'$(EnableTelemetry)' == 'true'" Text="Live telemetry is disabled pending a verified SDK revoke-and-purge lifecycle and event policy approval. Build with EnableTelemetry=false." />
+    <Error Condition="'$(EnableTelemetry)' == 'true'" Text="Live telemetry is disabled pending schema and event/privacy policy approval. Build with EnableTelemetry=false." />
+    <Error Condition="'$(BuildTelemetrySdk)' != 'true' and '$(BuildTelemetrySdk)' != 'false'" Text="BuildTelemetrySdk must be true or false." />
     <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryBuildChannel)' != 'Public' and '$(TelemetryBuildChannel)' != 'Internal' and '$(TelemetryBuildChannel)' != 'Test'" Text="Telemetry-enabled builds require TelemetryBuildChannel=Public, Internal, or Test." />
   </Target>
 
