@@ -104,6 +104,11 @@ namespace XMAT.DesignSystem
                 "A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row does. A dropdown that filters looks like a checked toggle and keeps its name, and the filter row says what each filter shows, beside Clear filters, which turns every filter off.",
                 "People see what a list hides without opening each filter, and get every row back in one step, while the row keeps its layout as filters change. A check box beside the dropdown left them wondering what the check boxes in it were for.",
                 "CaptureConnectionViewTests.Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest"),
+
+            new DesignRule("DIALOG-1", RuleLevel.Must, "Dialogs",
+                "A confirmation asks one question that names the action and how many it affects, such as Delete 12 sessions?, and its button says the action again. When the action can't be undone, the button is red and Cancel is the default answer.",
+                "People decide from the question and the button without reading further, and Enter or Esc pressed out of habit never deletes anything.",
+                "CaptureDeleteUiTests.NewLookConfirmation_NamesTheActionAndCount_WithARedButton_AndCancelsByDefault"),
         };
 
         // The rule with ID, or null when there is none.

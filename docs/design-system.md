@@ -186,7 +186,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 
 | File | Styles |
 | --- | --- |
-| `Buttons.xaml` | Buttons, icon buttons, the tab close button, toggle buttons and the filter toggles |
+| `Buttons.xaml` | Buttons, icon buttons, the tab close button, the danger button, toggle buttons and the filter toggles |
 | `Toolbar.xaml` | The capture toolbar, its Start/Stop capture button and the recording indicator |
 | `Inputs.xaml` | Text boxes, the search box, dropdowns, check boxes and radio buttons |
 | `Tabs.xaml` | Capture, inspector and format tabs, and the More buttons that end a tab row |
@@ -230,6 +230,14 @@ files of their own as they are worked on.
   filter row says what each filter shows, such as **Status: 404, 503**, beside Clear filters, which turns every filter
   off. A value that first appears while a filter is on stays hidden, because nobody picked it. The original look keeps
   its check box beside each dropdown.
+
+### Dialogs
+
+- **DIALOG-1** A confirmation asks one question that names the action and how many it affects, such as **Delete 12
+  sessions?**, and its button says the action again. When the action can't be undone, the button is red
+  (`DangerButtonStyle`) and Cancel is the default answer, so Enter and Esc both cancel. `XMAT/Controls/ConfirmPanel.xaml`
+  lays a confirmation out and `XMAT/Windows/ConfirmWindow.cs` shows it. The original look keeps the Windows message
+  box.
 
 ## The design system app
 

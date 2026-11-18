@@ -322,9 +322,11 @@ the timeline or the filter boxes.
 
 XMAT asks first, with **Cancel** as the default answer. The confirmation counts the
 sessions to delete, the sessions that stay (including hidden ones) and the sessions to
-delete that have no complete recorded response. Deleting cannot be undone. Sessions that
-arrive while the confirmation is open, and sessions that a filter hides by the time you
-confirm, are kept, and XMAT then reports how many it deleted and kept.
+delete that have no complete recorded response. Deleting cannot be undone. With **New
+look** on, the question and its red button both say how many sessions it deletes, such
+as **Delete 12 sessions**. Sessions that arrive while the confirmation is open, and
+sessions that a filter hides by the time you confirm, are kept, and XMAT then reports
+how many it deleted and kept.
 
 You can delete sessions while the capture runs. XMAT keeps forwarding the traffic of a
 deleted session that is still in progress, but does not record the rest of it. Deleting

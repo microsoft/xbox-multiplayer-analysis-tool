@@ -61,6 +61,18 @@
             </ds:StoryExample>
         </ds:StorySection>
 
+        <ds:StorySection Title="Danger button" StyleName="DangerButtonStyle"
+                         Description="The button of an action that can't be undone, in a confirmation, such as Delete 12 sessions (Dialogs). It's filled red, and it says the action again.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource DangerButtonStyle}" Content="Delete 12 sessions" MinWidth="88"
+                        MinHeight="{DynamicResource ControlHeight}"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Style="{DynamicResource DangerButtonStyle}" Content="Delete 12 sessions" MinWidth="88"
+                        MinHeight="{DynamicResource ControlHeight}" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
         <ds:StorySection Title="Toggle button" StyleName="ToggleButton (default style)"
                          Description="An option that stays on while the button is pressed. On, it takes the soft accent fill and an accent outline.">
             <ds:StoryExample Caption="Off">

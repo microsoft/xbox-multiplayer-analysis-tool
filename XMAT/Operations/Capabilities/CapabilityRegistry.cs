@@ -186,6 +186,9 @@ namespace XMAT.Operations.Capabilities
                 {
                     Command(ProxyCommandsPrefix + "DeleteSelectedSessions"),
                     Command(ProxyCommandsPrefix + "DeleteUnselectedSessions"),
+                    // The new look's confirmation.
+                    Window("XMAT.ConfirmWindow"),
+                    Click("Controls/ConfirmPanel.xaml", "Confirm_Click"),
                 }),
             Capability.Planned(
                 "capture.network-trace", "Capture low-level network traces", "S8b", Owner,

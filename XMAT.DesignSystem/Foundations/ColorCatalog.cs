@@ -71,7 +71,7 @@ namespace XMAT.DesignSystem
                 new ColorRole("WarningOnFillBrush", "Labels on WarningFillBrush"),
                 new ColorRole("WarningTextBrush", "Warnings and pending captures"),
                 new ColorRole("WarningSoftBrush", "The background behind WarningTextBrush"),
-                new ColorRole("ErrorFillBrush", "5xx responses"),
+                new ColorRole("ErrorFillBrush", "5xx responses, and the button of an action that can't be undone"),
                 new ColorRole("ErrorOnFillBrush", "Labels on ErrorFillBrush"),
                 new ColorRole("ErrorTextBrush", "Errors"),
                 new ColorRole("ErrorSoftBrush", "The background behind ErrorTextBrush"),
@@ -152,6 +152,7 @@ namespace XMAT.DesignSystem
                 new ContrastPair("ButtonTextBrush", "SurfaceHoverBrush"),
                 new ContrastPair("ButtonTextBrush", "AccentSoftBrush"),
                 new ContrastPair("AccentOnFillBrush", "AccentFillBrush"),
+                new ContrastPair("ErrorOnFillBrush", "ErrorFillBrush"),
             }),
             new ContrastGroup("Status", TextContrast,
                 new[] { "Success", "Warning", "Error" }

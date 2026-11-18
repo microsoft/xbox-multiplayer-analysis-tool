@@ -1,7 +1,7 @@
-<!-- Buttons in the new look: the standard outlined button, its quiet icon and tab close variants, toggle buttons,
-     and the filter toggles that sit among the filter dropdowns, with the Filters button that a narrow filter row
-     folds into. The capture toolbar's buttons are in Styles/Toolbar.xaml. Looks/NewLook.xaml merges this
-     dictionary. -->
+<!-- Buttons in the new look: the standard outlined button, its quiet icon and tab close variants, the red button of an
+     action that can't be undone, toggle buttons, and the filter toggles that sit among the filter dropdowns, with the
+     Filters button that a narrow filter row folds into. The capture toolbar's buttons are in Styles/Toolbar.xaml.
+     Looks/NewLook.xaml merges this dictionary. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:XMAT">
@@ -57,6 +57,63 @@
         <Setter Property="Padding" Value="0"/>
         <Setter Property="HorizontalContentAlignment" Value="Center"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <!-- The button of an action that can't be undone, such as Delete 12 sessions in a confirmation: filled in the error
+         color, with its label on that fill. The pointer and a press shade the fill, so the button stays red. Keyboard
+         focus rings it outside the fill, as on the toolbar's filled button, so the ring shows in a contrast theme,
+         where the fill and its outline are one color. -->
+    <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ErrorOnFillBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ErrorFillBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True"/>
+                        <Border x:Name="Shade" CornerRadius="{DynamicResource ControlCornerRadius}" Opacity="0"
+                                Background="{DynamicResource TextPrimaryBrush}" IsHitTestVisible="False"/>
+                        <!-- The empty TextBlock style keeps the label in the button's foreground, not the new look's
+                             text color. -->
+                        <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          RecognizesAccessKey="True">
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock"/>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                        <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <Border x:Name="FocusRing" Margin="-2" CornerRadius="6"
+                                BorderBrush="{DynamicResource TextPrimaryBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Shade" Property="Opacity" Value="0.12"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Shade" Property="Opacity" Value="0.24"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- The close button on a tab: a quiet glyph that fills on hover, with a 24px target. -->
