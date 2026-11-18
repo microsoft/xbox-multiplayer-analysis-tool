@@ -155,6 +155,24 @@ delivered them: their chunked framing is never removed a second time.
 
 ### Filter connections
 
+With **New look** on, the search box at the start of the filter row finds requests as
+you type. Words find requests whose host or path contains them, and every word must
+be found. Terms use the command line's names:
+
+| Term | Finds |
+| --- | --- |
+| `status:404`, `status:5xx`, `status:none` | A status code, a class with x for any digit, or requests without a status |
+| `host:xboxlive`, `host:*.xboxlive.com` | Hosts that contain the text, or that match a pattern as the Block List matches it |
+| `method:POST` | A method |
+| `process:SampleGame`, `process:4100` | Processes whose name contains the text, or a process ID |
+
+Start a word or term with `-` to hide what it matches, such as `-status:2xx`. Terms
+with the same name find any of them, as does a list such as `status:404,429`; terms
+with different names must all match. Quotes keep a phrase together. While anything
+filters the list, the box shows how many requests are shown, such as **12 of 340**.
+**Ctrl+F** moves to the box and **Esc** empties it. Exporting the visible sessions
+exports what the search shows.
+
 Use the toolbar lists to filter by status code, host, or method. Lists contain the
 values found in the capture; only checked values are shown. Filters combine and
 update as traffic arrives. **ALL/NONE** helps include or exclude a small set of values.

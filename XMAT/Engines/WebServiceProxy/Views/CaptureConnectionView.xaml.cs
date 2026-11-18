@@ -118,6 +118,7 @@ namespace XMAT.WebServiceCapture
 
         // The sessions that an export from this list covers: the visible ones follow every active filter (the Status, Host
         // and Method checkboxes as exact values, and the process filter); selectedOnly also keeps only the selected rows.
+        // A search has no exact form in a selection, so while one is set, the visible rows are named one by one.
         internal CaptureSelectionSpec ExportSelection(bool selectedOnly) =>
             new(
                 _attachedController?.ProcessFilter ?? ProcessFilterSpec.Empty,
@@ -127,7 +128,9 @@ namespace XMAT.WebServiceCapture
                 CheckedValues(MethodFilters, _attachedController?.MethodFilterList),
                 selectedOnly
                     ? ConnectionList.SelectedItems.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
-                    : null,
+                    : _search.IsActive
+                        ? ConnectionList.Items.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
+                        : null,
                 false);
 
         // The values that an enabled checkbox filter shows: like CaptureFilterIndex, the first item of a value decides.
@@ -900,7 +903,7 @@ namespace XMAT.WebServiceCapture
                 {
                     ConnectionList.Items.Filter = null;
                 }
-                SetLiveProcessFiltering(false);
+                SetLiveFiltering(false, false);
                 if (releaseView)
                 {
                     ReleaseConnectionsView();
@@ -946,7 +949,7 @@ namespace XMAT.WebServiceCapture
             {
                 view.MoveCurrentTo(_attachedController?.SelectedConnectionModel);
             }
-            SetLiveProcessFiltering(false);
+            SetLiveFiltering(false, false);
             ListCollectionView previous = _connectionsView;
             _connectionsView = view;
             ConnectionList.ItemsSource = view;
@@ -960,7 +963,7 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            SetLiveProcessFiltering(false);
+            SetLiveFiltering(false, false);
             _connectionsView = null;
             if (ReferenceEquals(ConnectionList.ItemsSource, retired))
             {
@@ -1024,6 +1027,7 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
+            RequestSearchCount();
             if (e.Action == NotifyCollectionChangedAction.Reset)
             {
                 DetachObservedItems();
@@ -1070,7 +1074,8 @@ namespace XMAT.WebServiceCapture
                 (!MethodFilters.IsFilterEnabled ||
                 _methodValues.IsChecked(model.Method)) &&
                 (_processMatcher == null ||
-                IsShownByProcessFilter(model));
+                IsShownByProcessFilter(model)) &&
+                (!_search.IsActive || _search.Matches(model));
         }
 
         private void CaptureConnectionView_ControllerChanged(object sender, PropertyChangedEventArgs args)
@@ -1179,21 +1184,22 @@ namespace XMAT.WebServiceCapture
             }
             bool processFilterActive = _processMatcher != null;
             var filter = StatusFilters.IsFilterEnabled || HostFilters.IsFilterEnabled || MethodFilters.IsFilterEnabled ||
-                processFilterActive
+                processFilterActive || _search.IsActive
                 ? _connectionFilter
                 : null;
             // One refresh for the whole change, when the deferral ends: assigning the filter, even the one already set,
             // refreshes the view, and WPF refuses an explicit Refresh while the refresh is deferred. While a process
-            // filter is set, live filtering re-evaluates a row whose process resolves later, so that row is added or
-            // removed without refreshing the others.
+            // filter or a search is set, live filtering re-evaluates a row whose process resolves later, or whose
+            // status arrives, so that row is added or removed without refreshing the others.
             using (ConnectionList.Items.DeferRefresh())
             {
-                SetLiveProcessFiltering(processFilterActive);
+                SetLiveFiltering(processFilterActive, _search.IsActive);
                 if (filter != null || ConnectionList.Items.Filter != null)
                 {
                     ConnectionList.Items.Filter = filter;
                 }
             }
+            RequestSearchCount();
         }
 
         private void UpdateFilterSources()

@@ -361,7 +361,8 @@ namespace XMAT.Tests
                 {
                     WpfTestHost.Show(window, view);
                     var overview = (TrafficOverview)view.FindName("OverviewStrip");
-                    var filters = (FrameworkElement)view.FindName("FiltersHost");
+                    // The filter row: the search box and the filters after it.
+                    var filters = (FrameworkElement)view.FindName("FilterRow");
                     var timeline = (FrameworkElement)view.FindName("TimelineView");
                     foreach (var (comfort, below, above) in new[] { (false, 8.0, 4.0), (true, 12.0, 8.0) })
                     {

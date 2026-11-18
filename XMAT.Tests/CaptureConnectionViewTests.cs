@@ -13,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -738,6 +739,113 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
                 Assert.False(host.OverflowPopup.IsOpen);
                 Assert.True(button.IsKeyboardFocused);
+            });
+        }
+
+        // The search box filters the table with the other filters and says how many of the capture's requests show while
+        // anything filters it, or why a term can't be used. Escape empties it. Exporting the visible rows exports what the
+        // search shows, and the search box grows into the room the filters leave and stays when they fold.
+        [Fact]
+        public void Search_FiltersTheTable_CountsWhatShows_AndEscapeEmptiesIt()
+        {
+            _application.Run(window =>
+            {
+                var controller = Controller();
+                var source = Guid.NewGuid();
+                foreach ((int number, string host, string status) in new[]
+                    { (1, "title.mgt.xboxlive.com", "200"), (2, "telemetry.example.test", "503"), (3, "images.example.test", "429") })
+                {
+                    ProxyConnectionModel row = CaptureTimelineTestData.Create(number, host: host, status: status);
+                    row.RowKey = new CaptureRowKey(source, 1, number, number);
+                    controller.ProxyConnections.Add(row);
+                }
+
+                var view = View(controller);
+                ShowAt(window, view, 1600);
+                var search = (SearchBox)view.FindName("SearchBox");
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                var filters = (FilterOverflowHost)view.FindName("FiltersHost");
+                Assert.True(search.IsVisible);
+                Assert.False(filters.IsOverflowing);
+                Assert.InRange(search.ActualWidth, 200.5, 360);
+                Assert.Null(search.Summary);
+
+                search.Text = "status:5xx example";
+                view.ApplySearch();
+                WpfTestHost.Pump();
+                ProxyConnectionModel failed = controller.ProxyConnections[1];
+                Assert.Equal(new[] { failed }, grid.Items.OfType<ProxyConnectionModel>());
+                Assert.Equal("1 of 3", search.Summary);
+                Assert.Equal(new[] { failed.RowKey }, view.ExportSelection(selectedOnly: false).Keys);
+
+                search.Text = "status:abc";
+                view.ApplySearch();
+                WpfTestHost.Pump();
+                Assert.Equal("status:abc isn't a status", search.Problem);
+                Assert.Equal(3, grid.Items.Count);
+                Assert.Null(search.Summary);
+
+                Press(search, Key.Escape);
+                WpfTestHost.Pump();
+                Assert.Equal(string.Empty, search.Text);
+                Assert.Null(search.Problem);
+                Assert.Null(view.ExportSelection(selectedOnly: false).Keys);
+
+                window.Width = 700;
+                WpfTestHost.Pump();
+                Assert.True(filters.IsOverflowing);
+                Assert.True(search.IsVisible);
+                Assert.InRange(search.ActualWidth, 200, 360);
+            });
+        }
+
+        // In the new look, a problem with what was typed takes only the room the typed text leaves, but at least half, and
+        // trims to fit, so neither hides the other; while there's a problem, the box is outlined like a field whose value
+        // isn't valid.
+        [Fact]
+        public void SearchBox_KeepsTheTypedTextBesideAProblem_AndOutlinesTheBox()
+        {
+            _application.Run(window =>
+            {
+                var search = new SearchBox { Width = 320, Text = "status:abc", Problem = "status:abc isn't a status" };
+                // Rounded to whole pixels, as the app lays out.
+                var host = new Border { Child = search, HorizontalAlignment = HorizontalAlignment.Left, UseLayoutRounding = true };
+                host.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Styles/Inputs.xaml")
+                });
+                WpfTestHost.Show(window, host);
+                var typed = (ScrollViewer)search.Template.FindName("PART_ContentHost", search);
+                var problem = (TextBlock)search.Template.FindName("Problem", search);
+                var outline = (FrameworkElement)search.Template.FindName("ProblemOutline", search);
+                void TypedTextShowsInFull() => Assert.True(typed.ExtentWidth <= typed.ViewportWidth + 0.5,
+                    $"The problem leaves {typed.ViewportWidth}px of the {typed.ExtentWidth}px typed.");
+                double Room(TextBlock text) => text.ActualWidth + text.Margin.Left + text.Margin.Right;
+                var whole = new TextBlock { Text = search.Problem, FontFamily = problem.FontFamily, FontSize = problem.FontSize };
+                whole.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+                TypedTextShowsInFull();
+                double shown = problem.DesiredSize.Width - problem.Margin.Left - problem.Margin.Right;
+                Assert.True(shown >= whole.DesiredSize.Width - 0.5,
+                    $"The problem shows {shown}px of its {whole.DesiredSize.Width}px in a box with room.");
+                Assert.True(outline.IsVisible);
+
+                search.Width = 200;
+                WpfTestHost.Pump();
+                TypedTextShowsInFull();
+                Assert.True(problem.ActualWidth > 40);
+
+                search.Problem = "status:abc isn't a status, and this sentence runs far past the end of the box";
+                WpfTestHost.Pump();
+                TypedTextShowsInFull();
+
+                search.Text = "host:a-very-long-host-name.example.test status:abc method:GET";
+                WpfTestHost.Pump();
+                Assert.InRange(Room(problem), typed.ActualWidth - 1, typed.ActualWidth + 1);
+
+                search.Problem = null;
+                WpfTestHost.Pump();
+                Assert.False(outline.IsVisible);
+                Assert.False(problem.IsVisible);
             });
         }
 

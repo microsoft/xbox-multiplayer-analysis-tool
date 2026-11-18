@@ -2,8 +2,9 @@
           xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
           xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:app="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
           Title="Text boxes and dropdowns"
-          Summary="Text boxes take a typed value, such as a host or a port; read-only text areas show request and response text in the inspector. Dropdowns choose one value from a list."
+          Summary="Text boxes take a typed value, such as a host or a port; a search box finds rows in a list; read-only text areas show request and response text in the inspector. Dropdowns choose one value from a list."
           Section="Components"
           DefinedIn="XMAT/Styles/Inputs.xaml">
     <StackPanel>
@@ -20,6 +21,19 @@
             </ds:StoryExample>
             <ds:StoryExample Caption="Disabled">
                 <TextBox Width="220" Text="api.example.com" IsEnabled="False" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Search box" StyleName="SearchBox (default style)"
+                         Description="Finds rows in a list, such as the capture's requests. While anything is filtered, it says how many rows show; a term it can't use shows in the error color instead, and screen readers hear it. Escape or the clear button empties it.">
+            <ds:StoryExample Caption="Empty, with its hint">
+                <app:SearchBox Width="320" Hint="Search hosts, paths or status:5xx" AutomationProperties.Name="Search"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Searching, with the count">
+                <app:SearchBox Width="320" Text="status:5xx xboxlive" Summary="12 of 340" AutomationProperties.Name="Search"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A term it can't use">
+                <app:SearchBox Width="320" Text="status:abc" Problem="status:abc isn't a status" AutomationProperties.Name="Search"/>
             </ds:StoryExample>
         </ds:StorySection>
 

@@ -25,31 +25,42 @@ namespace XMAT.WebServiceCapture
                 ? row.State.HasFlag(ProcessRowState.Included)
                 : _processMatcher.Matches(model.ClientProcess);
 
-        // Live filtering re-evaluates one row when its process changes. It is on only while a process filter is set, and
-        // only on the grid's own view.
-        private void SetLiveProcessFiltering(bool active)
+        // Live filtering re-evaluates one row when a property its filter reads changes: its process while a process filter
+        // is set, and also its status, host, path and method while a search is. It is on only while one of them is set,
+        // and only on the grid's own view.
+        private void SetLiveFiltering(bool process, bool search)
         {
             ListCollectionView view = _connectionsView;
             if (view == null || !view.CanChangeLiveFiltering)
             {
                 return;
             }
-            const string property = nameof(ProxyConnectionModel.ClientProcess);
-            if (active)
+            string[] searched =
             {
-                if (!view.LiveFilteringProperties.Contains(property))
+                nameof(ProxyConnectionModel.Status), nameof(ProxyConnectionModel.Host), nameof(ProxyConnectionModel.Path),
+                nameof(ProxyConnectionModel.Method),
+            };
+            Set(nameof(ProxyConnectionModel.ClientProcess), process || search);
+            foreach (string property in searched)
+            {
+                Set(property, search);
+            }
+            bool live = process || search;
+            if (view.IsLiveFiltering != live)
+            {
+                view.IsLiveFiltering = live;
+            }
+
+            void Set(string property, bool watched)
+            {
+                if (watched && !view.LiveFilteringProperties.Contains(property))
                 {
                     view.LiveFilteringProperties.Add(property);
                 }
-                if (view.IsLiveFiltering != true)
+                else if (!watched)
                 {
-                    view.IsLiveFiltering = true;
+                    view.LiveFilteringProperties.Remove(property);
                 }
-            }
-            else if (view.IsLiveFiltering == true || view.LiveFilteringProperties.Contains(property))
-            {
-                view.IsLiveFiltering = false;
-                view.LiveFilteringProperties.Remove(property);
             }
         }
 

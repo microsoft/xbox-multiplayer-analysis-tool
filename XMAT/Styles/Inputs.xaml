@@ -1,7 +1,8 @@
-<!-- Inputs in the new look: text boxes, dropdowns and their items, check boxes and radio buttons.
+<!-- Inputs in the new look: text boxes, the search box, dropdowns and their items, check boxes and radio buttons.
      Looks/NewLook.xaml merges this dictionary. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:XMAT">
 
     <Style TargetType="TextBox">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
@@ -43,6 +44,83 @@
         <Setter Property="TextBlock.LineHeight" Value="18"/>
         <!-- Keyboard users read and select read-only text from the caret. -->
         <Setter Property="IsReadOnlyCaretVisible" Value="True"/>
+    </Style>
+
+    <!-- A search box is a text box with a search icon at its start and a hint while it's empty. At its end, a summary such
+         as "12 of 340" in the secondary color, or a problem with what was typed in the error color, which screen readers
+         hear, with an error outline like a field whose value isn't valid. A problem takes only the room the typed text
+         leaves, but at least half, and trims (SearchTextPanel). While the box has text, a quiet button clears it; it
+         takes no Tab stop, because Escape clears too. -->
+    <Style TargetType="local:SearchBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:SearchBox">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource InputCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Margin="8,0,4,0" VerticalAlignment="Center" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Text="&#xE721;" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <local:SearchTextPanel Grid.Column="1">
+                                    <TextBlock x:Name="TypedWidth" Margin="2,0,3,0" Text="{TemplateBinding Text}"
+                                               Visibility="Hidden" IsHitTestVisible="False"/>
+                                    <Grid>
+                                        <TextBlock x:Name="Hint" Margin="2,0,0,0" VerticalAlignment="Center"
+                                                   Text="{TemplateBinding Hint}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   TextTrimming="CharacterEllipsis" IsHitTestVisible="False" Visibility="Collapsed"/>
+                                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" Background="Transparent"/>
+                                    </Grid>
+                                    <TextBlock x:Name="Summary" Margin="8,0,4,0" VerticalAlignment="Center"
+                                               Text="{TemplateBinding Summary}" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               Visibility="Collapsed"/>
+                                    <TextBlock x:Name="Problem" Margin="8,0,4,0" VerticalAlignment="Center"
+                                               Text="{TemplateBinding Problem}" Foreground="{DynamicResource ErrorTextBrush}"
+                                               TextTrimming="CharacterEllipsis" local:LiveRegion.Mode="Assertive"/>
+                                </local:SearchTextPanel>
+                                <Button x:Name="PART_Clear" Grid.Column="2" Margin="0,0,2,0" Style="{DynamicResource TabCloseButtonStyle}"
+                                        Focusable="False" ToolTip="{x:Static local:SearchBox.ClearText}"
+                                        AutomationProperties.Name="{x:Static local:SearchBox.ClearText}">
+                                    <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets"/>
+                                </Button>
+                            </Grid>
+                        </Border>
+                        <Border x:Name="ProblemOutline" BorderThickness="1" CornerRadius="{DynamicResource InputCornerRadius}"
+                                BorderBrush="{DynamicResource ErrorTextBrush}" IsHitTestVisible="False" SnapsToDevicePixels="True"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Text" Value="">
+                            <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="PART_Clear" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                        <Trigger Property="Problem" Value="{x:Null}">
+                            <Setter TargetName="Problem" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="ProblemOutline" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="Summary" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="Problem" Value="">
+                            <Setter TargetName="Problem" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="ProblemOutline" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="Summary" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- Editable dropdowns host a default-styled TextBox whose ScrollViewer would otherwise take the app-wide

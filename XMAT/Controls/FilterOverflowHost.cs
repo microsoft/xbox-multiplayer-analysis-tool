@@ -130,6 +130,10 @@ namespace XMAT
         // Whether the Filters button stands in for the row.
         public bool IsOverflowing => (bool)GetValue(IsOverflowingProperty);
 
+        // The width the host asks for while its row doesn't fold: the row at its natural width, or the summary line under
+        // it if that's wider. Known once the host has been measured.
+        internal double NaturalWidth => Math.Max(Filters?.DesiredSize.Width ?? 0, _summaryLine.DesiredSize.Width);
+
         internal ToggleButton OverflowButton => _button;
 
         internal Popup OverflowPopup => _popup;

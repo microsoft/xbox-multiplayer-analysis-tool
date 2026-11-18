@@ -188,7 +188,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 | --- | --- |
 | `Buttons.xaml` | Buttons, icon buttons, the tab close button, toggle buttons and the filter toggles |
 | `Toolbar.xaml` | The capture toolbar, its Start/Stop capture button and the recording indicator |
-| `Inputs.xaml` | Text boxes, dropdowns, check boxes and radio buttons |
+| `Inputs.xaml` | Text boxes, the search box, dropdowns, check boxes and radio buttons |
 | `Tabs.xaml` | Capture, inspector and format tabs, and the More buttons that end a tab row |
 | `ChoiceCards.xaml`, `CaptureIcons.xaml` | Choice cards, such as the devices and capture types in New Capture, and the pictures on them |
 | `ScrollBars.xaml` | Scroll bars, with a thumb at least 24px long |

@@ -106,60 +106,70 @@
             </Grid>
         </ToolBar>
 
-        <!-- When the traffic pane is too narrow for the filters, the new look folds them into a Filters button that
-             lists them in a popup. -->
-        <app:FilterOverflowHost x:Name="FiltersHost" Grid.Row="1" Margin="{DynamicResource TrafficFiltersMargin}"
-                                IsOverflowEnabled="{app:Look New=True, Original=False}">
-            <Grid x:Name="FiltersPanel" Background="{DynamicResource SurfacePanelBrush}"
-                  HorizontalAlignment="{app:Look New=Stretch, Original=Left}" VerticalAlignment="{app:Look New=Stretch, Original=Center}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
-                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
-                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"
-                           app:FilterOverflowHost.IsInlineOnly="True"/>
-                <app:CheckBoxFilters x:Name="StatusFilters" Grid.Column="1" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
-                <app:CheckBoxFilters x:Name="HostFilters"   Grid.Column="2" FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
-                <app:CheckBoxFilters x:Name="MethodFilters" Grid.Column="3" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
-                <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
-                <ToggleButton x:Name="ProcessFilterButton" Grid.Column="4" Style="{DynamicResource FilterToggleButtonStyle}" HorizontalAlignment="Left"
-                              IsChecked="{Binding IsOpen, ElementName=ProcessFilterPopup, Mode=TwoWay}" Content="Process"/>
-                <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
-                       StaysOpen="False" AllowsTransparency="False">
-                    <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
-                    <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
-                            TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
-                            KeyboardNavigation.TabNavigation="Cycle"
-                            BorderThickness="1" Padding="8">
-                        <StackPanel Width="340">
-                            <TextBlock x:Name="ProcessIncludeLabel" Text="Show only" FontWeight="SemiBold"/>
-                            <TextBox x:Name="ProcessIncludeText" Margin="0,2,0,6" Padding="2"
-                                     AutomationProperties.LabeledBy="{Binding ElementName=ProcessIncludeLabel}"/>
-                            <TextBlock x:Name="ProcessExcludeLabel" Text="Hide" FontWeight="SemiBold"/>
-                            <TextBox x:Name="ProcessExcludeText" Margin="0,2,0,6" Padding="2"
-                                     AutomationProperties.LabeledBy="{Binding ElementName=ProcessExcludeLabel}"/>
-                            <TextBlock x:Name="ProcessFilterHelp" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                            <TextBlock x:Name="ProcessFilterError" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"
-                                       app:LiveRegion.Mode="Assertive" Visibility="Collapsed"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="HideSvchostButton" Padding="8,2" Margin="0,0,6,0" Click="HideSvchost_Click">Hide svchost.exe</Button>
-                                <Button x:Name="ApplyProcessFilterButton" Padding="8,2" Click="ApplyProcessFilter_Click">Apply</Button>
+        <!-- The new look's search box starts the filter row. When the traffic pane is too narrow for the filters, the new
+             look folds them into a Filters button that lists them in a popup, and the search box stays. The original
+             look has no search box. -->
+        <app:SearchFilterRow x:Name="FilterRow" Grid.Row="1" Margin="{DynamicResource TrafficFiltersMargin}">
+            <app:SearchBox x:Name="SearchBox" VerticalAlignment="Top" Visibility="{app:Look New=Visible, Original=Collapsed}"
+                           Hint="{x:Static local:CaptureConnectionView.SearchHint}"
+                           ToolTip="{x:Static local:CaptureConnectionView.SearchHelp}"
+                           AutomationProperties.Name="{x:Static local:CaptureConnectionView.SearchName}"
+                           AutomationProperties.HelpText="{x:Static local:CaptureConnectionView.SearchHelp}"
+                           TextChanged="SearchBox_TextChanged"/>
+            <app:FilterOverflowHost x:Name="FiltersHost"
+                                    IsOverflowEnabled="{app:Look New=True, Original=False}">
+                <Grid x:Name="FiltersPanel" Background="{DynamicResource SurfacePanelBrush}"
+                      HorizontalAlignment="{app:Look New=Stretch, Original=Left}" VerticalAlignment="{app:Look New=Stretch, Original=Center}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <!-- In the new look, the search box beside the row says what the row is for. -->
+                    <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"
+                               Visibility="{app:Look New=Collapsed, Original=Visible}" app:FilterOverflowHost.IsInlineOnly="True"/>
+                    <app:CheckBoxFilters x:Name="StatusFilters" Grid.Column="1" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
+                    <app:CheckBoxFilters x:Name="HostFilters"   Grid.Column="2" FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
+                    <app:CheckBoxFilters x:Name="MethodFilters" Grid.Column="3" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
+                    <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
+                    <ToggleButton x:Name="ProcessFilterButton" Grid.Column="4" Style="{DynamicResource FilterToggleButtonStyle}" HorizontalAlignment="Left"
+                                  IsChecked="{Binding IsOpen, ElementName=ProcessFilterPopup, Mode=TwoWay}" Content="Process"/>
+                    <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
+                           StaysOpen="False" AllowsTransparency="False">
+                        <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
+                        <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
+                                KeyboardNavigation.TabNavigation="Cycle"
+                                BorderThickness="1" Padding="8">
+                            <StackPanel Width="340">
+                                <TextBlock x:Name="ProcessIncludeLabel" Text="Show only" FontWeight="SemiBold"/>
+                                <TextBox x:Name="ProcessIncludeText" Margin="0,2,0,6" Padding="2"
+                                         AutomationProperties.LabeledBy="{Binding ElementName=ProcessIncludeLabel}"/>
+                                <TextBlock x:Name="ProcessExcludeLabel" Text="Hide" FontWeight="SemiBold"/>
+                                <TextBox x:Name="ProcessExcludeText" Margin="0,2,0,6" Padding="2"
+                                         AutomationProperties.LabeledBy="{Binding ElementName=ProcessExcludeLabel}"/>
+                                <TextBlock x:Name="ProcessFilterHelp" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="ProcessFilterError" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"
+                                           app:LiveRegion.Mode="Assertive" Visibility="Collapsed"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button x:Name="HideSvchostButton" Padding="8,2" Margin="0,0,6,0" Click="HideSvchost_Click">Hide svchost.exe</Button>
+                                    <Button x:Name="ApplyProcessFilterButton" Padding="8,2" Click="ApplyProcessFilter_Click">Apply</Button>
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
-                    </Border>
-                </Popup>
-                <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters. -->
-                <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="5" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
-                           Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
-                <Button x:Name="ShowAllProcessesButton" Grid.Column="6" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
-                        HorizontalAlignment="Left" app:FilterOverflowHost.IsSummary="True" Click="ShowAllProcesses_Click">Show all processes</Button>
-            </Grid>
-        </app:FilterOverflowHost>
+                        </Border>
+                    </Popup>
+                    <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters. -->
+                    <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="5" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
+                               Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
+                    <Button x:Name="ShowAllProcessesButton" Grid.Column="6" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
+                            HorizontalAlignment="Left" app:FilterOverflowHost.IsSummary="True" Click="ShowAllProcesses_Click">Show all processes</Button>
+                </Grid>
+            </app:FilterOverflowHost>
+        </app:SearchFilterRow>
 
         <!-- The traffic overview sums up the rows the table shows; selecting a status class or a host sets the filters
              above. The original look has none. -->
