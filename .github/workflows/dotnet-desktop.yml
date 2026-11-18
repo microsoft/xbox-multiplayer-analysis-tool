@@ -44,7 +44,7 @@ jobs:
     - name: Restore the application
       run: dotnet restore $env:Solution_Name
       
-    # Build
+    # Public CI must not restore/activate internal telemetry, regardless of saved user consent.
     - name: Build XMAT
       run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore -p:EnableTelemetry=false -p:TelemetryApproved=false
       env:
@@ -62,6 +62,17 @@ jobs:
         --results-directory ./TestResults
       env:
         Configuration: ${{ matrix.configuration }}
+
+    - name: Verify live telemetry remains blocked
+      shell: pwsh
+      run: |
+        $output = dotnet msbuild XMAT\XboxMultiplayerAnalysisTool.csproj -t:ValidateTelemetryConfiguration `
+          -p:Platform=x64 -p:EnableTelemetry=true -p:TelemetryApproved=true -p:TelemetryBuildChannel=Test 2>&1 | Out-String
+        $failedAsExpected = $LASTEXITCODE -ne 0
+        if (-not $failedAsExpected -or -not $output.Contains("Live telemetry is disabled")) {
+          throw "The live telemetry safety gate did not reject an enabled build: $output"
+        }
+        exit 0
 
     # Generate coverage report
     - name: Install ReportGenerator

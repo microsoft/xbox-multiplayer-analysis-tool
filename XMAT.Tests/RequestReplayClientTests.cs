@@ -27,6 +27,26 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task RevokedTelemetryCannotBeReusedByAnExistingReplayClient()
+        {
+            var reporter = new TelemetryReporter();
+            using var telemetry = new XmatTelemetryService(reporter, _ => { });
+            using var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("response")
+            }));
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient, telemetry);
+            telemetry.Revoke();
+
+            var capture = RequestReplayDraftTests.Capture("GET", "/", []);
+            var result = await client.SendAsync(RequestReplayDraft.FromCapture(capture), confirmed: true, CancellationToken.None);
+
+            Assert.Equal("200", result.Response.Status);
+            Assert.Empty(reporter.Events);
+        }
+
+        [Fact]
         public async Task SendAsync_ReturnsIndependentResponseIncludingHttpErrors()
         {
             var reporter = new TelemetryReporter();
@@ -235,6 +255,7 @@ namespace XMAT.Tests
         {
             internal ConcurrentQueue<TelemetryEvent> Events { get; } = new();
             public void Send(TelemetryEvent item, Guid sessionId) => Events.Enqueue(item);
+            public void Revoke() => Events.Clear();
             public void Dispose() { }
         }
 

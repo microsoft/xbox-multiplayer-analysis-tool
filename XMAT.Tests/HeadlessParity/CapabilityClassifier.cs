@@ -57,7 +57,10 @@ namespace XMAT.Tests.HeadlessParity
         private static readonly Regex IdPattern = new("^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$");
         private static readonly Regex SlicePattern = new("^S[0-9]+[a-z]?$");
         // Each policy exception is reviewed on its own; this list grows only with that review.
-        private static readonly HashSet<string> PolicyExceptions = new(StringComparer.Ordinal) { "capture.delete-sessions" };
+        private static readonly HashSet<string> PolicyExceptions = new(StringComparer.Ordinal)
+        {
+            "capture.delete-sessions", "privacy.telemetry-consent"
+        };
         private static readonly string[] KeyPrefixes =
         {
             "command:", "click:", "dynamic:", "window:", "enum:", "analyzer:", "preference:",
@@ -156,7 +159,8 @@ namespace XMAT.Tests.HeadlessParity
                     case CapabilityStatus.PolicyException:
                         if (!PolicyExceptions.Contains(id))
                         {
-                            problems.Add($"{id}: PolicyException is reviewed per capability; only capture.delete-sessions may use it.");
+                            problems.Add($"{id}: PolicyException is reviewed per capability; only capture.delete-sessions " +
+                                "and privacy.telemetry-consent may use it.");
                         }
 
                         if (string.IsNullOrWhiteSpace(capability.Owner))

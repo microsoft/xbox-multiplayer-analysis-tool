@@ -63,6 +63,7 @@ namespace XMAT.Tests.HeadlessParity
                 [Fixture + "ApplicationLog|XMAT.PublicUtilities::AppLog"] = "global-logging",
                 [Fixture + "LocalizedText|XMAT.Localization::GetLocalizedString"] = "localization",
                 [Fixture + "LanguageLoading|XMAT.Localization::LoadLanguage"] = "localization",
+                [Fixture + "Telemetry|XMAT.Telemetry.ITelemetryReporter::Send"] = "telemetry",
             };
 
             Assert.Equal(expected.OrderBy(entry => entry.Key), reported.OrderBy(entry => entry.Key));

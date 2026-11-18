@@ -19,6 +19,13 @@ namespace XMAT.Tests.HeadlessParity
         internal static IReadOnlyList<Rule> Rules { get; } = new[]
         {
             new Rule(
+                "telemetry",
+                "GUI product telemetry or an emitting telemetry SDK",
+                "keep headless commands and shared operations telemetry-free; only GUI adapters may report after consent",
+                (type, member) => type.StartsWith("XMAT.Telemetry.", StringComparison.Ordinal) ||
+                    type.StartsWith("Microsoft.Xbox.Telemetry.", StringComparison.Ordinal) ||
+                    type.StartsWith("OpenTelemetry.", StringComparison.Ordinal)),
+            new Rule(
                 "app-model",
                 "the GUI's app model (CaptureAppModel, including its AppModel singleton)",
                 "take what the code needs from its request or OperationContext; only GUI adapters read the app model",

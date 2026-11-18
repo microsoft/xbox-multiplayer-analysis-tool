@@ -30,8 +30,13 @@ namespace XMAT.Telemetry
         private int _activeCaptures;
         private readonly HashSet<TelemetryOperation> _operations = [];
         private readonly object _operationGate = new();
+        private readonly object _sendGate = new();
+        private static bool _sampling;
+        private static readonly Lazy<TelemetryConsentPreferences> ConsentPreferences = new(() => new(
+            TelemetryConsentStore.ForCurrentUser(Diagnose), StopConsentedSession, StartConsentedSession));
 
         internal static XmatTelemetryService Current { get; private set; } = new(null, Diagnose);
+        internal static TelemetryConsentPreferences Consent => ConsentPreferences.Value;
         internal bool IsEnabled => _reporter != null && Volatile.Read(ref _disposed) == 0;
         internal Guid SessionId { get; } = Guid.NewGuid();
 
@@ -49,10 +54,9 @@ namespace XMAT.Telemetry
             {
                 var configuration = TelemetryConfiguration.FromAssembly();
                 var samplePath = LocalTelemetrySampleReporter.SamplePath(args);
+                _sampling = samplePath != null;
                 Current = samplePath == null
-                    ? Create(configuration,
-                        channel => TelemetryEnvironmentProvider.Read(channel, Diagnose),
-                        (options, fields) => new OneCollectorTelemetryReporter(options, fields, Diagnose), Diagnose)
+                    ? CreateLive(configuration)
                     : CreateSample(configuration, samplePath,
                         channel => TelemetryEnvironmentProvider.Read(channel, Diagnose), Diagnose);
                 Current.Track(new(TelemetryEventKind.AppLaunched));
@@ -67,6 +71,34 @@ namespace XMAT.Telemetry
             }
         }
 
+        private static XmatTelemetryService CreateLive(TelemetryConfiguration configuration)
+        {
+            // The SDK currently has no verified revoke-and-purge lifecycle. Never activate it,
+            // read device metadata, or load an earlier SDK cache, even with saved consent.
+            if (configuration.Enabled)
+            {
+                Diagnose("LiveAdapterUnavailable");
+            }
+            return new(null, Diagnose);
+        }
+
+        private static void StopConsentedSession()
+        {
+            if (!_sampling)
+            {
+                Current.Revoke();
+            }
+        }
+
+        private static void StartConsentedSession()
+        {
+            if (!_sampling)
+            {
+                Current = CreateLive(TelemetryConfiguration.FromAssembly());
+                Current.Track(new(TelemetryEventKind.AppLaunched));
+            }
+        }
+
         internal static XmatTelemetryService CreateSample(TelemetryConfiguration configuration, string samplePath,
             Func<TelemetryBuildChannel, IReadOnlyList<KeyValuePair<string, object>>> environment,
             Action<string> diagnose)
@@ -75,6 +107,11 @@ namespace XMAT.Telemetry
             {
                 throw new InvalidOperationException("Local sampling requires a non-exporting build.");
             }
+            if (IsSuppressed)
+            {
+                diagnose("LocalSampleSuppressed");
+                return new(null, diagnose);
+            }
             return new(new LocalTelemetrySampleReporter(samplePath, environment(TelemetryBuildChannel.Local), diagnose), diagnose);
         }
 
@@ -82,14 +119,14 @@ namespace XMAT.Telemetry
             TelemetryConfiguration configuration,
             Func<TelemetryBuildChannel, IReadOnlyList<KeyValuePair<string, object>>> environment,
             Func<TelemetryConfiguration, IReadOnlyList<KeyValuePair<string, object>>, ITelemetryReporter> reporter,
-            Action<string> diagnose)
+            Action<string> diagnose, TelemetryConsentState consent = TelemetryConsentState.Missing)
         {
             if (!configuration.IsValid)
             {
                 diagnose("InvalidConfiguration");
                 return new(null, diagnose);
             }
-            if (!configuration.Enabled)
+            if (!configuration.Enabled || consent != TelemetryConsentState.Accepted || IsSuppressed)
             {
                 return new(null, diagnose);
             }
@@ -104,24 +141,55 @@ namespace XMAT.Telemetry
             }
         }
 
+        internal static bool IsSuppressed =>
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XMAT_SUPPRESS_TELEMETRY"));
+
         internal void Track(TelemetryEvent item)
         {
-            if (!IsEnabled)
+            lock (_sendGate)
             {
-                return;
+                if (!IsEnabled)
+                {
+                    return;
+                }
+                if (!item.IsValid)
+                {
+                    _diagnose("InvalidEvent");
+                    return;
+                }
+                try
+                {
+                    _reporter.Send(item, SessionId);
+                }
+                catch (Exception)
+                {
+                    _diagnose("SubmissionFailed");
+                }
             }
-            if (!item.IsValid)
+        }
+
+        internal void Revoke()
+        {
+            lock (_sendGate)
             {
-                _diagnose("InvalidEvent");
-                return;
+                if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                {
+                    return;
+                }
+                try
+                {
+                    _reporter?.Revoke();
+                }
+                catch (Exception)
+                {
+                    _diagnose("RevocationFailed");
+                }
+                Array.Clear(_uses);
+                Array.Clear(_failures);
             }
-            try
+            lock (_operationGate)
             {
-                _reporter.Send(item, SessionId);
-            }
-            catch (Exception)
-            {
-                _diagnose("SubmissionFailed");
+                _operations.Clear();
             }
         }
 
@@ -273,15 +341,18 @@ namespace XMAT.Telemetry
             }
             Track(new(TelemetryEventKind.SessionSummary, DurationMs: ElapsedMilliseconds, Count: Volatile.Read(ref _peakCaptures)));
             Track(new(TelemetryEventKind.AppClosed, DurationMs: ElapsedMilliseconds));
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            lock (_sendGate)
             {
-                try
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
                 {
-                    _reporter.Dispose();
-                }
-                catch (Exception)
-                {
-                    _diagnose("ShutdownFailed");
+                    try
+                    {
+                        _reporter.Dispose();
+                    }
+                    catch (Exception)
+                    {
+                        _diagnose("ShutdownFailed");
+                    }
                 }
             }
         }

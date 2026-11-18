@@ -64,6 +64,9 @@
                 <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
+            <MenuItem x:Name="OptionsMenu" Header="_Options">
+                <MenuItem x:Name="TelemetryPreference" Click="TelemetryPreference_Click"/>
+            </MenuItem>
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
                 <MenuItem x:Name="ViewAnalyzeCaptures"
                           Command="{x:Static local:AppCommands.AnalyzeCaptures}"

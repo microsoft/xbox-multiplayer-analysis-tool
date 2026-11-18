@@ -162,6 +162,7 @@ namespace XMAT.Tests.Replay
         {
             internal List<TelemetryEvent> Events { get; } = new();
             public void Send(TelemetryEvent item, Guid sessionId) => Events.Add(item);
+            public void Revoke() => Events.Clear();
             public void Dispose() { }
         }
 

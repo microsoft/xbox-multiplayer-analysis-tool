@@ -288,6 +288,7 @@ namespace XMAT.Tests
             internal ConcurrentQueue<TelemetryEvent> Events { get; } = new();
             internal int DisposeCount { get; private set; }
             public void Send(TelemetryEvent item, Guid sessionId) => Events.Enqueue(item);
+            public void Revoke() => Events.Clear();
             public void Dispose() => DisposeCount++;
         }
     }

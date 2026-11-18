@@ -8,19 +8,18 @@ using XMAT.Operations.Capabilities;
 
 namespace XMAT.Tests.HeadlessParity
 {
-    // Deleting captured sessions is the one reviewed exception to headless parity (P2-12): a confirmed, irreversible GUI
-    // action with its slice, owner and reason, and no command line or operation. The rules accept no other policy
-    // exception, and GuiOnly stays for presentation.
+    // Deletion and explicit upload consent are reviewed GUI policy exceptions, not presentation.
     public class DeleteCapabilityTests
     {
         private const string ProxyCommands = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
 
         [Fact]
-        public void DeleteSessions_IsTheOnlyPolicyException_AndHasNoCommandLine()
+        public void DeleteSessions_IsAReviewedPolicyException_AndHasNoCommandLine()
         {
             Capability delete = Assert.Single(
-                CapabilityRegistry.All, capability => capability.Status == CapabilityStatus.PolicyException);
+                CapabilityRegistry.All, capability => capability.Id == "capture.delete-sessions");
 
+            Assert.Equal(CapabilityStatus.PolicyException, delete.Status);
             Assert.Equal(("capture.delete-sessions", "S11", "XMAT"), (delete.Id, delete.Slice, delete.Owner));
             Assert.StartsWith("Policy exception:", delete.Reason, StringComparison.Ordinal);
             Assert.True(delete.CliRoute == null && delete.Operation == null);
@@ -35,7 +34,21 @@ namespace XMAT.Tests.HeadlessParity
         }
 
         [Fact]
-        public void PolicyExceptionRules_AcceptOnlyTheReviewedEntry_AndKeepGuiOnlyForPresentation()
+        public void Consent_IsTheOtherReviewedException_AndCannotEnableHeadlessCollection()
+        {
+            var exceptions = CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.PolicyException).ToArray();
+            Assert.Equal(["capture.delete-sessions", "privacy.telemetry-consent"], exceptions.Select(item => item.Id));
+            var consent = exceptions[1];
+            Assert.Equal(("S12", "XMAT"), (consent.Slice, consent.Owner));
+            Assert.Contains("headless commands never collect telemetry or modify consent", consent.Reason);
+            Assert.Null(consent.Operation);
+            Assert.Empty(consent.CliRoutes);
+            Assert.Equal([CapabilityKeys.Click("Windows/MainWindow.xaml", "TelemetryPreference_Click")], consent.GuiEntryPoints);
+            Assert.DoesNotContain(consent, CliCatalog.Commands().SelectMany(command => CliCatalog.CapabilitiesOf(command)));
+        }
+
+        [Fact]
+        public void PolicyExceptionRules_AcceptOnlyReviewedEntries_AndKeepGuiOnlyForPresentation()
         {
             Capability valid = Capability.PolicyException(
                 "capture.delete-sessions", "Delete sessions", "S11", "XMAT", "Policy exception: reviewed.",

@@ -253,25 +253,32 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 ### Product telemetry
 
 `XMAT\Logic\Telemetry` is part of the application assembly. `XmatTelemetryService` owns the per-launch
-session, fixed feature counters, explicit operation IDs, and build-derived export gate. Individual capture and
+session, fixed feature counters, explicit operation IDs, and consent/build export gates. Individual capture and
 analysis operations retain their own timing/context, including simultaneous runs and restored/loaded/imported
-origins. There is no user preference, settings store, installation ID, or offline event file.
+origins. `TelemetryConsentPreferences` reads a per-user HKCU DWORD through `TelemetryConsentStore`.
+Only explicit `1` accepts; absent, invalid, or unreadable values fail closed with sanitized diagnostics.
+`MainWindow` prompts for absent consent and exposes Options > Product Telemetry for opt-in/opt-out.
+Cancel leaves consent unchanged. A change revokes the existing session before writing the preference;
+failed writes leave the session off and display a localized warning.
 The service retains unfinished operations and finalizes them as cancelled before `SessionSummary`/
 `AppClosed`, so normal exit does not abandon active capture measurements.
 
-`OneCollectorTelemetryReporter` owns an isolated logging pipeline with an empty resource builder populated
-only by approved metadata. It suppresses ambient activity/baggage and scopes, rejects free-form exception
-payloads, and batches at most 256 queued records with batches of 64. Shutdown waits at most two seconds;
-unsent records remain memory-only and may be lost. SDK overflow/transmission/shutdown failures produce
-sanitized local trace diagnostics, not uploaded application logs.
-Its destination host/port is temporarily excluded from proxy capture/script events, with CONNECT
-traffic tunneled directly. This avoids self-capture when the SDK follows the Windows system proxy;
-other traffic to that exact collector destination is excluded while the reporter is alive as well.
+The old OpenTelemetry/OneCollector reporter and packages are removed. No live adapter is instantiated,
+even with saved consent. Enabled builds are rejected pending SDK lifecycle and event-policy resolution.
+The injectable service factory requires accepted consent, valid build approval/channel/key, and no
+`XMAT_SUPPRESS_TELEMETRY` override before reading metadata or constructing a reporter.
+Revocation closes the service's send gate, invokes `ITelemetryReporter.Revoke` (discard, never flush),
+and clears pending operation registrations and counters. It does not emit closure/summary events.
+An adapter must implement safe upload cancellation and queue purging before satisfying that contract.
+The planned `Microsoft.Xbox.Telemetry` SDK pause is fallible, shutdown flushes, and cached events persist;
+therefore simply turning off Optional events or disposing the SDK does not implement revocation.
+`TelemetryTraffic` exclusion support remains for the future adapter: acquire it before SDK activation
+and retain it through teardown, including Required SDK health events and WinINet/system-proxy traffic.
 
-Metadata is read only for a validated enabled/approved build or an explicitly requested local sample run.
+In this implementation, device metadata is read only for an explicitly requested local sample run.
 The host machine ID and sandbox are
 explicit permitted identifiers; no fallback machine/installation ID is generated. Field names and event names
-are case-sensitive. Public SDK packages are referenced directly; no DevTools implementation is vendored.
+are case-sensitive. Current builds restore no internal telemetry packages; no DevTools code is vendored.
 
 Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
 interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.
@@ -286,8 +293,9 @@ An explicit `--telemetry-sample` launch in a non-exporting build instead selects
 `LocalTelemetrySampleReporter`. It uses the same event attribute mapping, a bounded 256-record channel,
 and a background UTF-8 JSON Lines writer, with no collector reporter/key or telemetry network export.
 This opt-in development run reads the permitted metadata and creates only the requested new output file;
-it creates no persisted telemetry preference or offline replay queue. Its normalized `name`/`time`/
-`resources`/`data` envelope is intentionally distinct from the OneCollector wire format.
+it creates no SDK/offline replay queue. GUI consent is still prompted/stored independently; changing the
+upload preference does not stop an explicitly requested local file sample. Suppression disables sampling.
+Its normalized `name`/`time`/`resources`/`data` envelope is not a claim about a future SDK wire format.
 See [TELEMETRY.md](TELEMETRY.md) for exact fields, event semantics, and generation instructions.
 
 | Pattern | Usage |
@@ -317,5 +325,3 @@ See [TELEMETRY.md](TELEMETRY.md) for exact fields, event semantics, and generati
 | `Microsoft.CodeAnalysis.CSharp.Scripting` | 5.3.0 | Dynamic C# script compilation for traffic modification |
 | `JsonDocumentPath` | 1.0.3 | JSON path queries for document navigation |
 | `Microsoft.AspNetCore.App` | (framework) | Web server utilities |
-| `OpenTelemetry` | 1.15.3 | Isolated structured telemetry logging and bounded batching |
-| `OpenTelemetry.Exporter.OneCollector` | 1.15.1 | Approved Microsoft collector export |

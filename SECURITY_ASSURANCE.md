@@ -156,7 +156,11 @@ The following security-sensitive operations require explicit user action:
 
 - The application is a **local desktop tool**, not a network service. It has no
   listening ports except the explicitly user-activated MITM proxy.
-- No telemetry or analytics data is transmitted.
+- Product telemetry requires explicit per-user consent (first-run prompt and Options preference),
+  separately from build/release approval. Missing/corrupt/unreadable consent fails closed, and
+  pre-consent usage is not buffered. The live adapter is currently disabled in every build,
+  even after opt-in, because SDK upload revocation and cached-event purge are not yet verified.
+  Explicit local samples write only to the requested file; see [TELEMETRY.md](TELEMETRY.md).
 - The application does not auto-update or download remote resources.
 - Build output is a self-contained Windows desktop application with no web
   endpoints.

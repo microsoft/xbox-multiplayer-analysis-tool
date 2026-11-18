@@ -31,6 +31,9 @@ namespace XMAT.Operations.ParityFixtures
         internal static string LocalizedText() => Localization.GetLocalizedString("KEY");
 
         internal static void LanguageLoading() => Localization.LoadLanguage("en-us");
+
+        internal static void Telemetry(XMAT.Telemetry.ITelemetryReporter reporter, XMAT.Telemetry.TelemetryEvent item) =>
+            reporter.Send(item, Guid.Empty);
     }
 }
 
@@ -45,5 +48,8 @@ namespace XMAT.Tests.HeadlessParity
         internal static string StorageFolder() => PublicUtilities.StorageDirectoryPath;
 
         internal static string LocalizedText() => Localization.GetLocalizedString("KEY");
+
+        internal static void Telemetry(XMAT.Telemetry.ITelemetryReporter reporter, XMAT.Telemetry.TelemetryEvent item) =>
+            reporter.Send(item, Guid.Empty);
     }
 }

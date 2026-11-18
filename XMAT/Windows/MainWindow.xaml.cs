@@ -56,6 +56,8 @@ namespace XMAT
             // LOC
             FileMenu.Header = Localization.GetLocalizedString("FILE_MENU");
             EditMenu.Header = Localization.GetLocalizedString("EDIT_MENU");
+            OptionsMenu.Header = Localization.GetLocalizedString("OPTIONS_MENU");
+            TelemetryPreference.Header = Localization.GetLocalizedString("TELEMETRY_PREFERENCE");
             FileNewCapture.Header = Localization.GetLocalizedString("FILE_NEW_CAPTURE");
             FileLoadCaptures.Header = Localization.GetLocalizedString("FILE_LOAD_CAPTURES");
             FileSaveCaptures.Header = Localization.GetLocalizedString("FILE_SAVE_CAPTURES");
@@ -112,6 +114,10 @@ namespace XMAT
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            if (!XmatTelemetryService.Consent.PromptIfMissing(AskTelemetryConsent))
+            {
+                ShowConsentSaveFailure();
+            }
             XmatTelemetryService.Current.Ready();
             XmatTelemetryService.Current.Use(CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark"
                 ? TelemetryFeature.DarkTheme : TelemetryFeature.LightTheme);
@@ -139,6 +145,36 @@ namespace XMAT
                     Cursor = _originalCursor;
                 };
         }
+
+        private void TelemetryPreference_Click(object sender, RoutedEventArgs e)
+        {
+            if (!XmatTelemetryService.Consent.Apply(AskTelemetryConsent()))
+            {
+                ShowConsentSaveFailure();
+            }
+        }
+
+        private bool? AskTelemetryConsent()
+        {
+            var message = Localization.GetLocalizedString(
+                XmatTelemetryService.Consent.State == TelemetryConsentState.Accepted
+                    ? "TELEMETRY_CONSENT_ACCEPTED" : "TELEMETRY_CONSENT_NOT_ACCEPTED");
+            var result = MessageBox.Show(this, message + "\n\n" +
+                Localization.GetLocalizedString("TELEMETRY_CONSENT_MESSAGE"),
+                Localization.GetLocalizedString("TELEMETRY_PREFERENCE"),
+                MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.No);
+            return result switch
+            {
+                MessageBoxResult.Yes => true,
+                MessageBoxResult.No => false,
+                _ => null
+            };
+        }
+
+        private void ShowConsentSaveFailure() => MessageBox.Show(this,
+            Localization.GetLocalizedString("TELEMETRY_CONSENT_SAVE_FAILED"),
+            Localization.GetLocalizedString("TELEMETRY_PREFERENCE"),
+            MessageBoxButton.OK, MessageBoxImage.Warning);
 
         private async void Window_Closing(object sender, CancelEventArgs e)
         {

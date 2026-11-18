@@ -919,6 +919,7 @@ namespace XMAT.Tests
         {
             internal ConcurrentQueue<TelemetryEvent> Events { get; } = new();
             public void Send(TelemetryEvent item, Guid sessionId) => Events.Enqueue(item);
+            public void Revoke() => Events.Clear();
             public void Dispose() { }
         }
 

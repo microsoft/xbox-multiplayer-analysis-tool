@@ -21,36 +21,31 @@ Any new functionality added, must include appropriate testing alongside the new 
 
 ## Telemetry development and release policy
 
-Telemetry is XMAT-owned code in `XMAT\Logic\Telemetry`, informed by the DevTools telemetry design but with
-no private repository, project, or package dependency. It uses public OpenTelemetry/OneCollector SDK APIs,
-an explicit field contract, and an isolated logger rather than forwarding application logs.
+Telemetry is XMAT-owned code in `XMAT\Logic\Telemetry`, behind `ITelemetryReporter`.
+The obsolete OpenTelemetry/OneCollector exporter and its dependencies have been removed.
+The approved migration target is `Microsoft.Xbox.Telemetry` (the team's 1DS wrapper), with registry-generated
+C# payloads. The live adapter is disabled: the inspected SDK cannot yet demonstrate fail-closed revocation
+and removal of cached events. No internal package/feed is needed by current public/default/CI builds.
 
 Local, PR, and CI builds default to `EnableTelemetry=false`; a Release configuration alone does not enable
-export. Focused tests use fake reporters and a loopback collector, never the production endpoint:
+export. Enabling telemetry currently fails the build even with approval. Focused tests use injected registry
+access and fake reporters; never instantiate an emitting SDK client or modify the user's registry in tests:
 
 ```powershell
 dotnet test XMAT.Tests\XMAT.Tests.csproj -p:Platform=x64 --filter FullyQualifiedName~Telemetry
 ```
 
-Before publishing an enabled build, the release owner must obtain a dedicated XMAT instrumentation key and
-register the case-sensitive `Microsoft.Gaming.XMAT` namespace/event schemas. The owner must approve automatic
-collection, the machine-ID/sandbox fields, retention/access rules, and any backend IP/identity enrichment.
-This registration/approval is a separate owner task; checking a build flag is not a substitute for it.
-Do not reuse the DevTools ingestion key, publish test traffic into production dashboards, or commit keys or
-service credentials into source. Client ingestion keys are not authorization credentials.
+The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is not a prerequisite.
+Do not commit keys/credentials or send development events to production. Registry schemas, collection policy,
+machine-ID/sandbox fields, retention/access rules, and backend enrichment still require review.
+Build/release approval never substitutes for the user's explicit consent.
 
-For an approved **test data source only**, supply its key through your build environment:
-
-```powershell
-dotnet build XMAT\XboxMultiplayerAnalysisTool.csproj -c Release -p:Platform=x64 `
-  -p:EnableTelemetry=true -p:TelemetryApproved=true -p:TelemetryBuildChannel=Test `
-  "-p:TelemetryInstrumentationKey=$env:XMAT_TELEMETRY_KEY"
-```
-
-Approved publication uses channel `Public` or `Internal`. Enabled builds fail if approval, key, or channel
-configuration is absent. Non-exporting artifacts do not contain the supplied ingestion key and do not read
-telemetry registry metadata unless explicitly launched in local sample mode. There is no telemetry
-preference UI or settings file.
+The GUI saves consent as HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool\TelemetryConsent`
+(DWORD 1 = accept, 0 = decline). Missing, invalid, and unreadable values are off. First run prompts only
+when the value is absent; Options > Product Telemetry permits both changes later. Closing/cancelling does
+not accept. Failed registry writes stop collection for the session and show a warning.
+`XMAT_SUPPRESS_TELEMETRY` set to any nonempty value suppresses telemetry, including local sampling.
+Ordinary runs read only consent, not machine-ID/sandbox metadata. No pre-consent events are retained.
 
 The full schema and app sample-generation commands are in [TELEMETRY.md](TELEMETRY.md). Use
 `--telemetry-sample` with a new absolute output filename in a non-exporting build to inspect real
@@ -59,7 +54,8 @@ machine ID and sandbox; sanitize them before sharing.
 
 Every new event must use fixed enums/explicit attribute mappings. Never add arbitrary strings, command options,
 exception objects, URLs, paths, traffic contents, or environment resource detectors. Preserve capture and
-analysis behavior and verify both the typed contract and actual serialized collector payload.
+analysis behavior. Before any future live adapter is enabled, verify both generated contracts and its
+actual serialized payload without production upload, including SDK-added common fields and health events.
 `XMAT\Data\TelemetryUsage.kql` contains aggregate query templates against an owner-provided normalized
 `XmatTelemetry` view; its column mapping and deployment require the destination owner's approval.
 

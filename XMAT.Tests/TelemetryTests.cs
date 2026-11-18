@@ -63,7 +63,7 @@ namespace XMAT.Tests
             List<string> diagnostics = [];
             using var service = XmatTelemetryService.Create(new(true, true, "a-b", TelemetryBuildChannel.Test),
                 _ => throw new IOException(@"C:\Users\private-user\token.txt"),
-                (_, _) => throw new InvalidOperationException("No transport."), diagnostics.Add);
+                (_, _) => throw new InvalidOperationException("No transport."), diagnostics.Add, TelemetryConsentState.Accepted);
             Assert.False(service.IsEnabled);
             Assert.Equal(["InitializationFailed"], diagnostics);
         }
@@ -237,12 +237,14 @@ namespace XMAT.Tests
             internal ConcurrentQueue<(TelemetryEvent Item, Guid Session)> Events { get; } = new();
             internal int DisposeCount { get; private set; }
             public void Send(TelemetryEvent item, Guid sessionId) => Events.Enqueue((item, sessionId));
+            public void Revoke() => Events.Clear();
             public void Dispose() => DisposeCount++;
         }
 
         private sealed class ThrowingReporter : ITelemetryReporter
         {
             public void Send(TelemetryEvent item, Guid sessionId) => throw new IOException("Private path, hostname, and token.");
+            public void Revoke() { }
             public void Dispose() { }
         }
     }

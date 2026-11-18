@@ -1,17 +1,104 @@
 # Telemetry schema and sample generation
 
-This documents the **implemented schema, version 1**, not a proposed schema. Names and enum values are
+This documents the **implemented local event contract, version 1**, not approved registry schemas.
+Names and enum values are
 case-sensitive. The source of truth is `XMAT\Logic\Telemetry\TelemetryEvents.cs`, with common metadata
 in `TelemetryEnvironmentProvider.cs`.
 
-Ordinary builds do not export telemetry or read telemetry registry metadata. Approved telemetry-enabled
-releases collect automatically; there is no end-user collection preference. An explicitly requested
+No build currently exports telemetry. The obsolete OpenTelemetry/OneCollector exporter has been removed;
+the intended replacement is `Microsoft.Xbox.Telemetry`. The live adapter remains disabled until safe
+revocation/cache handling and event policy are resolved. An explicitly requested
 **local sample run** records the same application events to a local file without creating a collector
 reporter or requiring a collector key.
 
-The delivery implementation is still the legacy OneCollector exporter. Migration to the approved
-Windows telemetry pipeline remains gated on provider ownership, collection eligibility, and onboarding;
-the main-branch integration below does not enable collection or complete that migration.
+## Explicit consent and release gates
+
+The first GUI run prompts when HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool` has no
+`TelemetryConsent` value. Yes explicitly opts in (DWORD `1`); No explicitly declines (DWORD `0`).
+Cancel/close never opts in. **Options > Product Telemetry** offers both choices later and displays the
+current preference. Invalid types/values and registry read failures are not consent; repair/change them
+through Options. Failed writes revoke the running session, fail closed, and show a warning rather than
+claiming the preference was saved. No tests write the actual user's registry.
+
+Consent is independent of `EnableTelemetry`, `TelemetryApproved`, and build channel approval.
+`XMAT_SUPPRESS_TELEMETRY` set to any nonempty value overrides collection, including local sample mode.
+Neither build approval nor Optional-event SDK settings replace consent. Before opt-in there is no SDK,
+health/lifecycle emission, replay, device-metadata read, or event buffering for later upload.
+Opt-out discards the service session without normal shutdown summary/flush; a later opt-in starts fresh
+and cannot resume old operations. This is a service contract, not a claim that the blocked SDK adapter
+already implements it. Currently no SDK is created even after opt-in and enabled builds fail explicitly.
+
+Local file sampling is a separately requested, non-networked development action, not permission to
+upload. Its explicit command may read machine-ID/sandbox metadata and record local events without
+upload consent. GUI consent changes do not stop that requested local file recording.
+
+## SDK migration status and precise blocker
+
+The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is **not** required.
+`Microsoft.Xbox.Telemetry` has a supported C#/WPF path; emitting API and key choice are resolved.
+No live SDK instance or production event was used to develop this change.
+
+Source inspected at Xbox.Experiences commit `a89ca852315fa35fa25267d61330c5387021dfe0`,
+under `src\telemetry`:
+
+| Evidence | Consequence |
+|---|---|
+| `src\OneDSTelemetrySink.cpp`, `UpdateConfigOptions` | `Emission.DisableUpload` calls 1DS `PauseTransmission`, which can fail. The failure becomes an SDK health event. |
+| `src\TelemetryClient.cpp`, `UpdateConfigOptions` | The public operation returns void and catches failures; XMAT cannot verify that all uploads stopped. |
+| `src\TelemetryClient.cpp`, `Shutdown` and destructor | Required lifecycle events are emitted and the sink is flushed; disposal is not a no-upload revocation operation. Teardown persists remaining events. |
+| `src\OneDSTelemetrySink.cpp`, `Teardown` | Teardown uses `FlushAndTeardown`; no supported purge API or verified cancellation of an already-dispatched upload is exposed. |
+
+`SetCollectOptionalData(false)` does not stop Required health events or erase previously queued data.
+Pausing, calling Shutdown/Dispose, then deleting a guessed cache path would not prove upload
+cancellation or safe cache ownership/concurrency. No such workaround is implemented. No SDK cache is
+created, opened, deleted, or replayed by XMAT. A supported, observable revoke-and-purge lifecycle
+(including in-flight requests, shutdown and subsequent startup) is required before activating the adapter.
+
+Once that blocker is resolved, integration must condition package/projection/native assets on telemetry
+builds, leaving public CI feed-independent. The inspected WPF sample uses
+`Microsoft.Windows.CsWinRT` `2.3.1`, `Microsoft.VCRTForwarders.140` `1.0.7`, `.winmd` projection,
+the native DLL/PRI, and explicit activatable-class manifest entries. PerfLab demonstrates actual package
+consumption; these are integration references, not unimplemented XMAT package references.
+Pin and validate the chosen `Microsoft.Xbox.Telemetry` version then; no version is claimed validated
+by an XMAT adapter in this change.
+
+Use reviewed registry contracts, or explicitly reviewed `PassThroughInferred` policy (Optional,
+requiring consent). Do not use `AllowEventNamespace` to bypass Optional consent. Audit SDK-added
+identity/common/health fields against the privacy contract below before any release approval.
+Keep `mobile.events.data.microsoft.com:443` excluded from proxy capture from before SDK creation until
+all teardown is finished, including WinINet/system-proxy traffic.
+
+## Registry authoring and codegen handoff
+
+Registry documentation/tooling was inspected read-only at
+`xtech.data.events.schemaregistry` commit `2bf73ebf446888fb719bceee8cc410a6ed6173c7`.
+That checkout has no XMAT project or approved shared core contracts. GDKMiddleware's
+`SdkComponentInitialized` is not an XMAT schema and must not rename or replace these 11 events.
+Authoring needs a separately assigned writable registry checkout; no reference clone was modified.
+No draft has been labelled approved, and no handwritten C# has been labelled generated.
+
+The event table below maps all 11 existing suffixes one-for-one for proposed preservation under
+`Microsoft.Gaming.XMAT.`. In the registry, author a reviewed project `project.yaml`, versioned common
+fields/types, and per-event `schema.yaml`, `compliance.yaml`, and synthetic examples. Decide the project
+identifier/version pins during that authoring; there are no approved XMAT pins to place in `codegen.yaml`
+yet. The proposed field mapping is:
+
+| Existing contract | Registry representation / constraint to preserve |
+|---|---|
+| `SchemaVersion = 1` | Local contract integer; distinct from registry `schemaVer` semantic version, not an automatic conversion to `1.0.0` |
+| `SessionId`, `OperationId` | Strings containing fresh 32-character GUIDs; operation ID optional; never captured request IDs |
+| Feature/operation/outcome/error/stage/entry/interaction/bucket/context values | Fixed string enums with the exact spellings below; do not broaden to arbitrary payload text |
+| `DurationMs`, `Count` | Nonnegative 64-bit measurements; bucket boundaries below remain unchanged |
+| Capture context | Optional `CaptureMethod`, `DeviceType`, `CaptureOrigin`; no device names or addresses |
+| App/OS/build/machine-ID/sandbox fields | Separate reviewed common-field mapping; no assumption that SDK defaults match the former `ext.*` layout |
+
+In the XMAT client folder, after real registry inputs and versions exist, run the registry's
+`npm run codegen` setup, choose C#, and commit its `codegen.yaml`, generated payloads and manifest
+alongside the adapter. Regeneration is
+`npm --prefix <assigned-registry-checkout> run codegen -- --config <client-codegen.yaml>`;
+add `--check` for drift validation. Use explicit options to avoid changing remembered client setup.
+Generated C# contracts serialize JSON; they do not send or approve telemetry. Registry authoring/codegen
+and SDK policy admission are separate steps. Production collection remains blocked until both are reviewed.
 
 ## Event names and semantics
 
@@ -67,9 +154,9 @@ notifications for the same continuously visible mode do not inflate those usage-
 
 ## Common metadata
 
-Common fields are resource attributes in the application. OneCollector moves `ext.*` fields into nested
-Common Schema extensions; other resource fields become `data` attributes. Local samples preserve
-resource keys literally in their `resources` object.
+Common fields are explicit metadata in the application. Local samples preserve
+resource keys literally in their `resources` object. A future SDK adapter must define and validate its
+own common-field mapping; these keys are not a promise about that adapter's wire layout.
 
 | Resource key | Type | Availability and meaning |
 |---|---|---|
@@ -239,10 +326,12 @@ For typed shared-operation results, invalid input maps to `InvalidData`, conflic
 
 Names retain `Mb`/`Gb` for compatibility; boundaries use binary units (MiB/GiB).
 
-## OneCollector wire format and registration
+## Historical OneCollector format (removed)
 
-The pinned OneCollector exporter serializes Common Schema **`ver = "4.0"`** JSON records. That version is
-the transport format, **not** XMAT's `data.SchemaVersion = 1`.
+The former exporter serialized Common Schema **`ver = "4.0"`** JSON records. The following reference is
+historical only, retained for interpreting earlier payload samples/query mappings. No current exporter
+produces it; it does not describe the future SDK wire format. That transport version is distinct from
+XMAT's `data.SchemaVersion = 1`.
 
 | Wire field | Type and meaning |
 |---|---|
@@ -299,7 +388,8 @@ This is an illustrative wire event with **synthetic identifiers**:
 Register all 11 fully qualified event names with the shared attribute schema and optional fields above.
 Collector table names may replace dots with underscores and change casing; confirm the actual ingestion
 mapping with the data-source owner rather than assuming the original event name is the table name.
-All telemetry-enabled builds still require a dedicated approved XMAT key, namespace, and privacy review.
+Live collection still requires reviewed event policy/privacy and explicit user consent, as well as a
+safe SDK lifecycle. The authorized shared team key does not replace those gates.
 Local samples do not satisfy those approval gates.
 
 `XMAT\Data\TelemetryUsage.kql` expects an owner-defined normalized `XmatTelemetry` view:
@@ -323,11 +413,11 @@ count as live-capture conversion.
 
 ### Collector traffic and report navigation
 
-While a OneCollector reporter is active (including its final flush), its exact destination host and
-port are excluded from proxy capture/script events. HTTPS CONNECT to that destination is tunneled
-without TLS interception. This prevents Local PC proxying from recording XMAT's own telemetry;
-traffic from other clients to the same collector destination is also excluded during that interval.
-The exclusion is removed when the reporter finishes disposal. Local file sampling does not create it.
+The retained `TelemetryTraffic` helper excludes an exact destination host/port from capture/script
+events and tunnels HTTPS CONNECT without TLS interception. A future SDK adapter must hold that
+exclusion throughout initialization, upload and teardown. No live reporter currently creates it;
+local file sampling does not create it either. Other traffic to that exact destination would also be
+excluded while such a lease is held.
 
 Statistics operations are correlated by WebView2 navigation ID. Redirects keep one operation, a
 replacement navigation cancels its predecessor, and stale completion notifications cannot finish the
@@ -439,16 +529,16 @@ local envelope:
 This readable envelope is **not a verbatim OneCollector HTTP payload**: common resources are flat,
 there is no `ver`/`iKey` or exporter severity, and the timestamp is taken at local submission.
 The event attributes are produced by the exact same `TelemetryEvent.Attributes` mapping.
-For a real encoded collector envelope with synthetic metadata, run the loopback-only test:
+Run consent, local serialization, and service-boundary tests without any network exporter:
 
 ```powershell
 dotnet test XMAT.Tests\XMAT.Tests.csproj -c Debug -p:Platform=x64 -p:EnableTelemetry=false `
-  --filter FullyQualifiedName~EncodedCollectorPayloadContainsOnlyExplicitFieldsAndNoAmbientIdentity `
+  --filter FullyQualifiedName~Telemetry `
   --logger "console;verbosity=detailed"
 ```
 
-The test prints the decoded actual wire event to its test output and never contacts the production
-collector. It validates that injected ambient user/host/activity values are absent.
+The former encoded OneCollector test was removed with that exporter. Future SDK wire validation must
+be local-only and must cover SDK-added fields as well as XMAT's explicit attributes.
 
 ### Sample safety, delivery, and troubleshooting
 
@@ -463,16 +553,12 @@ collector. It validates that injected ambient user/host/activity values are abse
   `XMAT telemetry:` trace messages (`LocalSampleWriteFailed`, `LocalSampleDropped`,
   `LocalSampleShutdownTimedOut`); inspect debugger trace output if an expected line is missing.
 - Running without `--telemetry-sample` restores ordinary non-exporting behavior automatically; nothing
-  is saved in user preferences. Stop samples by closing that app launch. Delete only the specific sample
-  file you generated when no longer needed.
+  about sample mode is saved in user preferences (upload consent is separate). Stop samples by closing
+  that app launch. Delete only the specific sample file you generated when no longer needed.
 
-## Optional approved test-collector workflow
+## Live collector validation remains blocked
 
-If you need real ingestion instead of a local file, follow the approval/key/build instructions in
-[CONTRIBUTING.md](CONTRIBUTING.md#telemetry-development-and-release-policy), use an approved **test**
-data source with `TelemetryBuildChannel = Test`, and launch without the sample flag. Repeat the same
-app actions, then inspect the destination owner's actual tables/mappings.
-
-The test channel is a label, not an automatic switch to a different endpoint or safe data source.
-The configured key determines routing. Collector registration, retention/access policy, and
-backend enrichment verification remain outstanding release-owner tasks.
+No current build can send to a live collector, including a test channel. Resolve the lifecycle and
+schema/policy blockers above before adding an adapter; then validate locally before any separately
+authorized test ingestion. The test channel is a label, not an automatic safe destination, and the
+authorized team key does not approve data collection, retention/access, or backend enrichment.

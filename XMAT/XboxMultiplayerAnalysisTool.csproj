@@ -68,8 +68,6 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.12.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
-    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
-    <PackageReference Include="OpenTelemetry.Exporter.OneCollector" Version="1.15.1" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
   </ItemGroup>
 
@@ -83,7 +81,7 @@
   <Target Name="ValidateTelemetryConfiguration" BeforeTargets="GenerateAssemblyInfo">
     <Error Condition="'$(EnableTelemetry)' != 'true' and '$(EnableTelemetry)' != 'false'" Text="EnableTelemetry must be true or false." />
     <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryApproved)' != 'true'" Text="Telemetry-enabled builds require TelemetryApproved=true after XMAT collector/privacy approval." />
-    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryInstrumentationKey)' == ''" Text="Telemetry-enabled builds require an approved XMAT TelemetryInstrumentationKey." />
+    <Error Condition="'$(EnableTelemetry)' == 'true'" Text="Live telemetry is disabled pending a verified SDK revoke-and-purge lifecycle and event policy approval. Build with EnableTelemetry=false." />
     <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryBuildChannel)' != 'Public' and '$(TelemetryBuildChannel)' != 'Internal' and '$(TelemetryBuildChannel)' != 'Test'" Text="Telemetry-enabled builds require TelemetryBuildChannel=Public, Internal, or Test." />
   </Target>
 

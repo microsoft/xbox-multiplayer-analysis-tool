@@ -423,6 +423,12 @@ namespace XMAT.Operations.Capabilities
                 "cli.doctor", "Check what a command needs before running it", "S1",
                 cli: "doctor --for analyze"),
 
+            Capability.PolicyException(
+                "privacy.telemetry-consent", "Manage product telemetry consent", "S12", "XMAT",
+                "Policy exception: upload consent is an explicit per-user GUI choice; headless commands never collect " +
+                    "telemetry or modify consent",
+                new[] { Click(MainWindowXaml, "TelemetryPreference_Click") }),
+
             // Presentation only
             Capability.GuiOnly(
                 "view.main-window", "Main window", "Presentation: hosts the GUI adapters of every capability",

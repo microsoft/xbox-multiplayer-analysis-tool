@@ -924,6 +924,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Ping an Xbox development kit or read its status (read-only) (`device.status`) | (not available yet) | Planned (S7, XMAT-021) |
 | Collect debug logs (`diagnostics.logs`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Show GDK for Xbox details (`environment.gdk`) | (not available yet) | Planned (S7, XMAT-021) |
+| Manage product telemetry consent (`privacy.telemetry-consent`) | (none) | GUI only by policy (S12, XMAT). Policy exception: upload consent is an explicit per-user GUI choice; headless commands never collect telemetry or modify consent |
 | Disable a device's proxy: stop an owned run or recover an attributable one, never a blind reset (`proxy.disable`) | (not available yet) | Planned (S6, XMAT-021) |
 | Enable a device's proxy for a bounded foreground session (`proxy.enable`) | (not available yet) | Planned (S6, XMAT-021) |
 | Restore an Xbox's proxy when capture ends (`proxy.on-exit`) | (not available yet) | Planned (S7, XMAT-021) |

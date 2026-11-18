@@ -15,12 +15,13 @@ PlayFab, and other network traffic from PCs and Xbox development consoles.
 
 ## Product Telemetry
 
-Ordinary source, local, and CI builds do not transmit product telemetry. Explicitly approved telemetry-enabled
-releases collect usage automatically through Microsoft's OneCollector service. There is no per-user collection
-preference. Release maintainers must register a dedicated XMAT data source and approve its privacy, access,
-retention, and server-side enrichment policies before enabling export.
+Product telemetry requires explicit per-user opt-in, separately from release approval. On first GUI run,
+XMAT asks when no consent value is saved. Choose Yes to opt in or No to decline; Cancel does not opt in.
+Change either choice under **Options > Product Telemetry**. Missing, invalid, or unreadable consent is off.
+**Live telemetry is currently disabled in all builds**, including after opt-in, pending a verified SDK
+revocation/cache-purge lifecycle and event/privacy policy approval. No pre-consent usage is buffered for upload.
 
-Collected fields include application/OS version, build audience, random per-launch session and per-operation
+The local event contract includes application/OS version, build audience, random per-session and per-operation
 IDs, feature categories, operation outcomes, sanitized error categories, durations, and aggregate/count-size
 buckets. The **Windows machine ID** and **host Windows Xbox sandbox** are included when available.
 The machine ID is persistent and pseudonymous, not anonymous; it identifies a machine rather than a person or
@@ -41,9 +42,9 @@ Application-side filtering does not control collector-side IP enrichment; that r
 | `SessionSummary` | Elapsed session time and peak concurrent capture operations |
 | `UnhandledFailure` | Deduplicated observed failures with fixed error categories, never exception contents |
 
-Delivery is best-effort, uses a bounded in-memory exporter queue, and never persists an offline event queue.
-Collector-destination traffic is excluded from proxy capture while telemetry export is active, preventing
-XMAT from recording its own telemetry. Unfinished operations are marked cancelled on normal application exit.
+There is no active network exporter or SDK cache. A future adapter must exclude collector traffic throughout
+initialization and teardown, and stop uploads and discard queued events on opt-out without replay.
+Unfinished local sample operations are marked cancelled on normal application exit.
 Missing exit events do not prove crashes, and statistics exclude non-exporting/offline launches. Hidden reports
 are not counted as viewed. Statistics report timing measures WebView2 navigation, not proof that every graph's
 JavaScript rendered successfully. See [CONTRIBUTING.md](CONTRIBUTING.md) for build/validation controls.

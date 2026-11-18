@@ -17,7 +17,7 @@ namespace XMAT.Telemetry
     internal sealed class LocalTelemetrySampleReporter : ITelemetryReporter
     {
         private readonly Channel<SampleEvent> _queue = Channel.CreateBounded<SampleEvent>(
-            new BoundedChannelOptions(OneCollectorTelemetryReporter.QueueCapacity)
+            new BoundedChannelOptions(256)
             {
                 SingleReader = true,
                 FullMode = BoundedChannelFullMode.Wait
@@ -26,6 +26,7 @@ namespace XMAT.Telemetry
         private readonly Action<string> _diagnose;
         private readonly Task _writerTask;
         private int _disposed;
+        private int _revoked;
 
         internal LocalTelemetrySampleReporter(string path,
             IReadOnlyList<KeyValuePair<string, object>> resources, Action<string> diagnose)
@@ -80,7 +81,10 @@ namespace XMAT.Telemetry
                 {
                     await foreach (var sample in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
                     {
-                        await writer.WriteLineAsync(JsonSerializer.Serialize(sample, SampleJsonOptions)).ConfigureAwait(false);
+                        if (Volatile.Read(ref _revoked) == 0)
+                        {
+                            await writer.WriteLineAsync(JsonSerializer.Serialize(sample, SampleJsonOptions)).ConfigureAwait(false);
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
@@ -89,6 +93,12 @@ namespace XMAT.Telemetry
                     _diagnose("LocalSampleWriteFailed");
                 }
             }
+        }
+
+        public void Revoke()
+        {
+            Interlocked.Exchange(ref _revoked, 1);
+            Dispose();
         }
 
         public void Dispose()
