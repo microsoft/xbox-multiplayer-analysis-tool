@@ -10,6 +10,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using XMAT.NetworkTrace;
@@ -283,10 +284,12 @@ namespace XMAT.Tests
             });
         }
 
+        // The original look keeps a filter on when its list is replaced, so the new list's values and checked states apply.
+        // (The new look turns the filter off: Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest.)
         [Fact]
         public void EnabledFilters_UseTheNewContextsValuesAfterContextAndSourceReplacement()
         {
-            _application.Run(window =>
+            _application.Run(window => InOriginalLook(() =>
             {
                 var controller = Controller();
                 controller.ProxyConnections.Add(CaptureTimelineTestData.Create(host: "old.test"));
@@ -311,7 +314,7 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
                 Assert.Same(replacement, Assert.Single(grid.Items.Cast<ProxyConnectionModel>()));
                 Assert.Equal(0, HandlerCount(model));
-            });
+            }));
         }
 
         [Fact]
@@ -373,10 +376,12 @@ namespace XMAT.Tests
             });
         }
 
+        // The view reads the replacement list's own items and checked states (in the original look, which keeps the filter
+        // on when its list is replaced).
         [Fact]
         public void ReplacingFilterOptions_UsesNewInstancesAndTheirCheckedState()
         {
-            _application.Run(window =>
+            _application.Run(window => InOriginalLook(() =>
             {
                 var controller = Controller();
                 var model = CaptureTimelineTestData.Create();
@@ -401,7 +406,7 @@ namespace XMAT.Tests
                 replacement.IsChecked = false;
                 Assert.False(grid.Items.Filter(model));
                 Assert.Same(replacement, Assert.Single(controller.StatusFilterList));
-            });
+            }));
         }
 
         [Theory]
@@ -667,23 +672,28 @@ namespace XMAT.Tests
                 Assert.Equal("Filters (2 active)", AutomationProperties.GetName(button));
                 Assert.Equal(AutomationProperties.GetName(button), button.ToolTip);
 
-                // The process filter's summary and Show all processes stay in view on their line under the Filters
-                // button, 4px below it, and the popup doesn't repeat them. A pane this narrow wraps Show all under the
-                // summary rather than cutting either short.
+                // The process filter's summary, Show all processes and Clear filters stay in view on their line under the
+                // Filters button, 4px below it, and the popup doesn't repeat them. A pane this narrow wraps Show all under
+                // the summary, and Clear filters under Show all, rather than cutting any short.
                 var indicator = (TextBlock)view.FindName("ProcessFilterIndicator");
                 var showAll = (Button)view.FindName("ShowAllProcessesButton");
+                var clear = (Button)view.FindName("ClearFiltersButton");
                 Assert.True(indicator.IsVisible);
                 Assert.True(showAll.IsVisible);
+                Assert.True(clear.IsVisible);
                 Assert.InRange(Bounds(indicator, host).Left - Bounds(button, host).Left, -0.5, 0.5);
                 Assert.InRange(Bounds(indicator, host).Top - Bounds(button, host).Bottom, 3.5, 4.5);
                 Assert.InRange(Bounds(showAll, host).Left - Bounds(indicator, host).Left, -0.5, 0.5);
                 Assert.InRange(Bounds(showAll, host).Top - Bounds(indicator, host).Bottom, -0.5, 0.5);
-                Assert.InRange(Bounds(showAll, host).Bottom - host.ActualHeight, -0.5, 0.5);
+                Assert.InRange(Bounds(clear, host).Left - Bounds(indicator, host).Left, -0.5, 0.5);
+                Assert.InRange(Bounds(clear, host).Top - Bounds(showAll, host).Bottom, -0.5, 0.5);
+                Assert.InRange(Bounds(clear, host).Bottom - host.ActualHeight, -0.5, 0.5);
                 button.IsChecked = true;
                 WpfTestHost.Pump();
                 Assert.True(host.OverflowPopup.IsOpen);
                 Assert.False(host.OverflowPopup.Child.IsAncestorOf(indicator));
                 Assert.False(host.OverflowPopup.Child.IsAncestorOf(showAll));
+                Assert.False(host.OverflowPopup.Child.IsAncestorOf(clear));
                 Assert.True(indicator.IsVisible);
                 button.IsChecked = false;
                 WpfTestHost.Pump();
@@ -710,18 +720,19 @@ namespace XMAT.Tests
                 var expander = Assert.IsAssignableFrom<IExpandCollapseProvider>(peer.GetPattern(PatternInterface.ExpandCollapse));
                 Assert.Equal(ExpandCollapseState.Collapsed, expander.ExpandCollapseState);
                 var status = (CheckBoxFilters)view.FindName("StatusFilters");
-                var first = (CheckBox)status.FindName("EnableFilters");
+                // The new look has no check box beside a filter, so the first control is the Status dropdown.
+                var first = (ComboBox)status.FindName("FilterList");
 
                 Assert.True(button.Focus());
                 Press(button, Key.Enter);
                 WpfTestHost.Pump();
                 Assert.True(host.OverflowPopup.IsOpen);
                 Assert.Equal(ExpandCollapseState.Expanded, expander.ExpandCollapseState);
-                Assert.Same(first, Keyboard.FocusedElement);
+                Assert.True(first.IsKeyboardFocusWithin);
                 // Tab moves on through the filters in the popup.
-                Assert.True(first.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
-                Assert.True(status.IsKeyboardFocusWithin);
-                Assert.NotSame(first, Keyboard.FocusedElement);
+                Assert.True(((UIElement)Keyboard.FocusedElement).MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+                Assert.False(status.IsKeyboardFocusWithin);
+                Assert.True(((CheckBoxFilters)view.FindName("HostFilters")).IsKeyboardFocusWithin);
 
                 Press((UIElement)Keyboard.FocusedElement, Key.Escape);
                 WpfTestHost.Pump();
@@ -734,7 +745,7 @@ namespace XMAT.Tests
                 expander.Expand();
                 WpfTestHost.Pump();
                 Assert.True(host.OverflowPopup.IsOpen);
-                Assert.Same(first, Keyboard.FocusedElement);
+                Assert.True(first.IsKeyboardFocusWithin);
                 expander.Collapse();
                 WpfTestHost.Pump();
                 Assert.False(host.OverflowPopup.IsOpen);
@@ -847,6 +858,149 @@ namespace XMAT.Tests
                 Assert.False(outline.IsVisible);
                 Assert.False(problem.IsVisible);
             });
+        }
+
+        // In the new look the dropdown is the filter, without a check box beside it: picking values shows only those, and
+        // with none picked, All is, and every request shows. The dropdown says what it shows. A value that appears while
+        // the filter is on wasn't picked, so its requests stay hidden. Clear filters, there while anything filters, turns
+        // off the dropdowns, the process filter and the search.
+        [Fact]
+        public void Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest()
+        {
+            _application.Run(window =>
+            {
+                var controller = Controller();
+                foreach ((int number, string rowHost, string rowStatus) in new[]
+                    { (1, "a.example.test", "200"), (2, "b.example.test", "404"), (3, "c.example.test", "503") })
+                {
+                    controller.ProxyConnections.Add(CaptureTimelineTestData.Create(number, host: rowHost, status: rowStatus));
+                }
+
+                var view = View(controller);
+                ShowAt(window, view, 1600);
+                var status = (CheckBoxFilters)view.FindName("StatusFilters");
+                var hosts = (CheckBoxFilters)view.FindName("HostFilters");
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                var clear = (Button)view.FindName("ClearFiltersButton");
+                string[] Shown() => grid.Items.OfType<ProxyConnectionModel>().Select(row => row.Status).OrderBy(s => s).ToArray();
+                Assert.False(((CheckBox)status.FindName("EnableFilters")).IsVisible, "INPUT-1: a check box sits beside the Status dropdown.");
+                Assert.False(clear.IsVisible, "INPUT-1: Clear filters shows while nothing filters.");
+                Assert.Equal("Status", status.Summary);
+                Assert.True(PickBox(status, "*").IsChecked, "INPUT-1: All isn't picked while nothing is.");
+                Assert.Equal("All", PickBox(status, "*").Content);
+
+                Toggle(PickBox(status, "503"));
+                Assert.True(status.IsFilterEnabled, "INPUT-1: picking 503 doesn't turn the Status filter on.");
+                Assert.True(Shown().SequenceEqual(new[] { "503" }), "INPUT-1: picking 503 doesn't show only 503.");
+                var values = (TextBlock)view.FindName("FilterValuesText");
+                Assert.True(values.IsVisible && values.Text == "Status: 503", $"INPUT-1: the filter row says \"{values.Text}\", not what Status shows.");
+                Assert.True(((ComboBox)status.FindName("FilterList")).Text == "Status", "INPUT-1: the Status dropdown doesn't keep its name.");
+                Assert.Equal("Status: 503", status.Summary);
+                Assert.False(PickBox(status, "*").IsChecked);
+                Assert.True(PickBox(status, "503").IsChecked);
+                Assert.False(PickBox(status, "200").IsChecked);
+                Assert.True(clear.IsVisible, "INPUT-1: Clear filters doesn't show while a filter is on.");
+
+                Toggle(PickBox(status, "404"));
+                Assert.Equal(new[] { "404", "503" }, Shown());
+                Assert.Equal("Status: 404, 503", values.Text);
+
+                controller.ProxyConnections.Add(CaptureTimelineTestData.Create(4, host: "d.example.test", status: "500"));
+                WpfTestHost.Pump();
+                Assert.True(Shown().SequenceEqual(new[] { "404", "503" }), "INPUT-1: a status that appeared while filtering shows, though nobody picked it.");
+                Assert.False(PickBox(status, "500").IsChecked);
+
+                Toggle(PickBox(status, "404"));
+                Toggle(PickBox(status, "503"));
+                Assert.False(status.IsFilterEnabled, "INPUT-1: unpicking every value leaves the filter on.");
+                Assert.Equal(new[] { "200", "404", "500", "503" }, Shown());
+                Assert.Equal("Status", status.Summary);
+                Assert.True(PickBox(status, "*").IsChecked);
+                Assert.False(clear.IsVisible);
+
+                Toggle(PickBox(status, "200"));
+                Toggle(PickBox(hosts, "b.example.test"));
+                Assert.Empty(Shown());
+                Assert.Equal("Status: 200 · Host: b.example.test", values.Text);
+                var search = (SearchBox)view.FindName("SearchBox");
+                search.Text = "example";
+                view.ApplySearch();
+                controller.SetProcessFilter(ProcessFilterTestSupport.Spec(null, new[] { "svchost.exe" }));
+                WpfTestHost.Pump();
+                clear.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                WpfTestHost.Pump();
+                Assert.False(status.IsFilterEnabled || hosts.IsFilterEnabled, "INPUT-1: Clear filters leaves a dropdown filtering.");
+                Assert.Equal(string.Empty, search.Text);
+                Assert.True(ProcessFilter.IsEmpty(controller.ProcessFilter));
+                Assert.Equal(4, grid.Items.Count);
+                Assert.False(clear.IsVisible);
+
+                // A new list holds new values, so the values picked before don't carry over: the filter turns off.
+                Toggle(PickBox(status, "404"));
+                Assert.True(status.IsFilterEnabled);
+                controller.StatusFilterList = new ObservableCollection<CheckedListItem> { new("404", false), new("503") };
+                controller.RaisePropertyChange(nameof(controller.StatusFilterList));
+                WpfTestHost.Pump();
+                Assert.False(status.IsFilterEnabled);
+                Assert.All(controller.StatusFilterList, value => Assert.True(value.IsChecked));
+                Assert.Equal("Status", status.Summary);
+                Assert.Equal(4, grid.Items.Count);
+            });
+        }
+
+        // The original look keeps its check box beside each filter, its dropdown says only the filter's name, and it has no
+        // Clear filters.
+        [Fact]
+        public void OriginalLook_KeepsTheCheckBoxBesideEachFilter()
+        {
+            _application.Run(window => InOriginalLook(() =>
+            {
+                var controller = Controller();
+                controller.ProxyConnections.Add(CaptureTimelineTestData.Create(1, status: "404"));
+                var view = View(controller);
+                ShowAt(window, view, 1600);
+                var status = (CheckBoxFilters)view.FindName("StatusFilters");
+                var enable = (CheckBox)status.FindName("EnableFilters");
+                Assert.True(enable.IsVisible);
+                enable.IsChecked = true;
+                WpfTestHost.Pump();
+                Assert.Equal("Status", status.Summary);
+                Assert.False(((Button)view.FindName("ClearFiltersButton")).IsVisible);
+                Assert.Equal("*", PickBox(status, "*").Content);
+            }));
+        }
+
+        // Runs ACTION with the original look, then restores the look.
+        private static void InOriginalLook(Action action)
+        {
+            bool wasNewLook = LookState.Current.IsNewLook;
+            try
+            {
+                LookState.Current.IsNewLook = false;
+                action();
+            }
+            finally
+            {
+                LookState.Current.IsNewLook = wasNewLook;
+            }
+        }
+
+        // The check box for TEXT in FILTER's list, which opens to make it.
+        private static CheckBox PickBox(CheckBoxFilters filter, string text)
+        {
+            var list = (ComboBox)filter.FindName("FilterList");
+            list.IsDropDownOpen = true;
+            WpfTestHost.Pump();
+            CheckedListItem item = list.Items.OfType<CheckedListItem>().First(candidate => candidate.Text == text);
+            var container = (ComboBoxItem)list.ItemContainerGenerator.ContainerFromItem(item);
+            return Descendants(container).OfType<CheckBox>().Single();
+        }
+
+        // Toggles BOX as a screen reader does, which clicks and keys also do.
+        private static void Toggle(CheckBox box)
+        {
+            ((IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(box).GetPattern(PatternInterface.Toggle)).Toggle();
+            WpfTestHost.Pump();
         }
 
         private sealed class UnusedConfiguration : IProxyDeviceConfiguration

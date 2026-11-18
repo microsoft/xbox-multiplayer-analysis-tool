@@ -41,6 +41,11 @@ it to see how that column's values are spread over the packets the list shows, a
 counts and percentages, then the rest in one row. Select a protocol, address, PID or TID
 to set that filter to the value; MAC addresses and the media type have no filter.
 
+The **PID**, **TID**, **PROTO**, **SRCIP** and **DESTIP** lists above the packets filter
+them once a capture stops, as a [web proxy capture's lists](web-proxy.md#filter-connections)
+do: with **New look** on, pick the values to show, and **Clear filters** turns every
+filter off.
+
 Use **File > Save Captures** and **Load Captures** to save and reopen trace data.
 **Clear Captures** removes the current data set; **Start Capture** clears it and
 starts a new capture.

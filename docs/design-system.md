@@ -223,6 +223,14 @@ files of their own as they are worked on.
   People see what an option asks for before they choose it, such as the address in New Capture's Xbox console by
   address. Tab reaches the field once its card is chosen.
 
+### Text boxes and dropdowns
+
+- **INPUT-1** A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row
+  does. A dropdown that filters looks like a checked toggle and keeps its name, so the row keeps its layout, and the
+  filter row says what each filter shows, such as **Status: 404, 503**, beside Clear filters, which turns every filter
+  off. A value that first appears while a filter is on stays hidden, because nobody picked it. The original look keeps
+  its check box beside each dropdown.
+
 ## The design system app
 
 The design system app, `XMAT.DesignSystem`, has a page for each foundation and component, listed under their sections:

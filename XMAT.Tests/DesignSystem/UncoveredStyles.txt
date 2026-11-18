@@ -4,7 +4,6 @@
 Looks/NewLook.xaml: ColumnHeaderGripperStyle
 Looks/NewLook.xaml: ColumnSplitterStyle
 Looks/NewLook.xaml: FilterLabelStyle
-Looks/NewLook.xaml: FilterSummaryTextStyle
 Looks/NewLook.xaml: InspectorTreeViewStyle
 Looks/NewLook.xaml: MainStatusBarStyle
 Looks/NewLook.xaml: MessageGridHeaderStyle

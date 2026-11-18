@@ -34,11 +34,12 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal void EnsureValue(string text)
+        // Adds TEXT to the list if it's new, checked or not as IS_CHECKED says (CheckBoxFilters.NewValuesChecked).
+        internal void EnsureValue(string text, bool isChecked = true)
         {
             if (_source != null && !string.IsNullOrEmpty(text) && !_values.ContainsKey(new ValueKey(text)))
             {
-                _source.Add(new CheckedListItem(text));
+                _source.Add(new CheckedListItem(text, isChecked));
             }
         }
 

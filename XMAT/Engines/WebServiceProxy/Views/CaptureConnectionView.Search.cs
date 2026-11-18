@@ -67,6 +67,7 @@ namespace XMAT.WebServiceCapture
             SearchBox.Problem = _search.Problems.Count > 0 ? _search.Problems[0] : null;
             RequestFilterRefresh();
             RequestSearchCount();
+            UpdateClearFilters();
         }
 
         private void RequestSearchCount()

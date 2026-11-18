@@ -160,7 +160,8 @@ which the link above the topics opens.
   current row. To sort from the keyboard, open the table's menu with **Shift+F10**
   or the Menu key and choose **Sort by**.
 - In a filter list, **Down** opens the list and the arrow keys move between its
-  check boxes. **Space** checks or clears one; **Enter** closes the list.
+  check boxes. **Space** checks or clears one, which in the new look picks or unpicks
+  that value; **Enter** closes the list.
 - **Esc** closes the process filter and returns focus to **Process**.
 - When the traffic pane is too narrow for its filters, they fold into a **Filters**
   button. **Enter**, **Space** or **Alt+Down** opens it on the first filter, **Tab**

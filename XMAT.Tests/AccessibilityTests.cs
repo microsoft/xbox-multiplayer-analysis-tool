@@ -172,42 +172,67 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void FilterDropdowns_MoveBetweenCheckBoxesFromTheKeyboardAndKeepTheirName()
+        // In either look, the arrow keys move between the list's check boxes and Space toggles one; the dropdown keeps its
+        // name. In the original look, All is * and toggling a value clears it. In the new look All is All, toggling a value
+        // picks it, and screen readers then hear what the filter shows.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void FilterDropdowns_MoveBetweenCheckBoxesFromTheKeyboardAndKeepTheirName(bool newLook)
         {
             _application.Run(window =>
             {
-                var items = new ObservableCollection<CheckedListItem> { new("200"), new("404") };
-                var filters = new CheckBoxFilters { FilterDesc = "Status", ItemsSource = items };
-                WpfTestHost.Show(window, filters);
-                var list = (ComboBox)filters.FindName("FilterList");
-                Assert.Equal("Status", AutomationProperties.GetName(list));
-                Assert.Equal(Localization.GetLocalizedString("A11Y_FILTER_ENABLE_NAME", "Status"),
-                    AutomationProperties.GetName((CheckBox)filters.FindName("EnableFilters")));
+                bool wasNewLook = LookState.Current.IsNewLook;
+                try
+                {
+                    LookState.Current.IsNewLook = newLook;
+                    var items = new ObservableCollection<CheckedListItem> { new("200"), new("404") };
+                    var filters = new CheckBoxFilters { FilterDesc = "Status", ItemsSource = items };
+                    WpfTestHost.Show(window, filters);
+                    var list = (ComboBox)filters.FindName("FilterList");
+                    Assert.Equal("Status", AutomationProperties.GetName(list));
+                    Assert.Equal(Localization.GetLocalizedString("A11Y_FILTER_ENABLE_NAME", "Status"),
+                        AutomationProperties.GetName((CheckBox)filters.FindName("EnableFilters")));
 
-                Press(list, Key.Down);
-                WpfTestHost.Pump();
-                Assert.True(list.IsDropDownOpen);
-                Assert.Equal("*", Assert.IsType<CheckBox>(Keyboard.FocusedElement).Content);
+                    Press(list, Key.Down);
+                    WpfTestHost.Pump();
+                    Assert.True(list.IsDropDownOpen);
+                    Assert.Equal(newLook ? "All" : "*", Assert.IsType<CheckBox>(Keyboard.FocusedElement).Content);
 
-                Press((UIElement)Keyboard.FocusedElement, Key.Down);
-                WpfTestHost.Pump();
-                var first = Assert.IsType<CheckBox>(Keyboard.FocusedElement);
-                Assert.Equal("200", first.Content);
-                ((IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(first).GetPattern(PatternInterface.Toggle)).Toggle();
-                WpfTestHost.Pump();
-                Assert.False(items[0].IsChecked);
+                    Press((UIElement)Keyboard.FocusedElement, Key.Down);
+                    WpfTestHost.Pump();
+                    var first = Assert.IsType<CheckBox>(Keyboard.FocusedElement);
+                    Assert.Equal("200", first.Content);
+                    ((IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(first).GetPattern(PatternInterface.Toggle)).Toggle();
+                    WpfTestHost.Pump();
+                    if (newLook)
+                    {
+                        Assert.True(filters.IsFilterEnabled);
+                        Assert.True(items[0].IsChecked);
+                        Assert.False(items[1].IsChecked);
+                        Assert.Equal("Status: 200", AutomationProperties.GetName(list));
+                    }
+                    else
+                    {
+                        Assert.False(items[0].IsChecked);
+                        Assert.Equal("Status", AutomationProperties.GetName(list));
+                    }
 
-                Press(first, Key.Enter);
-                WpfTestHost.Pump();
-                Assert.False(list.IsDropDownOpen);
-                Assert.Equal("Status", list.Text);
+                    Press(first, Key.Enter);
+                    WpfTestHost.Pump();
+                    Assert.False(list.IsDropDownOpen);
+                    Assert.Equal("Status", list.Text);
 
-                // A click on a row outside its check box selects the row; the box still shows the filter's name.
-                list.SelectedIndex = 2;
-                WpfTestHost.Pump();
-                Assert.Equal(-1, list.SelectedIndex);
-                Assert.Equal("Status", list.Text);
+                    // A click on a row outside its check box selects the row; the box still shows the filter's name.
+                    list.SelectedIndex = 2;
+                    WpfTestHost.Pump();
+                    Assert.Equal(-1, list.SelectedIndex);
+                    Assert.Equal("Status", list.Text);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                }
             });
         }
 

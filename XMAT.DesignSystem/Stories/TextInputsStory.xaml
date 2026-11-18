@@ -71,5 +71,66 @@
                 </ComboBox>
             </ds:StoryExample>
         </ds:StorySection>
+
+        <ds:StorySection Title="Filter dropdown" StyleName="CheckBoxFilters, with the dropdown styles and FilterSummaryTextStyle"
+                         Description="Filters a list by one column's values. Open it and pick the values to show; with none picked, All is, and every row shows. A dropdown that filters looks like a checked toggle and keeps its name, so the row keeps its layout. The line under the filters says what each one shows, beside Clear filters, which turns every filter off.">
+            <ds:StoryExample Caption="Showing every row">
+                <app:CheckBoxFilters FilterDesc="Status" HorizontalAlignment="Left">
+                    <app:CheckBoxFilters.ItemsSource>
+                        <x:Array Type="{x:Type app:CheckedListItem}">
+                            <app:CheckedListItem Text="200" IsChecked="True"/>
+                            <app:CheckedListItem Text="404" IsChecked="True"/>
+                            <app:CheckedListItem Text="503" IsChecked="True"/>
+                        </x:Array>
+                    </app:CheckBoxFilters.ItemsSource>
+                </app:CheckBoxFilters>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Showing 404 and 503">
+                <StackPanel>
+                    <app:CheckBoxFilters FilterDesc="Status" IsFilterEnabled="True" HorizontalAlignment="Left">
+                        <app:CheckBoxFilters.ItemsSource>
+                            <x:Array Type="{x:Type app:CheckedListItem}">
+                                <app:CheckedListItem Text="200" IsChecked="False"/>
+                                <app:CheckedListItem Text="404" IsChecked="True"/>
+                                <app:CheckedListItem Text="503" IsChecked="True"/>
+                            </x:Array>
+                        </app:CheckBoxFilters.ItemsSource>
+                    </app:CheckBoxFilters>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBlock Text="Status: 404, 503" Margin="0,0,12,0" VerticalAlignment="Center"
+                                   Style="{DynamicResource FilterSummaryTextStyle}"/>
+                        <Button Height="24" Padding="12,0" VerticalAlignment="Center" Content="Clear filters"/>
+                    </StackPanel>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StoryRules Description="What every filter in XMAT follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID.">
+            <ds:StoryRule RuleId="INPUT-1">
+                <ds:RuleExample Kind="Do" Caption="The dropdown is the filter. It keeps its name, and the line under it says what it shows, beside Clear filters.">
+                    <StackPanel>
+                        <app:CheckBoxFilters FilterDesc="Status" IsFilterEnabled="True" HorizontalAlignment="Left">
+                            <app:CheckBoxFilters.ItemsSource>
+                                <x:Array Type="{x:Type app:CheckedListItem}">
+                                    <app:CheckedListItem Text="200" IsChecked="False"/>
+                                    <app:CheckedListItem Text="503" IsChecked="True"/>
+                                </x:Array>
+                            </app:CheckBoxFilters.ItemsSource>
+                        </app:CheckBoxFilters>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <TextBlock Text="Status: 503" Margin="0,0,12,0" VerticalAlignment="Center"
+                                       Style="{DynamicResource FilterSummaryTextStyle}"/>
+                            <Button Height="24" Padding="12,0" VerticalAlignment="Center" Content="Clear filters"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="A check box beside the dropdown turns it on, so people wonder what the check boxes in it are for.">
+                    <StackPanel Orientation="Horizontal">
+                        <CheckBox VerticalAlignment="Center" Margin="0,0,6,0" IsChecked="True" AutomationProperties.Name="Filter by Status"/>
+                        <ComboBox Width="100" IsEditable="True" IsReadOnly="True" Text="Status" AutomationProperties.Name="Status"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
     </StackPanel>
 </ds:Story>

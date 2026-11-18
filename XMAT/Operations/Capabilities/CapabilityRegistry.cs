@@ -36,6 +36,7 @@ namespace XMAT.Operations.Capabilities
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
         private const string TrafficOverviewXaml = "Controls/TrafficOverview.xaml";
+        private const string NetworkTraceViewXaml = "Engines/NetworkTrace/NetworkTraceCaptureView.xaml";
         private const string WhatsNewXaml = "Windows/WhatsNewWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
@@ -521,6 +522,9 @@ namespace XMAT.Operations.Capabilities
                     Click(TrafficOverviewXaml, "Hide_Click"),
                     Click(TrafficOverviewXaml, "Show_Click"),
                     Preference("XMAT.Models.AppPreferencesModel", "ShowTrafficOverview"),
+                    // Clear filters only changes what the capture views show.
+                    Click(CaptureViewXaml, "ClearFilters_Click"),
+                    Click(NetworkTraceViewXaml, "ClearFilters_Click"),
                 }),
             Capability.GuiOnly(
                 "view.composer-history", "Composer history",

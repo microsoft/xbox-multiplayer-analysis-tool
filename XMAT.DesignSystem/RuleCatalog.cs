@@ -99,6 +99,11 @@ namespace XMAT.DesignSystem
                 "A field that an option needs shows on its card from the start, and using the field chooses the card.",
                 "People see what an option asks for before they choose it, and can start typing without choosing first.",
                 "NewCaptureWindowTests.TheAddressField_ShowsBeforeItsCardIsChosen_AndUsingItChoosesTheCard"),
+
+            new DesignRule("INPUT-1", RuleLevel.Must, "Text boxes and dropdowns",
+                "A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row does. A dropdown that filters looks like a checked toggle and keeps its name, and the filter row says what each filter shows, beside Clear filters, which turns every filter off.",
+                "People see what a list hides without opening each filter, and get every row back in one step, while the row keeps its layout as filters change. A check box beside the dropdown left them wondering what the check boxes in it were for.",
+                "CaptureConnectionViewTests.Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest"),
         };
 
         // The rule with ID, or null when there is none.

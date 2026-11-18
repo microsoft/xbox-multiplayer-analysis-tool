@@ -64,6 +64,11 @@
                 <app:CheckBoxFilters x:Name="ProtocolFilters" FilterDesc="PROTO" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.ProtocolFilterList}"/>
                 <app:CheckBoxFilters x:Name="SourceIpFilters" FilterDesc="SRCIP" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.SourceIpFilterList}"/>
                 <app:CheckBoxFilters x:Name="DestIpFilters" FilterDesc="DESTIP" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.DestIpFilterList}"/>
+                <!-- The new look says what the filters show, and ends the row with Clear filters, while any filter is on. -->
+                <TextBlock x:Name="FilterValuesText" Margin="4,0,12,0" VerticalAlignment="Center" Visibility="Collapsed"
+                           Style="{DynamicResource FilterSummaryTextStyle}"/>
+                <Button x:Name="ClearFiltersButton" Height="{DynamicResource ControlHeight}" Padding="12,0" VerticalAlignment="Center"
+                        Visibility="Collapsed" Click="ClearFilters_Click" Content="{x:Static app:CheckBoxFilters.ClearFiltersText}"/>
             </StackPanel>
         </StackPanel>
         <TextBlock Grid.Row="2" Grid.RowSpan="3" FontSize="{DynamicResource EmptyStateFontSize}"

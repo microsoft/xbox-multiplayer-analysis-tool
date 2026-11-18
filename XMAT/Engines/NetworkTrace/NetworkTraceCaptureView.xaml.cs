@@ -50,6 +50,7 @@ namespace NetworkTraceCaptureControls
             ProtocolFilters.FilterDesc = XMAT.Localization.GetLocalizedString("NETCAP_FILTER_PROTOCOL");
             SourceIpFilters.FilterDesc = XMAT.Localization.GetLocalizedString("NETCAP_FILTER_SOURCEIP");
             DestIpFilters.FilterDesc = XMAT.Localization.GetLocalizedString("NETCAP_FILTER_DESTIP");
+            PropertyChangedEventManager.AddHandler(LookState.Current, LookState_Changed, nameof(LookState.IsNewLook));
 
             PacketList.Columns[0].Header = XMAT.Localization.GetLocalizedString("NETCAP_HEADER_TIMESTAMP");
             PacketList.Columns[1].Header = XMAT.Localization.GetLocalizedString("NETCAP_HEADER_PROTOCOL");
@@ -246,10 +247,59 @@ namespace NetworkTraceCaptureControls
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
+            if (_clearingFilters)
+            {
+                return;
+            }
+
             UpdateFilteredData();
+            UpdateClearFilters();
         }
 
-        private bool ItemIsChecked(IEnumerable list, string text)
+        private bool _clearingFilters;
+
+        private CheckBoxFilters[] AllFilters() => new[] { PidFilters, TidFilters, ProtocolFilters, SourceIpFilters, DestIpFilters };
+
+        // The new look says what the filters show, and offers Clear filters, while any filter is on.
+        private void UpdateClearFilters()
+        {
+            bool newLook = LookState.Current.IsNewLook;
+            string values = newLook
+                ? string.Join(" · ", AllFilters().Where(filter => filter.HasPicks).Select(filter => filter.Summary))
+                : string.Empty;
+            FilterValuesText.Text = values;
+            FilterValuesText.Visibility = values.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ClearFiltersButton.Visibility = newLook && AllFilters().Any(filter => filter.IsFilterEnabled)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        private void LookState_Changed(object sender, PropertyChangedEventArgs e) => UpdateClearFilters();
+
+        private void ClearFilters_Click(object sender, RoutedEventArgs e) => ClearFilters();
+
+        // Turns every filter off and filters the packets once.
+        internal void ClearFilters()
+        {
+            _clearingFilters = true;
+            try
+            {
+                foreach (CheckBoxFilters filter in AllFilters())
+                {
+                    filter.ShowAll();
+                }
+            }
+            finally
+            {
+                _clearingFilters = false;
+            }
+
+            UpdateFilteredData();
+            UpdateClearFilters();
+        }
+
+        // Whether TEXT is checked in LIST; a value that isn't in it yet starts as FILTER says (NewValuesChecked).
+        private static bool ItemIsChecked(IEnumerable list, string text, CheckBoxFilters filter)
         {
             foreach (CheckedListItem item in list)
             {
@@ -259,7 +309,7 @@ namespace NetworkTraceCaptureControls
                 }
             }
 
-            return true;
+            return filter.NewValuesChecked;
         }
 
         private void UpdateFilterList(IEnumerable items, ObservableCollection<CheckedListItem> list)
@@ -289,7 +339,7 @@ namespace NetworkTraceCaptureControls
                         select new CheckedListItem
                         {
                             Text = processGroup.Key.ToString(),
-                            IsChecked = ItemIsChecked(currentItems, processGroup.Key.ToString())
+                            IsChecked = ItemIsChecked(currentItems, processGroup.Key.ToString(), PidFilters)
                         };
 
                     UpdateFilterList(filterQuery, ntdcc.PidFilterList);
@@ -302,7 +352,7 @@ namespace NetworkTraceCaptureControls
                         select new CheckedListItem
                         {
                             Text = threadGroup.Key.ToString(),
-                            IsChecked = ItemIsChecked(currentItems, threadGroup.Key.ToString())
+                            IsChecked = ItemIsChecked(currentItems, threadGroup.Key.ToString(), TidFilters)
                         };
 
                     UpdateFilterList(filterQuery, ntdcc.TidFilterList);
@@ -315,7 +365,7 @@ namespace NetworkTraceCaptureControls
                         select new CheckedListItem
                         {
                             Text = GetProtocolFilterName(protoGroup.Key),
-                            IsChecked = ItemIsChecked(currentItems, GetProtocolFilterName(protoGroup.Key))
+                            IsChecked = ItemIsChecked(currentItems, GetProtocolFilterName(protoGroup.Key), ProtocolFilters)
                         };
 
                     UpdateFilterList(filterQuery, ntdcc.ProtocolFilterList);
@@ -328,7 +378,7 @@ namespace NetworkTraceCaptureControls
                         select new CheckedListItem
                         {
                             Text = sourceGroup.Key,
-                            IsChecked = ItemIsChecked(currentItems, sourceGroup.Key)
+                            IsChecked = ItemIsChecked(currentItems, sourceGroup.Key, SourceIpFilters)
                         };
 
                     UpdateFilterList(filterQuery, ntdcc.SourceIpFilterList);
@@ -341,7 +391,7 @@ namespace NetworkTraceCaptureControls
                         select new CheckedListItem
                         {
                             Text = destGroup.Key,
-                            IsChecked = ItemIsChecked(currentItems, destGroup.Key)
+                            IsChecked = ItemIsChecked(currentItems, destGroup.Key, DestIpFilters)
                         };
 
                     UpdateFilterList(filterQuery, ntdcc.DestIpFilterList);

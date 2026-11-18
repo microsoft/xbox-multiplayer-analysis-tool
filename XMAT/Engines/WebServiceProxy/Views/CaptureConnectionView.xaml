@@ -128,11 +128,13 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <!-- In the new look, the search box beside the row says what the row is for. -->
                     <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"
                                Visibility="{app:Look New=Collapsed, Original=Visible}" app:FilterOverflowHost.IsInlineOnly="True"/>
-                    <app:CheckBoxFilters x:Name="StatusFilters" Grid.Column="1" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
+                    <app:CheckBoxFilters x:Name="StatusFilters" Grid.Column="1" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"
+                                         BlankText="{x:Static local:CaptureConnectionView.NoStatusText}"/>
                     <app:CheckBoxFilters x:Name="HostFilters"   Grid.Column="2" FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
                     <app:CheckBoxFilters x:Name="MethodFilters" Grid.Column="3" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
                     <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
@@ -162,11 +164,21 @@
                             </StackPanel>
                         </Border>
                     </Popup>
+                    <!-- The new look's line under the filters: what the Status, Host and Method filters show, then the process
+                         filter's summary and Show all, and Clear filters. -->
+                    <TextBlock x:Name="FilterValuesText" Grid.Column="5" VerticalAlignment="Center" Margin="0,0,12,0" Visibility="Collapsed"
+                               Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
                     <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters. -->
                     <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="5" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
                                Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
                     <Button x:Name="ShowAllProcessesButton" Grid.Column="6" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
+                            Margin="{app:Look New='0,0,8,0', Original='0'}"
                             HorizontalAlignment="Left" app:FilterOverflowHost.IsSummary="True" Click="ShowAllProcesses_Click">Show all processes</Button>
+                    <!-- The new look's Clear filters shows while anything filters the table, the search included. It sits on
+                         the summaries' line under the row, so it never folds the row and stays in view when the row folds. -->
+                    <Button x:Name="ClearFiltersButton" Grid.Column="7" Height="24" Padding="12,0"
+                            VerticalAlignment="Center" HorizontalAlignment="Left" Visibility="Collapsed" Click="ClearFilters_Click"
+                            app:FilterOverflowHost.IsSummary="True" Content="{x:Static app:CheckBoxFilters.ClearFiltersText}"/>
                 </Grid>
             </app:FilterOverflowHost>
         </app:SearchFilterRow>

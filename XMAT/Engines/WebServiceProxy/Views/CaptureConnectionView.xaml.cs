@@ -160,6 +160,7 @@ namespace XMAT.WebServiceCapture
             ProcessFilterPopup.Opened += (_, _) => ProcessFilterButton.IsHitTestVisible = false;
             ProcessFilterPopup.Closed += (_, _) => ProcessFilterButton.IsHitTestVisible = true;
             TimelineView.OffersProcessFilterItems = true;
+            PropertyChangedEventManager.AddHandler(LookState.Current, LookState_Changed, nameof(LookState.IsNewLook));
 
             EditAndResendMenuItem.Header = Localization.GetLocalizedString("COMPOSER_TITLE");
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
@@ -1163,6 +1164,7 @@ namespace XMAT.WebServiceCapture
                     new[] { StatusFilters, HostFilters, MethodFilters }.Count(filter => filter is { IsFilterEnabled: true }) +
                     (_attachedController != null && !ProcessFilter.IsEmpty(_processSpec) ? 1 : 0);
             }
+            UpdateClearFilters();
         }
 
         private void RequestFilterRefresh()
@@ -1213,17 +1215,17 @@ namespace XMAT.WebServiceCapture
         {
             UpdateFilterSources();
             var controller = _attachedController;
-            _statusValues.EnsureValue(item.Status);
+            _statusValues.EnsureValue(item.Status, StatusFilters.NewValuesChecked);
             if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
             {
                 return;
             }
-            _hostValues.EnsureValue(item.Host);
+            _hostValues.EnsureValue(item.Host, HostFilters.NewValuesChecked);
             if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
             {
                 return;
             }
-            _methodValues.EnsureValue(item.Method);
+            _methodValues.EnsureValue(item.Method, MethodFilters.NewValuesChecked);
         }
 
         private async void ChangePort_Executed(object sender, ExecutedRoutedEventArgs e)

@@ -173,9 +173,15 @@ filters the list, the box shows how many requests are shown, such as **12 of 340
 **Ctrl+F** moves to the box and **Esc** empties it. Exporting the visible sessions
 exports what the search shows.
 
-Use the toolbar lists to filter by status code, host, or method. Lists contain the
-values found in the capture; only checked values are shown. Filters combine and
-update as traffic arrives. **ALL/NONE** helps include or exclude a small set of values.
+Use the **Status**, **Host** and **Method** lists to filter by status code, host, or
+method. Each lists the values found in the capture. With **New look** on, pick the
+values to show: only requests with a picked value show, and with none picked (**All**),
+every request shows. A list that filters looks pressed, and the line under the filters
+says what each one shows, such as **Status: 404, 503**; a value that first appears
+while a list filters stays hidden. **Clear filters**, on that line while anything
+filters the list, turns every filter off and empties the search. With **New look** off,
+check the box beside a list to turn its filter on; only checked values show, and **\***
+checks or clears every value. Filters combine and update as traffic arrives.
 In the list, a 5xx status shows in red with a cross and a 4xx status in amber with a
 warning sign, and its row takes a faint wash of that color. **#** and **Status** stay in
 place when the list scrolls sideways. With **New look** off, rows with status codes of
