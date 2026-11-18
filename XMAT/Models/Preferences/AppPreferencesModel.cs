@@ -43,6 +43,9 @@ namespace XMAT.Models
         // False hides the traffic overview above the capture timeline in every capture tab.
         public bool ShowTrafficOverview { get; set; } = true;
 
+        // The edition of What's new that last opened by itself at startup. A newer edition opens once more.
+        public int WhatsNewSeen { get; set; }
+
         public void Serialized()
         {
             if (WebProxyCapturePreferences != null)
@@ -91,6 +94,8 @@ namespace XMAT.Models
                 ComfortView = serializedObject.ComfortView;
                 // The same for the traffic overview, which stays shown.
                 ShowTrafficOverview = serializedObject.ShowTrafficOverview;
+                // Settings saved before What's new opened by itself have none, so it opens once.
+                WhatsNewSeen = serializedObject.WhatsNewSeen;
             }
         }
     }

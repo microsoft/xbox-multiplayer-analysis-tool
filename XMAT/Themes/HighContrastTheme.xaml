@@ -22,6 +22,7 @@
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
     <SolidColorBrush x:Key="TextDisabledBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
+    <SolidColorBrush x:Key="TextLinkBrush" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderSubtleBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>

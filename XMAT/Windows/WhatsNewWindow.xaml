@@ -9,6 +9,23 @@
         FontSize="{DynamicResource BaseFontSize}">
     <!-- What's new opens from both looks, so it uses only colors both looks define and its own styles. -->
     <Window.Resources>
+        <!-- A link: underlined text in the link color. Keyboard focus draws the outline the other controls use. -->
+        <Style x:Key="LinkFocusVisualStyle">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Border Margin="-2,-1" BorderThickness="1" CornerRadius="2"
+                                BorderBrush="{DynamicResource TextPrimaryBrush}" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="LinkStyle" TargetType="Hyperlink">
+            <Setter Property="Foreground" Value="{DynamicResource TextLinkBrush}"/>
+            <Setter Property="TextDecorations" Value="Underline"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource LinkFocusVisualStyle}"/>
+        </Style>
+
         <!-- A topic: a hover fill, and for the topic shown, the page's color with an accent bar at its start. -->
         <Style x:Key="TopicStyle" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
@@ -53,11 +70,15 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Topics: one per page; selecting one shows its page. -->
+        <!-- Topics: one per page; selecting one shows its page. Above them, what the pages cover, with a link to the
+             release notes for new features and fixes. -->
         <DockPanel Grid.RowSpan="2" Margin="16,20,8,16">
-            <TextBlock x:Name="Heading" DockPanel.Dock="Top" Margin="12,0,0,4" FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock x:Name="Heading" DockPanel.Dock="Top" Margin="12,0,0,4" FontSize="18" FontWeight="SemiBold"
+                       TextWrapping="Wrap"/>
             <TextBlock x:Name="Subheading" DockPanel.Dock="Top" Margin="12,0,0,14" TextWrapping="Wrap"
-                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                       Foreground="{DynamicResource TextSecondaryBrush}"><Run x:Name="SubheadingStart"/><Hyperlink
+                       x:Name="ReleaseNotesLink" Style="{StaticResource LinkStyle}" Click="ReleaseNotes_Click"><Run
+                       x:Name="ReleaseNotesText"/></Hyperlink><Run x:Name="SubheadingEnd"/></TextBlock>
             <ListBox x:Name="Topics" ItemContainerStyle="{StaticResource TopicStyle}" Background="Transparent"
                      BorderThickness="0" Padding="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      SelectionChanged="Topics_SelectionChanged">

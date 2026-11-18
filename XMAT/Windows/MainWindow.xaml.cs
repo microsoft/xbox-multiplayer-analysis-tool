@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
@@ -204,6 +205,41 @@ namespace XMAT
                 {
                     Cursor = _originalCursor;
                 };
+        }
+
+        // What's new opens by itself once for each edition, once the window first shows.
+        private void Window_ContentRendered(object sender, EventArgs e)
+        {
+            if (WhatsNewWindow.OpensAtStartup(CaptureAppModel.AppModel.PreferencesModel))
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(OpenWhatsNewWhenActive));
+            }
+        }
+
+        // What's new waits until this window is active, so it opens after any prompt startup shows, such as proxy
+        // recovery's, and not while someone works in another app. It counts as seen once it opens.
+        private void OpenWhatsNewWhenActive()
+        {
+            if (!IsVisible)
+            {
+                return;
+            }
+
+            if (!IsActive)
+            {
+                void OnActivated(object sender, EventArgs e)
+                {
+                    Activated -= OnActivated;
+                    Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(OpenWhatsNewWhenActive));
+                }
+
+                Activated += OnActivated;
+                return;
+            }
+
+            CaptureAppModel.AppModel.PreferencesModel.WhatsNewSeen = WhatsNewWindow.Edition;
+            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+            new WhatsNewWindow { Owner = this }.ShowDialog();
         }
 
         private async void Window_Closing(object sender, CancelEventArgs e)

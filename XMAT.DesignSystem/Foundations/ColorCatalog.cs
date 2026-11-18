@@ -46,6 +46,7 @@ namespace XMAT.DesignSystem
                 new ColorRole("TextPrimaryBrush", "All text people read, headings included. Size and weight, not color, make a heading"),
                 new ColorRole("TextSecondaryBrush", "Labels, captions, column headers and the status bar"),
                 new ColorRole("TextDisabledBrush", "Disabled controls"),
+                new ColorRole("TextLinkBrush", "Links, such as the release notes link in What's new. Links are also underlined, so color isn't their only sign"),
             }),
             new ColorRoleGroup("Borders", new[]
             {
@@ -139,7 +140,7 @@ namespace XMAT.DesignSystem
         public static IReadOnlyList<ContrastGroup> ContrastGroups { get; } = new[]
         {
             new ContrastGroup("Text", TextContrast,
-                new[] { "TextPrimaryBrush", "TextSecondaryBrush" }
+                new[] { "TextPrimaryBrush", "TextSecondaryBrush", "TextLinkBrush" }
                     .SelectMany(text => new[] { "SurfaceCanvasBrush", "SurfacePanelBrush", "SurfaceWellBrush", "SurfaceHoverBrush", "SurfaceSelectedBrush" }
                         .Select(surface => new ContrastPair(text, surface)))
                     .ToList()),

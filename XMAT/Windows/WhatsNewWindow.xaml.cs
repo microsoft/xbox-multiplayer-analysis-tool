@@ -4,17 +4,20 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using XMAT.Models;
 
 namespace XMAT
 {
-    // Shows what changed in the new look, a page at a time: a picture of each change, what it does and where to find
-    // it. The topics on the left list every page; Back, Next, the arrow keys and Page Up and Page Down turn pages.
+    // Shows what changed in XMAT's UI, a page at a time: a picture of each change, what it does and where to find it.
+    // The topics on the left list every page; Back, Next, the arrow keys and Page Up and Page Down turn pages. New
+    // features and fixes are in the release notes, which the link above the topics opens.
     public partial class WhatsNewWindow : Window
     {
         // The pages in order. Each has WHATS_NEW_<ID>_TITLE, _BODY, _WHERE and _IMAGE strings, the last describing
@@ -25,6 +28,12 @@ namespace XMAT
             "context-menus", "accessibility",
         };
 
+        // What's new opens by itself the first time XMAT starts with an edition it hasn't opened. Raise the edition
+        // when the pages change, so people see the new ones once.
+        internal const int Edition = 1;
+
+        internal static readonly Uri ReleaseNotesUri = new("https://github.com/microsoft/xbox-multiplayer-analysis-tool/releases");
+
         private readonly IReadOnlyList<WhatsNewPage> _pages = PageIds.Select(WhatsNewPage.Create).ToList();
 
         public WhatsNewWindow()
@@ -32,7 +41,14 @@ namespace XMAT
             InitializeComponent();
             Title = Localization.GetLocalizedString("WHATS_NEW_WINDOW_TITLE");
             Heading.Text = Localization.GetLocalizedString("WHATS_NEW_HEADING");
-            Subheading.Text = Localization.GetLocalizedString("WHATS_NEW_SUBHEADING");
+            // The sentence has the link where it has {0}.
+            const char Link = '\u0001';
+            string[] subheading = Localization.GetLocalizedString("WHATS_NEW_SUBHEADING", Link).Split(Link);
+            SubheadingStart.Text = subheading[0];
+            ReleaseNotesText.Text = Localization.GetLocalizedString("WHATS_NEW_RELEASE_NOTES");
+            SubheadingEnd.Text = subheading.Length > 1 ? subheading[1] : string.Empty;
+            ReleaseNotesLink.ToolTip = ReleaseNotesUri.AbsoluteUri;
+            AutomationProperties.SetHelpText(ReleaseNotesLink, Localization.GetLocalizedString("WHATS_NEW_RELEASE_NOTES_HELP"));
             AutomationProperties.SetName(Topics, Localization.GetLocalizedString("WHATS_NEW_TOPICS"));
             BackButton.Content = Localization.GetLocalizedString("WHATS_NEW_BACK");
             foreach (WhatsNewPage _ in _pages)
@@ -50,6 +66,12 @@ namespace XMAT
         internal IReadOnlyList<WhatsNewPage> Pages => _pages;
 
         internal int PageIndex => Topics.SelectedIndex;
+
+        // Opens a link in the browser. Tests replace it, so they open none.
+        internal Action<Uri> OpenLink { get; set; } = OpenInBrowser;
+
+        // Whether What's new opens by itself at this start: it hasn't yet for this edition.
+        internal static bool OpensAtStartup(AppPreferencesModel preferences) => preferences.WhatsNewSeen < Edition;
 
         // The picture of each page in a theme: Light pictures in the Light theme and high contrast, Dark ones in Dark.
         internal static Uri ImageUri(string pageId, string theme) =>
@@ -114,6 +136,20 @@ namespace XMAT
         }
 
         private void ThemeChanged(object sender, EventArgs e) => ShowImage();
+
+        private void ReleaseNotes_Click(object sender, RoutedEventArgs e) => OpenLink(ReleaseNotesUri);
+
+        private static void OpenInBrowser(Uri uri)
+        {
+            try
+            {
+                using Process browser = Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Could not open {uri} in the browser: {ex.Message}");
+            }
+        }
 
         private void Back_Click(object sender, RoutedEventArgs e) => ShowPage(PageIndex - 1);
 

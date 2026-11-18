@@ -142,10 +142,13 @@ at the right of the menu row. XMAT remembers this setting too. The original
 appearance offers **Edit > Dark Mode** for light and dark themes and keeps its own
 spacing, since Comfort view applies to the new look.
 
-The sparkle button beside **New look** opens **What's new**, which shows the
-redesign's changes a page at a time, with a picture of each and where to find it.
-Use **Back** and **Next**, the arrow keys or the list of topics to move between
-pages.
+The sparkle button beside **New look** opens **What's new in the UI**, which shows
+the redesign's changes a page at a time, with a picture of each and where to find
+it. It also opens by itself the first time XMAT starts after an update that adds
+pages to it. Use **Back** and **Next**, the arrow keys or the list of topics to move
+between pages. New features and fixes are in the
+[release notes](https://github.com/microsoft/xbox-multiplayer-analysis-tool/releases),
+which the link above the topics opens.
 
 ## Keyboard and screen readers
 

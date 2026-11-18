@@ -62,6 +62,7 @@ Use `DynamicResource`, so the view follows theme changes.
 | `TextPrimaryBrush` | All text people read, headings included. Size and weight, not color, make a heading |
 | `TextSecondaryBrush` | Labels, captions, column headers and the status bar |
 | `TextDisabledBrush` | Disabled controls |
+| `TextLinkBrush` | Links, such as the release notes link in What's new. Links are also underlined, so color isn't their only sign |
 | `BorderSubtleBrush` | Dividers, panel edges and table grid lines |
 | `BorderStrongBrush` | The outline that identifies a control, such as a check box, scroll bar thumbs and the pane splitter while it's dragged |
 | `BorderHoverBrush` | An outline under the pointer |

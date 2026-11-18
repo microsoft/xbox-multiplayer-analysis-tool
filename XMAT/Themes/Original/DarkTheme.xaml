@@ -122,5 +122,7 @@
     <SolidColorBrush x:Key="BorderSubtleBrush" Color="#FF3F3F46"/>
     <SolidColorBrush x:Key="AccentFillBrush" Color="#FF264F78"/>
     <SolidColorBrush x:Key="AccentOnFillBrush" Color="#FFFFFFFF"/>
+    <!-- The original look had no links, so they take a light link blue that reads on its dark surfaces. -->
+    <SolidColorBrush x:Key="TextLinkBrush" Color="#FF3794FF"/>
 
 </ResourceDictionary>

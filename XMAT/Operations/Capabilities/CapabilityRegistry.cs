@@ -449,6 +449,8 @@ namespace XMAT.Operations.Capabilities
                     Window("XMAT.WhatsNewWindow"),
                     Click(WhatsNewXaml, "Back_Click"),
                     Click(WhatsNewXaml, "Next_Click"),
+                    Click(WhatsNewXaml, "ReleaseNotes_Click"),
+                    Preference("XMAT.Models.AppPreferencesModel", "WhatsNewSeen"),
                 }),
             Capability.GuiOnly(
                 "view.language", "Display language",

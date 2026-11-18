@@ -2,12 +2,16 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using XMAT.Models;
 
 namespace XMAT.Tests
 {
@@ -93,6 +97,56 @@ namespace XMAT.Tests
                     }
                 }
             });
+        }
+
+        // The pages cover the UI. The sentence above the topics says the release notes cover the rest, and its link,
+        // underlined so color isn't its only sign, opens them.
+        [Fact]
+        public void TheReleaseNotesLink_IsUnderlinedAndOpensTheReleasesOnGitHub()
+        {
+            _application.Run(_ =>
+            {
+                var window = new WhatsNewWindow { Left = -12000, Top = -12000, ShowActivated = false };
+                var opened = new List<Uri>();
+                window.OpenLink = opened.Add;
+                window.Show();
+                try
+                {
+                    WpfTestHost.Pump();
+                    Assert.Equal("What's new in the UI", window.Heading.Text);
+                    Assert.Equal("Changes to XMAT's look and controls. New features and fixes are in the release notes.",
+                        new TextRange(window.Subheading.ContentStart, window.Subheading.ContentEnd).Text);
+                    Assert.Equal(((SolidColorBrush)window.FindResource("TextLinkBrush")).Color,
+                        ((SolidColorBrush)window.ReleaseNotesLink.Foreground).Color);
+                    Assert.Equal(TextDecorationLocation.Underline, Assert.Single(window.ReleaseNotesLink.TextDecorations).Location);
+
+                    window.ReleaseNotesLink.RaiseEvent(new RoutedEventArgs(Hyperlink.ClickEvent));
+                    Assert.Equal(new[] { WhatsNewWindow.ReleaseNotesUri }, opened);
+                }
+                finally
+                {
+                    window.Close();
+                }
+            });
+        }
+
+        // What's new opens by itself until XMAT saves that it has opened the current edition, including for settings
+        // saved before it opened by itself, and opens again for a newer edition.
+        [Fact]
+        public void WhatsNew_OpensAtStartupOncePerEdition()
+        {
+            var preferences = new AppPreferencesModel();
+            preferences.DeserializeFrom(JsonSerializer.Deserialize<AppPreferencesModel>("{\"Theme\":\"Dark\"}"));
+            Assert.True(WhatsNewWindow.OpensAtStartup(preferences));
+
+            preferences.WhatsNewSeen = WhatsNewWindow.Edition;
+            var reloaded = new AppPreferencesModel();
+            reloaded.DeserializeFrom(JsonSerializer.Deserialize<AppPreferencesModel>(JsonSerializer.Serialize(preferences)));
+            Assert.Equal(WhatsNewWindow.Edition, reloaded.WhatsNewSeen);
+            Assert.False(WhatsNewWindow.OpensAtStartup(reloaded));
+
+            reloaded.WhatsNewSeen = WhatsNewWindow.Edition - 1;
+            Assert.True(WhatsNewWindow.OpensAtStartup(reloaded));
         }
 
         [Fact]

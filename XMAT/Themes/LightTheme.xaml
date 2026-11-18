@@ -17,11 +17,12 @@
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{StaticResource Blue2}"/>
 
-    <!-- Text: one color for all text people read, headings included, a quieter one for labels, and one for disabled
-         controls -->
+    <!-- Text: one color for all text people read, headings included, a quieter one for labels, one for disabled
+         controls and one for links -->
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource Gray13}"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource Gray10}"/>
     <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource Gray9}"/>
+    <SolidColorBrush x:Key="TextLinkBrush" Color="{StaticResource Blue10}"/>
 
     <!-- Borders: dividers and grid lines, the outline that identifies a control, and an outline under the pointer -->
     <SolidColorBrush x:Key="BorderSubtleBrush" Color="{StaticResource Gray5}"/>
