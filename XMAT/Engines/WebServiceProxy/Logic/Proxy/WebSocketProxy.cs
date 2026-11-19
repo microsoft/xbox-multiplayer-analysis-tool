@@ -68,10 +68,20 @@ namespace XMAT.WebServiceCapture.Proxy
                 // Keep the opposite relay alive briefly so both peers can complete the close handshake.
                 if (gracefulClose)
                 {
-                    Task closeTimeout = Task.Delay(TimeSpan.FromSeconds(5), ct);
-                    if (await Task.WhenAny(bothRelays, closeTimeout).ConfigureAwait(false) != bothRelays)
+                    using var closeTimeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    try
                     {
-                        await cts.CancelAsync().ConfigureAwait(false);
+                        Task closeTimeout = Task.Delay(
+                            TimeSpan.FromSeconds(5),
+                            closeTimeoutCancellation.Token);
+                        if (await Task.WhenAny(bothRelays, closeTimeout).ConfigureAwait(false) != bothRelays)
+                        {
+                            await cts.CancelAsync().ConfigureAwait(false);
+                        }
+                    }
+                    finally
+                    {
+                        await closeTimeoutCancellation.CancelAsync().ConfigureAwait(false);
                     }
                 }
                 else

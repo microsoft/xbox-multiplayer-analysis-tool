@@ -1905,7 +1905,8 @@ namespace XMAT.WebServiceCapture
         {
             var callbackStopwatch = Stopwatch.StartNew();
             TimeSpan timeout = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            var timeoutTask = Task.Delay(timeout);
+            using var timerCancellation = new CancellationTokenSource();
+            Task timeoutTask = Task.Delay(timeout, timerCancellation.Token);
             try
             {
                 while (!callbacksDrained.IsCompleted)
@@ -1919,7 +1920,7 @@ namespace XMAT.WebServiceCapture
                     var completed = await Task.WhenAny(
                         callbacksDrained,
                         timeoutTask,
-                        Task.Delay(ProgressUpdateInterval));
+                        Task.Delay(ProgressUpdateInterval, timerCancellation.Token));
                     if (completed == timeoutTask)
                     {
                         throw new TimeoutException();
@@ -1945,6 +1946,10 @@ namespace XMAT.WebServiceCapture
                         timeoutSeconds),
                     ex);
             }
+            finally
+            {
+                await timerCancellation.CancelAsync();
+            }
         }
 
         // Waits for a proxy stop, which ends only after the proxy has completed the capture of every stream it forwarded.
@@ -1953,19 +1958,31 @@ namespace XMAT.WebServiceCapture
         private async Task<bool> WaitForProxyStopAsync(Task proxyStopped)
         {
             TimeSpan budget = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+            using var timerCancellation = new CancellationTokenSource();
+            try
             {
-                if (_captureCallbackCancellationTokenSource != null)
+                if (await Task.WhenAny(
+                    proxyStopped,
+                    Task.Delay(budget, timerCancellation.Token)) != proxyStopped)
                 {
-                    await _captureCallbackCancellationTokenSource.CancelAsync();
+                    if (_captureCallbackCancellationTokenSource != null)
+                    {
+                        await _captureCallbackCancellationTokenSource.CancelAsync();
+                    }
+                    if (await Task.WhenAny(
+                        proxyStopped,
+                        Task.Delay(budget, timerCancellation.Token)) != proxyStopped)
+                    {
+                        return false;
+                    }
                 }
-                if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
-                {
-                    return false;
-                }
+                await proxyStopped;
+                return true;
             }
-            await proxyStopped;
-            return true;
+            finally
+            {
+                await timerCancellation.CancelAsync();
+            }
         }
 
         private TimeoutException CaptureBudgetExceeded() =>
@@ -1978,17 +1995,25 @@ namespace XMAT.WebServiceCapture
             IProgress<WebProxyStopProgress> progress,
             Stopwatch stopStopwatch)
         {
-            while (!uiUpdatesDrained.IsCompleted)
+            using var timerCancellation = new CancellationTokenSource();
+            try
             {
-                progress?.Report(new WebProxyStopProgress(
-                    WebProxyStopPhase.DrainingUiUpdates,
-                    stopStopwatch.Elapsed,
-                    0,
-                    _uiUpdateQueue.PendingCount));
+                while (!uiUpdatesDrained.IsCompleted)
+                {
+                    progress?.Report(new WebProxyStopProgress(
+                        WebProxyStopPhase.DrainingUiUpdates,
+                        stopStopwatch.Elapsed,
+                        0,
+                        _uiUpdateQueue.PendingCount));
 
-                await Task.WhenAny(
-                    uiUpdatesDrained,
-                    Task.Delay(ProgressUpdateInterval));
+                    await Task.WhenAny(
+                        uiUpdatesDrained,
+                        Task.Delay(ProgressUpdateInterval, timerCancellation.Token));
+                }
+            }
+            finally
+            {
+                await timerCancellation.CancelAsync();
             }
 
             await uiUpdatesDrained;

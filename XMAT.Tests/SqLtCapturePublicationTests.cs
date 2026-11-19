@@ -34,8 +34,8 @@ namespace XMAT.Tests
             var reading = Task.Run(() => other.Dataset.DataRecords.ToArray());
             try
             {
-                var delay = Task.Delay(100);
-                Assert.Same(delay, await Task.WhenAny(writing, delay));
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => writing.WaitAsync(TimeSpan.FromMilliseconds(100)));
                 Assert.False(reading.IsCompleted);
             }
             finally { release.Set(); }

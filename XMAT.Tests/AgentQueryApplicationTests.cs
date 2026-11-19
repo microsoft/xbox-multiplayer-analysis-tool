@@ -26,8 +26,8 @@ namespace XMAT.Tests
                 Assert.True(runtime.Approve(exportId));
                 await result.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var release = application.ReleaseAsync(owner, resultId);
-                var delay = Task.Delay(100);
-                Assert.Same(delay, await Task.WhenAny(release, delay));
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => release.WaitAsync(TimeSpan.FromMilliseconds(100)));
                 Assert.False(result.Disposed);
                 result.Continue.TrySetResult();
                 await runtime.WaitForCompletionAsync(owner, exportId).WaitAsync(TimeSpan.FromSeconds(5));

@@ -61,7 +61,8 @@ namespace XMAT.Tests.Proxy
             {
                 using var request = NewRequest(HttpMethod.Get, origin.Url("/events"), Route("http11").Version);
                 Task<HttpResponseMessage> send = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                Assert.NotSame(send, await Task.WhenAny(send, Task.Delay(TimeSpan.FromMilliseconds(750))));
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => send.WaitAsync(TimeSpan.FromMilliseconds(750)));
 
                 release.TrySetResult();
                 using HttpResponseMessage response = await send.WaitAsync(TimeSpan.FromSeconds(10));

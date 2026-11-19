@@ -205,8 +205,14 @@ namespace XMAT.Tests.Cli
             {
                 if (request.Target == "/item/2")
                 {
-                    writtenBeforeTheSecondAnswer =
-                        await Task.WhenAny(firstWritten.Task, Task.Delay(TimeSpan.FromSeconds(5))) == firstWritten.Task;
+                    try
+                    {
+                        await firstWritten.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        writtenBeforeTheSecondAnswer = true;
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
                 return LoopbackResponse.Ok("ok");
@@ -232,8 +238,14 @@ namespace XMAT.Tests.Cli
             {
                 if (request.Target == "/item/1")
                 {
-                    releasedBySecond =
-                        await Task.WhenAny(secondWritten.Task, Task.Delay(TimeSpan.FromSeconds(10))) == secondWritten.Task;
+                    try
+                    {
+                        await secondWritten.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                        releasedBySecond = true;
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
                 return LoopbackResponse.Ok("item " + request.Target);

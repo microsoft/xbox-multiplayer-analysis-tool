@@ -251,7 +251,15 @@ namespace XMAT.Tests
                 {
                     cancellation.Cancel();
                 }
-                await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3)));
+                using var deadline = new CancellationTokenSource();
+                try
+                {
+                    await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3), deadline.Token));
+                }
+                finally
+                {
+                    await deadline.CancelAsync();
+                }
                 Assert.True(applying.IsCompleted, "A stalled configuration read blocked cancellation or the deadline.");
                 if (cancel)
                 {
@@ -299,7 +307,15 @@ namespace XMAT.Tests
             var applying = setup.ApplyAsync(timeout: TimeSpan.FromMilliseconds(200));
             try
             {
-                await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3)));
+                using var deadline = new CancellationTokenSource();
+                try
+                {
+                    await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3), deadline.Token));
+                }
+                finally
+                {
+                    await deadline.CancelAsync();
+                }
                 Assert.True(applying.IsCompleted, "The polling delay exceeded the configuration deadline.");
                 await Assert.ThrowsAsync<TimeoutException>(() => applying);
                 Assert.False(setup.Committed);

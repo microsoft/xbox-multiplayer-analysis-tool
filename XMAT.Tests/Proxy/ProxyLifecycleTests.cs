@@ -572,7 +572,17 @@ namespace XMAT.Tests.Proxy
             release.Cancel();
             Assert.False(proxy.IsProxyEnabled);
             Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"stop took {sw.Elapsed}");
-            await Task.WhenAny(inFlight, Task.Delay(2000));
+            using var completionDeadline = new CancellationTokenSource();
+            try
+            {
+                await Task.WhenAny(
+                    inFlight,
+                    Task.Delay(TimeSpan.FromSeconds(2), completionDeadline.Token));
+            }
+            finally
+            {
+                await completionDeadline.CancelAsync();
+            }
         }
 
         private static async Task<bool> WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout)
