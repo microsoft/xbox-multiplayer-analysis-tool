@@ -1,6 +1,7 @@
 <Window x:Class="XMAT.DesignSystem.DesignSystemWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
         Width="1180" Height="820" MinWidth="760" MinHeight="480"
         Title="XMAT design system" WindowStartupLocation="CenterScreen" UseLayoutRounding="True"
         Background="{DynamicResource SurfaceCanvasBrush}"
@@ -13,18 +14,26 @@
             <ColumnDefinition/>
         </Grid.ColumnDefinitions>
 
-        <!-- Pages, under the section each is in; selecting one shows it. -->
+        <!-- Pages, under the section each is in; selecting one shows it. Searching lists the pages that match, each with
+             its matching sections under it. -->
         <DockPanel Margin="16,20,8,16">
             <TextBlock x:Name="Heading" Text="Design system" DockPanel.Dock="Top" Margin="12,0,0,4" FontSize="18"
                        FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1"/>
             <TextBlock x:Name="Subheading" DockPanel.Dock="Top" Margin="12,0,0,6" TextWrapping="Wrap"
                        Text="The new look's foundations and components, read from the files XMAT uses. Hover, press and Tab through the components for the rest."
                        Foreground="{DynamicResource TextSecondaryBrush}"/>
+            <!-- The search lines up with the entries of the list, which sit inside the list's edge and its groups' indent. -->
+            <app:SearchBox x:Name="ComponentSearch" DockPanel.Dock="Top" Margin="6,10,1,0" Hint="Search components"
+                           ToolTip="Finds pages and sections by their names, styles and rules. Ctrl+F comes here; Esc clears it."
+                           AutomationProperties.Name="Search components"
+                           TextChanged="ComponentSearch_TextChanged" PreviewKeyDown="ComponentSearch_PreviewKeyDown"/>
+            <TextBlock x:Name="NoMatch" DockPanel.Dock="Top" Margin="13,14,0,0" Style="{DynamicResource NoticeTextStyle}"
+                       Foreground="{DynamicResource TextSecondaryBrush}" app:LiveRegion.Mode="Polite"/>
             <ListBox x:Name="PageList" ItemContainerStyle="{DynamicResource DesignSystemPageItemStyle}"
-                     AutomationProperties.Name="Pages"
+                     AutomationProperties.Name="Pages" IsSynchronizedWithCurrentItem="False"
                      Background="Transparent" BorderThickness="0" Padding="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     SelectionChanged="PageList_SelectionChanged">
+                     SelectionChanged="PageList_SelectionChanged" PreviewKeyDown="PageList_PreviewKeyDown">
                 <ListBox.Resources>
                     <!-- The new look's scroll viewers take the panel color; the list sits on the window's. -->
                     <Style TargetType="ScrollViewer">

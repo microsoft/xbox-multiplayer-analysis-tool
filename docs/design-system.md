@@ -248,9 +248,10 @@ files of their own as they are worked on.
 The design system app, `XMAT.DesignSystem`, has a page for each foundation and component, listed under their sections:
 **Foundations**, such as color, read from the files that define them, and **Components**, with what each is for, the
 files that define it, and examples of it in the states it can be set to, such as disabled, checked or running. Each
-page ends with its rules. Hover, press and keyboard focus show live. The settings above a page preview it in Light or
-Dark, in a Windows contrast theme, and with Comfort view on or off. The app runs from source and isn't part of XMAT's
-release build. Run it from the repository root:
+page ends with its rules. Hover, press and keyboard focus show live. The search above the list finds pages and their
+sections by name, style or rule; Ctrl+F moves to it. The settings above a page preview it in Light or Dark, in a
+Windows contrast theme, and with Comfort view on or off. The app runs from source and isn't part of XMAT's release
+build. Run it from the repository root:
 
 ```powershell
 dotnet run --project XMAT.DesignSystem -p:Platform=x64

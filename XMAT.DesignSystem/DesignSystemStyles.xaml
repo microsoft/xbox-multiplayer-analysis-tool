@@ -5,10 +5,11 @@
                     xmlns:ds="clr-namespace:XMAT.DesignSystem">
 
     <!-- A page in the list: a hover fill, and for the page shown, the panel color with an accent bar at its start, as
-         in What's new. -->
+         in What's new. A section that search lists under its page is indented. -->
     <Style x:Key="DesignSystemPageItemStyle" TargetType="ListBoxItem">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
@@ -18,10 +19,13 @@
                             <Border x:Name="Bar" Width="3" Margin="-12,0,0,0" HorizontalAlignment="Left"
                                     CornerRadius="1.5" Background="{DynamicResource AccentFillBrush}"
                                     Visibility="Collapsed"/>
-                            <ContentPresenter/>
+                            <ContentPresenter x:Name="Content"/>
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsSection}" Value="True">
+                            <Setter TargetName="Content" Property="Margin" Value="12,0,0,0"/>
+                        </DataTrigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                         </Trigger>
