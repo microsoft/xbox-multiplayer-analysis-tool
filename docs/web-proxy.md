@@ -363,7 +363,9 @@ XMAT's reach.
 
 The composer shows the request as fields, in Parsed mode, from which XMAT builds the
 request that it sends, as described below. To send exactly the bytes that you prepare
-instead, see [Raw mode (prepared bytes)](#raw-mode-prepared-bytes).
+instead, see [Raw mode (prepared bytes)](#raw-mode-prepared-bytes). With **New look** on,
+the notice at the top of the window says what matters most in one line, and **Details**
+beside it shows the whole notice.
 
 Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
 request bodies are preserved as editable Base64; text bodies use UTF-8.
