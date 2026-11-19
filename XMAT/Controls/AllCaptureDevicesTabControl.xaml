@@ -131,6 +131,9 @@
             <TabControl.ItemTemplate>
                 <DataTemplate>
                     <StackPanel Height="{local:Look New=Auto, Original=20}" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Visible">
+                        <!-- In the new look, a red dot leads the tab while its capture runs. -->
+                        <local:RecordingIndicator x:Name="CapturingDot" Style="{DynamicResource TabRecordingDotStyle}"
+                                                  IsActive="{Binding CaptureController.IsRunning, Mode=OneWay, FallbackValue=False}"/>
                         <TextBlock HorizontalAlignment="Left" VerticalAlignment="Center">
                             <TextBlock.Inlines>
                                 <Run Text="{Binding DeviceName, Mode=OneWay}"/>

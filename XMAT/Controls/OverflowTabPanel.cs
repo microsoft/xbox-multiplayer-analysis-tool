@@ -704,6 +704,31 @@ namespace XMAT
             }
         }
 
+        // The red dot that ELEMENT shows while its capture runs (TabRecordingDotStyle), or null when it shows none.
+        private static RecordingIndicator ShownRecordingDot(DependencyObject element)
+        {
+            if (element is UIElement { Visibility: not Visibility.Visible })
+            {
+                return null;
+            }
+
+            if (element is RecordingIndicator { IsActive: true } dot)
+            {
+                return dot;
+            }
+
+            int count = VisualTreeHelper.GetChildrenCount(element);
+            for (int i = 0; i < count; i++)
+            {
+                if (ShownRecordingDot(VisualTreeHelper.GetChild(element, i)) is { } found)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
         private void SelectTab(UIElement tab)
         {
             SetCurrentValue(IsCheckedProperty, false);
@@ -726,6 +751,14 @@ namespace XMAT
             {
                 // Underscores would otherwise mark access keys.
                 var item = new MenuItem { Header = TabLabel(tab).Replace("_", "__"), IsEnabled = tab.IsEnabled };
+                // A tab that shows a capture's red dot shows it here too, so the menu also shows which captures run.
+                if (ShownRecordingDot(tab) != null)
+                {
+                    var dot = new RecordingIndicator { IsActive = true, Margin = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Center };
+                    dot.SetResourceReference(StyleProperty, "TabRecordingDotStyle");
+                    item.Icon = dot;
+                }
+
                 item.Click += (sender, e) => SelectTab(tab);
                 menu.Items.Add(item);
             }

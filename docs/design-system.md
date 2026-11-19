@@ -154,7 +154,7 @@ What a state means to the person looking at it sets how XMAT shows it, the same 
 | --- | --- | --- |
 | Problem | Red, with a cross | 5xx, a device that can't be reached, a web proxy that couldn't stop cleanly |
 | Needs attention | Amber, with a warning sign | 4xx, a device whose proxy setting can't be read |
-| Live | The recording dot and Capturing | A running capture or trace |
+| Live | The recording dot and Capturing, and the dot in the capture's tab | A running capture or trace |
 | Working | What's happening, in words, without color | A trace connecting, starting, stopping, downloading or disconnecting, a response still streaming |
 | Routine | No color | 2xx, 3xx, a request without a status yet, an idle capture, a proxy set as expected |
 

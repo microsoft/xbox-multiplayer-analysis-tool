@@ -362,4 +362,47 @@
             </Trigger>
         </Style.Triggers>
     </Style>
+
+    <!-- The same dot leads a capture's tab while the capture runs, and its item in the tab row's More menu, so the tabs
+         show at a glance which captures are running. It fades as the indicator's does. It has no text: the tab's status
+         says Capturing to screen readers (TabControlEx). -->
+    <Style x:Key="TabRecordingDotStyle" TargetType="local:RecordingIndicator">
+        <Setter Property="Visibility" Value="Collapsed"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Margin" Value="{DynamicResource InlineGap}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:RecordingIndicator">
+                    <Ellipse x:Name="Dot" Width="8" Height="8" Fill="{DynamicResource RecordingIndicatorBrush}"/>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsPulsing" Value="True">
+                            <Trigger.EnterActions>
+                                <BeginStoryboard x:Name="Pulse">
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Dot" Storyboard.TargetProperty="Opacity"
+                                                         From="1" To="0.25" Duration="0:0:0.9"
+                                                         AutoReverse="True" RepeatBehavior="Forever">
+                                            <DoubleAnimation.EasingFunction>
+                                                <SineEase EasingMode="EaseInOut"/>
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <StopStoryboard BeginStoryboardName="Pulse"/>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsActive" Value="True">
+                <Setter Property="Visibility" Value="Visible"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -193,6 +194,12 @@ namespace XMAT
             internal TabItemExAutomationPeer(object item, TabControlExAutomationPeer tabs) : base(item, tabs)
             {
             }
+
+            // While its capture runs, a capture tab's status is Capturing, which its red dot shows in the new look.
+            protected override string GetItemStatusCore() =>
+                LookState.Current.IsNewLook && Item is ICaptureDeviceContext { CaptureController.IsRunning: true }
+                    ? RecordingIndicator.CapturingText
+                    : base.GetItemStatusCore();
 
             protected override List<AutomationPeer> GetChildrenCore()
             {

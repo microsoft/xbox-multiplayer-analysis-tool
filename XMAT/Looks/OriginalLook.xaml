@@ -973,6 +973,9 @@
         <Setter Property="IsTabStop" Value="False"/>
     </Style>
 
+    <!-- Nor a dot in the capture tabs. -->
+    <Style x:Key="TabRecordingDotStyle" TargetType="local:RecordingIndicator" BasedOn="{StaticResource RecordingIndicatorStyle}"/>
+
     <Style x:Key="FormatTabItemStyle" TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}"/>
 
     <Style x:Key="FormatTabControlStyle" TargetType="TabControl" BasedOn="{StaticResource {x:Type TabControl}}"/>

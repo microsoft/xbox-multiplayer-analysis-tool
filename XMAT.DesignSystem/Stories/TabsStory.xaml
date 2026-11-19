@@ -62,16 +62,34 @@
             </StackPanel>
         </DataTemplate>
 
+        <!-- The same for a capture that is running: the red dot leads the label. -->
+        <DataTemplate x:Key="RunningCaptureTabHeaderTemplate">
+            <StackPanel Orientation="Horizontal">
+                <local:RecordingIndicator Style="{DynamicResource TabRecordingDotStyle}" IsActive="True"/>
+                <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                <Button Style="{DynamicResource TabCloseButtonStyle}" Margin="10,-2,-2,-2" Content="&#xE894;"
+                        FontFamily="Segoe MDL2 Assets" AutomationProperties.Name="Close tab"/>
+            </StackPanel>
+        </DataTemplate>
+
     </ds:Story.Resources>
 
     <StackPanel>
-        <ds:StorySection Title="Capture tabs" StyleName="TabItem (default style), CaptureTabStripStyle, CaptureOverflowButtonStyle"
-                         Description="Open captures, in a recessed strip after New capture. The selected tab joins the capture's surface below; the others sit behind. Each has a close button.">
+        <ds:StorySection Title="Capture tabs" StyleName="TabItem (default style), CaptureTabStripStyle, CaptureOverflowButtonStyle, TabRecordingDotStyle"
+                         Description="Open captures, in a recessed strip after New capture. The selected tab joins the capture's surface below; the others sit behind. Each has a close button. While a capture runs, its tab starts with the red dot that fades in and out, so the tabs show which captures are running.">
             <ds:StoryExample Caption="All tabs fit">
                 <TabControl Template="{StaticResource CaptureTabsTemplate}" Width="640" Height="96"
                             SelectedIndex="1" Background="{DynamicResource SurfacePanelBrush}">
                     <TabItem Header="Local PC : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
                     <TabItem Header="Xbox : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Network trace" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                </TabControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Two captures running">
+                <TabControl Template="{StaticResource CaptureTabsTemplate}" Width="640" Height="96"
+                            SelectedIndex="1" Background="{DynamicResource SurfacePanelBrush}">
+                    <TabItem Header="Local PC : WebProxy" HeaderTemplate="{StaticResource RunningCaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Xbox : WebProxy" HeaderTemplate="{StaticResource RunningCaptureTabHeaderTemplate}"/>
                     <TabItem Header="Network trace" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
                 </TabControl>
             </ds:StoryExample>

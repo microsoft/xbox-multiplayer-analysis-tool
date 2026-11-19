@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using XMAT.Models;
@@ -268,6 +271,93 @@ namespace XMAT.Tests
                 }
                 finally
                 {
+                    strip.Close();
+                }
+            });
+        }
+
+        // While its capture runs, a capture tab starts with the red dot, which fades unless animations are off, and screen
+        // readers hear the tab's status as Capturing. A tab in More shows the dot in the menu too. The original look shows
+        // no dot.
+        [Fact]
+        public void ARunningCapture_LeadsItsTabWithTheRedDot_InTheRowAndInMore()
+        {
+            _application.Run(window =>
+            {
+                // The test application has neither the new look's styles nor its spacing, so the window takes the dot's
+                // style and the spacing it uses.
+                var dotStyle = AccessibilityTests.AppResources("TabRecordingDotStyle");
+                var spacing = new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Styles/Spacing.xaml")
+                };
+                var originalLook = new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/OriginalLook.xaml")
+                };
+                bool wasNewLook = LookState.Current.IsNewLook;
+                window.Resources.MergedDictionaries.Add(spacing);
+                window.Resources.MergedDictionaries.Add(dotStyle);
+                var strip = Show(window, 640);
+                var selected = (CaptureTab)strip.Model.CaptureDeviceContexts[0];
+                var hidden = (CaptureTab)strip.Model.CaptureDeviceContexts[^1];
+                try
+                {
+                    TabItem tab = strip.Container(0);
+                    Assert.True(OverflowTabPanel.GetIsOverflowItem(strip.Container(strip.Model.CaptureDeviceContexts.Count - 1)));
+                    RecordingIndicator Dot(TabItem item) => Descendants(item).OfType<RecordingIndicator>().Single();
+                    AutomationPeer Peer(ICaptureDeviceContext capture) =>
+                        UIElementAutomationPeer.CreatePeerForElement(strip.Control).GetChildren()
+                            .Single(peer => peer.GetName() == capture.ToString());
+                    double idleWidth = tab.ActualWidth;
+                    Assert.False(Dot(tab).IsVisible);
+                    Assert.True(string.IsNullOrEmpty(Peer(selected).GetItemStatus()));
+
+                    selected.Controller.IsRunning = true;
+                    WpfTestHost.Pump();
+                    RecordingIndicator dot = Dot(tab);
+                    TextBlock name = Descendants(tab).OfType<TextBlock>()
+                        .Single(block => block.Inlines.OfType<Run>().Any(run => run.Text == selected.DeviceName));
+                    Assert.True(dot.IsVisible);
+                    Assert.Equal(MotionSettings.Current.AnimationsEnabled, dot.IsPulsing);
+                    Assert.Equal(8, dot.ActualWidth, 1);
+                    Assert.Equal(8, name.TranslatePoint(new Point(), dot).X - dot.ActualWidth, 1);
+                    Assert.Equal(idleWidth + 16, tab.ActualWidth, 1);
+                    Assert.Equal(RecordingIndicator.CapturingText, Peer(selected).GetItemStatus());
+                    Assert.True(string.IsNullOrEmpty(Peer(hidden).GetItemStatus()));
+
+                    hidden.Controller.IsRunning = true;
+                    WpfTestHost.Pump();
+                    strip.More.IsChecked = true;
+                    WpfTestHost.Pump();
+                    List<MenuItem> listed = strip.More.Menu.Items.OfType<MenuItem>().ToList();
+                    MenuItem running = listed.Single(item => (string)item.Header == Label(strip, strip.Container(strip.Model.CaptureDeviceContexts.Count - 1)));
+                    Assert.True(running.Icon is RecordingIndicator { IsActive: true, Visibility: Visibility.Visible });
+                    Assert.All(listed.Where(item => item != running), item => Assert.Null(item.Icon));
+                    strip.More.Menu.SetCurrentValue(ContextMenu.IsOpenProperty, false);
+                    WpfTestHost.Pump();
+
+                    selected.Controller.IsRunning = false;
+                    WpfTestHost.Pump();
+                    Assert.False(Dot(tab).IsVisible);
+                    Assert.Equal(idleWidth, tab.ActualWidth, 1);
+                    Assert.True(string.IsNullOrEmpty(Peer(selected).GetItemStatus()));
+
+                    window.Resources.MergedDictionaries.Add(originalLook);
+                    LookState.Current.IsNewLook = false;
+                    selected.Controller.IsRunning = true;
+                    WpfTestHost.Pump();
+                    Assert.False(Dot(tab).IsVisible);
+                    Assert.True(string.IsNullOrEmpty(Peer(selected).GetItemStatus()));
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                    window.Resources.MergedDictionaries.Remove(originalLook);
+                    window.Resources.MergedDictionaries.Remove(dotStyle);
+                    window.Resources.MergedDictionaries.Remove(spacing);
+                    selected.Controller.IsRunning = false;
+                    hidden.Controller.IsRunning = false;
                     strip.Close();
                 }
             });
@@ -540,11 +630,51 @@ namespace XMAT.Tests
 
             public System.Drawing.Color DeviceColor { get; set; }
 
-            public IDeviceCaptureController CaptureController => null;
+            // A capture that starts and stops when a test says.
+            public FakeCaptureController Controller { get; } = new();
+
+            public IDeviceCaptureController CaptureController => Controller;
 
             public override string ToString() =>
                 $"{DeviceName}: {CaptureTypeString}" +
                 (IsReadOnly ? Localization.GetLocalizedString("CAPTURE_DEVICES_TAB_READONLY") : string.Empty);
+        }
+
+        private sealed class FakeCaptureController : IDeviceCaptureController
+        {
+            private bool _isRunning;
+
+            public event PropertyChangedEventHandler PropertyChanged;
+
+            public bool IsRunning
+            {
+                get => _isRunning;
+                set
+                {
+                    _isRunning = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRunning)));
+                }
+            }
+
+            public ICaptureMethod CaptureMethod => null;
+
+            public object Parameters => null;
+
+            public void Initialize()
+            {
+            }
+
+            public void LoadCaptures(IEnumerable<IDataset> tables)
+            {
+            }
+
+            public void ClearAllCaptures()
+            {
+            }
+
+            public Task<bool> CanCloseAsync() => Task.FromResult(true);
+
+            public Task CloseAsync() => Task.CompletedTask;
         }
     }
 }

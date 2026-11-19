@@ -129,7 +129,8 @@ listeners, but two global proxy endpoints do not duplicate the same device traff
 ![Headers, body, and timing for a selected connection](../ReadmeImages/8.png)
 
 **Auto Scroll**, beside the timeline modes, is enabled by default to follow incoming connections. Turn it off
-to keep a request in view. While a capture runs, a red dot and **Capturing** appear beside it. In a narrow traffic
+to keep a request in view. While a capture runs, a red dot and **Capturing** appear beside it, and the same dot
+leads the capture's tab, so the tabs show which captures are running. In a narrow traffic
 pane, both move to a line of their own under the modes. Status codes appear when responses arrive.
 
 ### Body previews
