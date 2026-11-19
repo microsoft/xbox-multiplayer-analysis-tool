@@ -24,13 +24,13 @@ namespace XMAT
         // the picture for screen readers, and a picture for each theme in Resources/WhatsNew.
         internal static readonly string[] PageIds =
         {
-            "new-look", "colors", "tabs", "resizing", "overview", "column-summaries", "volume", "comfort-view",
-            "context-menus", "accessibility",
+            "new-look", "colors", "tabs", "search", "filters", "status-rows", "overview", "column-summaries", "volume",
+            "edit-and-resend", "delete", "resizing", "comfort-view", "context-menus", "accessibility",
         };
 
         // What's new opens by itself the first time XMAT starts with an edition it hasn't opened. Raise the edition
         // when the pages change, so people see the new ones once.
-        internal const int Edition = 1;
+        internal const int Edition = 2;
 
         internal static readonly Uri ReleaseNotesUri = new("https://github.com/microsoft/xbox-multiplayer-analysis-tool/releases");
 

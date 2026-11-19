@@ -315,14 +315,15 @@ namespace XMAT.Tests
         }
 
         // DIALOG-1: in the new look, Delete asks a question that names the action and the count, then says what stays,
-        // and the red button says the action again. Cancel is the default and the cancel answer and has the focus; only
-        // the action's button answers yes.
+        // naming the sessions that filters hide only when there are some, and the red button says the action again.
+        // Cancel is the default and the cancel answer and has the focus; only the action's button answers yes.
         [Theory]
         [InlineData(false, 12, 30, 0, 3, 0, "Delete {0} sessions?", "Delete {0} sessions")]
         [InlineData(false, 1, 5, 1, 0, 1, "Delete {0} session?", "Delete {0} session")]
         [InlineData(false, 1234, 2, 1234, 0, 0, "Delete {0} sessions?", "Delete {0} sessions")]
         [InlineData(true, 4, 5, 2, 3, 0, "Delete the {0} sessions that aren't selected?", "Delete {0} sessions")]
         [InlineData(true, 1, 6, 4, 2, 0, "Delete the {0} session that isn't selected?", "Delete {0} session")]
+        [InlineData(true, 2, 3, 3, 0, 0, "Delete the {0} sessions that aren't selected?", "Delete {0} sessions")]
         public void NewLookConfirmation_NamesTheActionAndCount_WithARedButton_AndCancelsByDefault(
             bool unselected, int sessions, int kept, int selected, int hidden, int incomplete, string question, string action)
         {
@@ -336,9 +337,22 @@ namespace XMAT.Tests
                 Assert.True(panel.Heading == expectedQuestion, $"DIALOG-1: the question is \"{panel.Heading}\", not \"{expectedQuestion}\".");
                 Assert.True(panel.ConfirmText == expectedAction, $"DIALOG-1: the button says \"{panel.ConfirmText}\", not \"{expectedAction}\".");
                 Assert.Equal("This can't be undone.", panel.Message);
-                var details = new List<string>(unselected
-                    ? new[] { $"Selected sessions, which stay: {Count(selected)}", $"Sessions that filters hide, which stay: {Count(hidden)}" }
-                    : new[] { $"Sessions that stay: {Count(kept)}, including {Count(hidden)} that filters hide" });
+                var details = new List<string>();
+                if (unselected)
+                {
+                    details.Add($"Selected sessions, which stay: {Count(selected)}");
+                    if (hidden > 0)
+                    {
+                        details.Add($"Sessions that filters hide, which stay: {Count(hidden)}");
+                    }
+                }
+                else
+                {
+                    details.Add(hidden > 0
+                        ? $"Sessions that stay: {Count(kept)}, including {Count(hidden)} that filters hide"
+                        : $"Sessions that stay: {Count(kept)}");
+                }
+
                 if (incomplete > 0)
                 {
                     details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_INCOMPLETE", Count(incomplete)));

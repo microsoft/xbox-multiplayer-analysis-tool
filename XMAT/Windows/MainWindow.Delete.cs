@@ -39,11 +39,17 @@ namespace XMAT
             if (prompt.Unselected)
             {
                 details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_STAY_SELECTED", Count(prompt.Selected)));
-                details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_STAY_HIDDEN", Count(prompt.Hidden)));
+                if (prompt.Hidden > 0)
+                {
+                    details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_STAY_HIDDEN", Count(prompt.Hidden)));
+                }
             }
             else
             {
-                details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_STAY", Count(prompt.Kept), Count(prompt.Hidden)));
+                // The sessions that filters hide are named only when there are some.
+                details.Add(prompt.Hidden > 0
+                    ? Localization.GetLocalizedString("CAPTURE_DELETE_STAY", Count(prompt.Kept), Count(prompt.Hidden))
+                    : Localization.GetLocalizedString("CAPTURE_DELETE_STAY_NONE_HIDDEN", Count(prompt.Kept)));
             }
 
             if (prompt.Incomplete > 0)
