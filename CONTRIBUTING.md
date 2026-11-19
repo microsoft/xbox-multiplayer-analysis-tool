@@ -37,7 +37,7 @@ dotnet test XMAT.Tests\XMAT.Tests.csproj -p:Platform=x64 --filter FullyQualified
 
 The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is not a prerequisite.
 Do not commit keys/credentials or send development events to production. Registry schemas, collection policy,
-machine-ID/sandbox fields, retention/access rules, and backend enrichment still require review.
+sandbox metadata, SDK-added fields, retention/access rules, and backend enrichment still require review.
 Build/release approval never substitutes for the user's explicit consent.
 
 The GUI saves consent as HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool\TelemetryConsent`
@@ -45,13 +45,13 @@ The GUI saves consent as HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool
 when the value is absent; Options > Product Telemetry permits both changes later. Closing/cancelling does
 not accept. Failed registry writes stop collection for the session and show a warning.
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value suppresses telemetry, including local sampling.
-Ordinary runs read only consent, not machine-ID/sandbox metadata. No pre-consent events are retained.
+Ordinary runs read only consent, not sandbox metadata. No pre-consent events are retained.
 Opt-out stops new XMAT submissions; previously queued or dispatched SDK events may still be uploaded.
 
 The full schema and app sample-generation commands are in [TELEMETRY.md](TELEMETRY.md). Use
 `--telemetry-sample` with a new absolute output filename in a non-exporting build to inspect real
-application events without any collector key or network export. Local samples contain the permitted
-machine ID and sandbox; sanitize them before sharing.
+application events without any collector key or network export. Local samples can contain the host
+sandbox; sanitize it before sharing.
 
 Every new event must use fixed enums/explicit attribute mappings. Never add arbitrary strings, command options,
 exception objects, URLs, paths, traffic contents, or environment resource detectors. Preserve capture and

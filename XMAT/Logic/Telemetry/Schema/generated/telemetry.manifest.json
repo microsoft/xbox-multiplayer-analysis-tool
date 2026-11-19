@@ -150,11 +150,11 @@
   "sources": [
     {
       "path": "schemas/xmat/common/1.0.0.yaml",
-      "sha256": "059ea93acf4723284def3bc03c0ea37e84f3648a95bc4e05b482cf8a009fb752"
+      "sha256": "74efaa0e06259228e6c01b23e222536fc463b678b6a9208d73f58d4f8e1f7cad"
     },
     {
       "path": "schemas/xmat/events/AppClosed/1.0.0/compliance.yaml",
-      "sha256": "b49a5ea2d5ad071312edb89a9314407bca5fb5942714ff2ccc20e6df5ec59481"
+      "sha256": "9a8357484d2fe6406d798e85414b24302b4bbb9c91d3682e6f114b5f7dabb114"
     },
     {
       "path": "schemas/xmat/events/AppClosed/1.0.0/schema.yaml",
@@ -162,7 +162,7 @@
     },
     {
       "path": "schemas/xmat/events/AppLaunched/1.0.0/compliance.yaml",
-      "sha256": "ac6d207436a894062f220f2433c9bd0a65214f09e3aaa5cf9f573a9f522e6eb6"
+      "sha256": "88c4a2eba085b0368c9c3fd4fe1d7f457b4c172146e0dab1765d0b478b2b8290"
     },
     {
       "path": "schemas/xmat/events/AppLaunched/1.0.0/schema.yaml",
@@ -170,7 +170,7 @@
     },
     {
       "path": "schemas/xmat/events/AppReady/1.0.0/compliance.yaml",
-      "sha256": "0abcd81d76381d17ce50206679a751987d119066a3c17a4e8ba0277ea83ef5c2"
+      "sha256": "f827257a0cc9b7429eb3ecc6d2d58f93f2ce5a6c7bb6e184324837603838d851"
     },
     {
       "path": "schemas/xmat/events/AppReady/1.0.0/schema.yaml",
@@ -178,7 +178,7 @@
     },
     {
       "path": "schemas/xmat/events/CaptureFirstData/1.0.0/compliance.yaml",
-      "sha256": "39f24652093a70080eab4229de7c13b63435b9322d66d77d16063867b3e1225f"
+      "sha256": "468812dcdc15caa27a0389dfbba579824355b3a653aaed1fd674b66b261d018d"
     },
     {
       "path": "schemas/xmat/events/CaptureFirstData/1.0.0/schema.yaml",
@@ -186,7 +186,7 @@
     },
     {
       "path": "schemas/xmat/events/Counter/1.0.0/compliance.yaml",
-      "sha256": "a98eb68ac810352924d7a614d861f6fc48b2e5569f4eb028689af16de5544078"
+      "sha256": "41f05121074d66627c3345c7f1b5169d9086ffb158e1cb448ae8a5bccdbce6d5"
     },
     {
       "path": "schemas/xmat/events/Counter/1.0.0/schema.yaml",
@@ -194,7 +194,7 @@
     },
     {
       "path": "schemas/xmat/events/FeatureUsed/1.0.0/compliance.yaml",
-      "sha256": "a7089d1115020e39d84275dd615e8d72beb81774553b016c5d77b8e5f25bb846"
+      "sha256": "e1f340671b85ac8108109dd506950e66a76a2d9671c0d7687298f0bce0877a90"
     },
     {
       "path": "schemas/xmat/events/FeatureUsed/1.0.0/schema.yaml",
@@ -202,7 +202,7 @@
     },
     {
       "path": "schemas/xmat/events/OperationCompleted/1.0.0/compliance.yaml",
-      "sha256": "a5b2682699259922a16ee7f7bfe4265c23b64b13454a5496596a8a367da9a829"
+      "sha256": "b8fcb437287156894a132964a2e1d71f79ed31ee2da5c34187377185fe370c14"
     },
     {
       "path": "schemas/xmat/events/OperationCompleted/1.0.0/schema.yaml",
@@ -210,7 +210,7 @@
     },
     {
       "path": "schemas/xmat/events/OperationStage/1.0.0/compliance.yaml",
-      "sha256": "1acaaf932ec277e77c69c43b7a6e8a341c0313babfc4e13e9b5708c34c6624c1"
+      "sha256": "213be980a86065036aab25aeee50999f1520c3931d17b0ae6e3237868edb01a7"
     },
     {
       "path": "schemas/xmat/events/OperationStage/1.0.0/schema.yaml",
@@ -218,7 +218,7 @@
     },
     {
       "path": "schemas/xmat/events/OperationStarted/1.0.0/compliance.yaml",
-      "sha256": "163cdbd2cab1d131d97c489196be293295b8243e0edf2d4242914817b9bf54dd"
+      "sha256": "486c84ef96356a1a2496b9a2c15eaef0be71ea132b602e8bb6b936f28b2413bd"
     },
     {
       "path": "schemas/xmat/events/OperationStarted/1.0.0/schema.yaml",
@@ -226,7 +226,7 @@
     },
     {
       "path": "schemas/xmat/events/SessionSummary/1.0.0/compliance.yaml",
-      "sha256": "6ce17c3794ad695430443369f67f630527092e61f9c5fca09920aaea59b7aa92"
+      "sha256": "81ccb78740d4bb949e38be363dabed9a23f1698ed1da4dfda5c69b3306b82d93"
     },
     {
       "path": "schemas/xmat/events/SessionSummary/1.0.0/schema.yaml",
@@ -234,7 +234,7 @@
     },
     {
       "path": "schemas/xmat/events/UnhandledFailure/1.0.0/compliance.yaml",
-      "sha256": "4a653020403b03601a906b72f3c65ddf153f8503ba6f8a0c3cff9c2efa151add"
+      "sha256": "9bf17de02d66d00cf93e4178fc57c6bd2083a48912e616cfecb9fcf026dadf96"
     },
     {
       "path": "schemas/xmat/events/UnhandledFailure/1.0.0/schema.yaml",
@@ -316,7 +316,7 @@
   "files": [
     {
       "path": "CommonFields.cs",
-      "sha256": "7fcc3397a0d006bf6c6f7a5587d0a8d25ea9cb1263cab732b528b62d53b50e49"
+      "sha256": "9626a9a600285383ec725eea705b5f7400baac10e0c130e1223e4bc39787cd54"
     },
     {
       "path": "Events/AppClosed.cs",
@@ -368,7 +368,7 @@
     },
     {
       "path": "TelemetryEvent.cs",
-      "sha256": "b96bbc6e0253cbca59caa218d9f5bbbeca58730734763f5b9e42a3b843b1cb13"
+      "sha256": "bcabe1ec659e7586fa688350a6e59922c661c2112fa3b91fef92f2446ce53837"
     },
     {
       "path": "TelemetryJson.cs",

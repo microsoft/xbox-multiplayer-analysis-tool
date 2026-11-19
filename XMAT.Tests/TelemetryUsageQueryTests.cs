@@ -9,6 +9,16 @@ namespace XMAT.Tests
     public class TelemetryUsageQueryTests
     {
         [Fact]
+        public void UsageQueriesCountSessionsWithoutPersistentMachineIdentifiers()
+        {
+            var query = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TelemetryUsage.kql"));
+            Assert.Contains("LaunchSessions = dcount(SessionId)", query);
+            Assert.Contains("MonthlyLaunchSessions = dcount(SessionId)", query);
+            Assert.DoesNotContain("DeviceId", query);
+            Assert.DoesNotContain("MachineId", query);
+        }
+
+        [Fact]
         public void AdoptionUsesLaunchCohortsRatherThanTheDayOfFeatureUse()
         {
             var query = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TelemetryUsage.kql"));

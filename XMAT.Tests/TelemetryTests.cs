@@ -222,7 +222,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void SandboxIsBoundedAndNoFallbackMachineIdentityIsInvented()
+        public void SandboxIsBounded()
         {
             List<string> diagnostics = [];
             Assert.Equal("RETAIL", TelemetryEnvironmentProvider.NormalizeSandbox(null, diagnostics.Add));
@@ -230,6 +230,15 @@ namespace XMAT.Tests
             Assert.Equal("Unknown", TelemetryEnvironmentProvider.NormalizeSandbox(new string('x', 129), diagnostics.Add));
             Assert.Equal("Unknown", TelemetryEnvironmentProvider.NormalizeSandbox("bad\nvalue", diagnostics.Add));
             Assert.Equal(2, diagnostics.Count);
+        }
+
+        [Fact]
+        public void EnvironmentDoesNotIncludeMachineIdentity()
+        {
+            var fields = TelemetryEnvironmentProvider.Read(TelemetryBuildChannel.Local, _ => { });
+            Assert.DoesNotContain(fields, field => field.Key is "ext.device.localId" or "MachineIdAvailable");
+            Assert.Contains(fields, field => field.Key == "ext.app.id");
+            Assert.Contains(fields, field => field.Key == "BuildChannel");
         }
 
         private sealed class RecordingReporter : ITelemetryReporter

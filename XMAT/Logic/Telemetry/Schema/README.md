@@ -1,6 +1,6 @@
 # XMAT C# codegen handoff
 
-These generated C# contracts come from `xtech.data.events.schemaregistry` commit `eb30ed93a844ab8c4e0c214a86472f364380425d`, based on `origin/main` commit `a29c5d4e7af10042e48755fdc36dc389aecf6c15`. The registry project is `xmat`; all 11 event versions are pinned in `codegen.yaml`.
+These draft C# contracts come from `xtech.data.events.schemaregistry` commit `5a513bf78c8241934c55227103c3e4a542cea8dd`, not yet merged to `main`. The registry project is `xmat`; `codegen.yaml` records the commit and pins all 11 event versions. Regenerate after the schema changes are merged.
 
 The generated namespace and event names use `Microsoft.Gaming.Tooling.XMAT`. Each event has no event-specific fields and uses the project's common fields. `CommonFields.cs` defines the wire properties; `Events/` contains one generated event class per event; `Types/` contains the fixed enum types; the output also includes the JSON runtime support and `telemetry.manifest.json`.
 

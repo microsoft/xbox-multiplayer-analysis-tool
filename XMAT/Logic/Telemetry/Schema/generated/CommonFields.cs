@@ -141,28 +141,10 @@ public sealed class CommonFields
     [JsonConverter(typeof(BuildChannelJsonConverter))]
     public required BuildChannel BuildChannel { get; init; }
 
-    /// <summary>
-    /// Proposed mapping for the optional persistent pseudonymous Windows SQM machine GUID. Not an account identifier or
-    /// anonymous identifier.
-    /// </summary>
-    /// <remarks>
-    /// Matches <c>^s:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$</c>. Checked by the registry
-    /// tooling, not by this code.
-    /// </remarks>
-    [JsonPropertyName("DeviceLocalId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonConverter(typeof(TelemetryStringConverter))]
-    public string? DeviceLocalId { get; init; }
-
     /// <summary>Proposed mapping for the host Windows Xbox sandbox; not the sandbox of a captured console.</summary>
     /// <remarks>At most 128 characters. Checked by the registry tooling, not by this code.</remarks>
     [JsonPropertyName("XboxSandbox")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonConverter(typeof(TelemetryStringConverter))]
     public string? XboxSandbox { get; init; }
-
-    /// <summary>Whether the optional Windows SQM machine identifier was included.</summary>
-    [JsonPropertyName("MachineIdAvailable")]
-    [JsonConverter(typeof(TelemetryBooleanConverter))]
-    public required bool MachineIdAvailable { get; init; }
 }

@@ -273,10 +273,10 @@ may flush queued events and emit health events. Cancellation and purge are not p
 `TelemetryTraffic` exclusion is acquired before SDK activation and retained through teardown,
 including Required SDK health events and WinINet/system-proxy traffic.
 
-In this implementation, device metadata is read only for an explicitly requested local sample run.
-The host machine ID and sandbox are
-explicit permitted identifiers; no fallback machine/installation ID is generated. Field names and event names
-are case-sensitive. Default builds restore no internal telemetry packages.
+In this implementation, environment metadata is read only for an explicitly requested local sample run.
+The host sandbox can be included; XMAT does not read or generate a persistent machine/installation ID.
+SDK-added metadata requires separate review. Field and event names are case-sensitive. Default builds
+restore no internal telemetry packages.
 
 Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
 interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.

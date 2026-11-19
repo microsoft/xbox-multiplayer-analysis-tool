@@ -38,9 +38,7 @@ namespace XMAT.Telemetry
                 AppVersion = (string)_environment["ext.app.ver"],
                 OsVersion = (string)_environment["ext.os.ver"],
                 BuildChannel = Enum.Parse<Schema.BuildChannel>((string)_environment["BuildChannel"]),
-                DeviceLocalId = _environment.TryGetValue("ext.device.localId", out var id) ? (string)id : null,
-                XboxSandbox = _environment.TryGetValue("ext.xbl.sbx", out var sandbox) ? (string)sandbox : null,
-                MachineIdAvailable = (bool)_environment["MachineIdAvailable"]
+                XboxSandbox = _environment.TryGetValue("ext.xbl.sbx", out var sandbox) ? (string)sandbox : null
             };
             return item.Kind switch
             {

@@ -57,9 +57,7 @@ namespace XMAT.Tests
                 new("ext.app.ver", "0.2"),
                 new("ext.os.ver", "10.0.19045.0"),
                 new("BuildChannel", "Test"),
-                new("ext.device.localId", "s:00000000-0000-0000-0000-000000000001"),
-                new("ext.xbl.sbx", "RETAIL"),
-                new("MachineIdAvailable", true)
+                new("ext.xbl.sbx", "RETAIL")
             ]);
             foreach (var kind in Enum.GetValues<TelemetryEventKind>())
             {
@@ -79,8 +77,9 @@ namespace XMAT.Tests
                 Assert.Equal("User", root.GetProperty("CaptureOrigin").GetString());
                 Assert.Equal("0.2", root.GetProperty("AppVersion").GetString());
                 Assert.Equal("Test", root.GetProperty("BuildChannel").GetString());
-                Assert.Equal("s:00000000-0000-0000-0000-000000000001", root.GetProperty("DeviceLocalId").GetString());
-                Assert.True(root.GetProperty("MachineIdAvailable").GetBoolean());
+                Assert.Equal("RETAIL", root.GetProperty("XboxSandbox").GetString());
+                Assert.False(root.TryGetProperty("DeviceLocalId", out _));
+                Assert.False(root.TryGetProperty("MachineIdAvailable", out _));
                 Assert.Equal(42, root.GetProperty("DurationMs").GetInt64());
                 Assert.Equal(3, root.GetProperty("Count").GetInt64());
             }
@@ -93,11 +92,11 @@ namespace XMAT.Tests
             [
                 new("ext.app.ver", "0.2"),
                 new("ext.os.ver", "10.0.19045.0"),
-                new("BuildChannel", "Test"),
-                new("MachineIdAvailable", false)
+                new("BuildChannel", "Test")
             ]);
             using var document = JsonDocument.Parse(payload.Serialize(new(TelemetryEventKind.AppReady), Guid.NewGuid()));
             Assert.False(document.RootElement.TryGetProperty("DeviceLocalId", out _));
+            Assert.False(document.RootElement.TryGetProperty("MachineIdAvailable", out _));
             Assert.False(document.RootElement.TryGetProperty("XboxSandbox", out _));
             Assert.False(document.RootElement.TryGetProperty("OperationId", out _));
             Assert.False(document.RootElement.TryGetProperty("CaptureMethod", out _));

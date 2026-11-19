@@ -52,9 +52,7 @@ namespace XMAT.Tests
                     [
                         new("ext.app.id", "XboxMultiplayerAnalysisTool"),
                         new("BuildChannel", channel.ToString()),
-                        new("ext.device.localId", "s:11111111-1111-1111-1111-111111111111"),
-                        new("ext.xbl.sbx", "SAMPLE_SANDBOX"),
-                        new("MachineIdAvailable", true)
+                        new("ext.xbl.sbx", "SAMPLE_SANDBOX")
                     ];
                 }, diagnostics.Add))
             {
@@ -80,7 +78,9 @@ namespace XMAT.Tests
                 Assert.Equal(TimeSpan.Zero, timestamp.Offset);
                 var resources = root.GetProperty("resources");
                 Assert.Equal("Local", resources.GetProperty("BuildChannel").GetString());
-                Assert.True(resources.GetProperty("MachineIdAvailable").GetBoolean());
+                Assert.Equal("SAMPLE_SANDBOX", resources.GetProperty("ext.xbl.sbx").GetString());
+                Assert.False(resources.TryGetProperty("ext.device.localId", out _));
+                Assert.False(resources.TryGetProperty("MachineIdAvailable", out _));
                 var data = root.GetProperty("data");
                 Assert.Equal(1, data.GetProperty("SchemaVersion").GetInt32());
                 Assert.Equal(JsonValueKind.Number, data.GetProperty("DurationMs").ValueKind);

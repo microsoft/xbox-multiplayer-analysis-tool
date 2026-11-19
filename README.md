@@ -24,9 +24,8 @@ previously queued SDK events may still be uploaded.
 
 The local event contract includes application/OS version, build audience, random per-session and per-operation
 IDs, feature categories, operation outcomes, sanitized error categories, durations, and aggregate/count-size
-buckets. The **Windows machine ID** and **host Windows Xbox sandbox** are included when available.
-The machine ID is persistent and pseudonymous, not anonymous; it identifies a machine rather than a person or
-installation. The host sandbox is not necessarily the captured console's sandbox.
+buckets. The **host Windows Xbox sandbox** is included when available; it is not necessarily the captured
+console's sandbox. XMAT does not collect the Windows SQM machine ID.
 
 Telemetry does **not** upload captured traffic, headers, bodies, packets, WebSocket messages, URLs, hostnames,
 console names, addresses, account information, scripts, file paths, exception messages, stack traces, or debug

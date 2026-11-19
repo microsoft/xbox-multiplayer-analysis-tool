@@ -71,9 +71,7 @@ internal sealed class TelemetryEventJsonConverterFactory : JsonConverterFactory
         "OsName",
         "OsVersion",
         "BuildChannel",
-        "DeviceLocalId",
         "XboxSandbox",
-        "MachineIdAvailable",
     };
 
     public override bool CanConvert(Type typeToConvert)

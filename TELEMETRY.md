@@ -30,7 +30,7 @@ promised. A later opt-in starts a fresh service session and cannot resume old op
 is created even after opt-in and enabled builds fail explicitly.
 
 Local file sampling is a separately requested, non-networked development action, not permission to
-upload. Its explicit command may read machine-ID/sandbox metadata and record local events without
+upload. Its explicit command may read sandbox metadata and record local events without
 upload consent. GUI consent changes do not stop that requested local file recording.
 
 ## SDK migration status
@@ -58,9 +58,10 @@ exclusion is retained rather than risking capture of an SDK that may still be ac
 ## Registry authoring and codegen handoff
 
 The draft `xmat` registry inputs at `xtech.data.events.schemaregistry` commit
-`eb30ed93a844ab8c4e0c214a86472f364380425d` generate the checked-in C# contracts under
+`5a513bf78c8241934c55227103c3e4a542cea8dd` generate the checked-in C# contracts under
 `XMAT\Logic\Telemetry\Schema\generated`; `Schema\codegen.yaml` pins their inputs and the generated
-manifest records source hashes. The schemas and generated contracts are draft and do not imply approval.
+manifest records source hashes. That commit is not yet merged to `main`; regenerate after merge. The
+schemas and generated contracts are draft and do not imply approval.
 GDKMiddleware's `SdkComponentInitialized` is not an XMAT schema and does not replace these 11 events.
 
 The event table below maps all 11 existing suffixes one-for-one for proposed preservation under
@@ -74,7 +75,7 @@ schemas, compliance files and synthetic examples. The field mapping is:
 | Feature/operation/outcome/error/stage/entry/interaction/bucket/context values | Fixed string enums with the exact spellings below; do not broaden to arbitrary payload text |
 | `DurationMs`, `Count` | Nonnegative 64-bit measurements; bucket boundaries below remain unchanged |
 | Capture context | Optional `CaptureMethod`, `DeviceType`, `CaptureOrigin`; no device names or addresses |
-| App/OS/build/machine-ID/sandbox fields | Separate reviewed common-field mapping; no assumption that SDK defaults match the former `ext.*` layout |
+| App/OS/build/sandbox fields | Separate reviewed common-field mapping; no assumption that SDK defaults match the former `ext.*` layout |
 
 Regenerate using `npm run codegen -- --config <absolute-path-to-XMAT-Schema\codegen.yaml>` from
 the registry checkout at the pinned input commit; add `--check` for drift validation.
@@ -137,8 +138,7 @@ notifications for the same continuously visible mode do not inflate those usage-
 
 Common fields are explicit metadata in the application. Local samples preserve resource keys literally
 in their `resources` object. The SDK adapter maps these to the draft generated `CommonFields` properties:
-`AppId`, `AppVersion`, `OsName`, `OsVersion`, `BuildChannel`, `DeviceLocalId`, `XboxSandbox`, and
-`MachineIdAvailable`.
+`AppId`, `AppVersion`, `OsName`, `OsVersion`, `BuildChannel`, and `XboxSandbox`.
 
 | Resource key | Type | Availability and meaning |
 |---|---|---|
@@ -147,14 +147,12 @@ in their `resources` object. The SDK adapter maps these to the draft generated `
 | `ext.os.name` | string | Fixed `Windows` |
 | `ext.os.ver` | string | `Environment.OSVersion.Version` string |
 | `BuildChannel` | string enum | `Local`, `Public`, `Internal`, `Test`; local samples always use `Local` |
-| `ext.device.localId` | optional string | Host Windows `SQMClient\MachineId`, parsed as a GUID and formatted `s:<GUID>`; omitted when unavailable |
 | `ext.xbl.sbx` | optional string | Host Windows XboxLive sandbox; `RETAIL` when absent/empty, `Unknown` for an invalid value; may be omitted after a registry-read failure |
-| `MachineIdAvailable` | boolean | Whether `ext.device.localId` was included |
 
-The machine ID is **persistent pseudonymous data**, not anonymous data and not a reliable user or
-installation count. No fallback identifier is invented. The sandbox is the host Windows sandbox,
-not necessarily the sandbox of a captured Xbox console. Sandbox values are limited to 128 characters
-and cannot contain CR, LF, or NUL.
+XMAT does not read the Windows SQM machine ID or supply a replacement persistent machine identifier.
+SDK-added identifiers still require review. The sandbox is the host Windows sandbox, not necessarily
+the sandbox of a captured Xbox console. Sandbox values are limited to 128 characters and cannot contain
+CR, LF, or NUL.
 
 ## Event attributes
 
@@ -326,8 +324,8 @@ XMAT's `data.SchemaVersion = 1`.
 | `data.severityNumber` | Exporter field, currently `9` |
 | `ext` | Nested common extensions such as `app`, `os`, `device`, and `xbl` |
 
-For example, the literal resource key `ext.device.localId` becomes `ext.device.localId` through
-nested JSON objects, and `BuildChannel`/`MachineIdAvailable` become `data` fields. Ambient activity,
+For example, the literal resource key `ext.xbl.sbx` becomes nested JSON objects, and `BuildChannel`
+becomes a `data` field. Ambient activity,
 baggage, scopes, exception content, and default environment/resource detectors are not forwarded.
 XMAT uses explicit `data.SessionId`/`data.OperationId`, not `ext.dt.traceId`/`spanId`, for correlation.
 
@@ -355,13 +353,11 @@ This is an illustrative wire event with **synthetic identifiers**:
     "Stage": "None",
     "EntryPoint": "None",
     "Interaction": "None",
-    "BuildChannel": "Test",
-    "MachineIdAvailable": true
+    "BuildChannel": "Test"
   },
   "ext": {
     "app": { "id": "XboxMultiplayerAnalysisTool", "ver": "0.3.0.0" },
     "os": { "name": "Windows", "ver": "10.0.26100.0" },
-    "device": { "localId": "s:11111111-1111-1111-1111-111111111111" },
     "xbl": { "sbx": "SAMPLE_SANDBOX" }
   }
 }
@@ -381,13 +377,14 @@ mapping below is a provisional query contract, not a verified SDK ingestion layo
 |---|---|---|
 | `Timestamp` | `time` | `time` |
 | `EventName` | Suffix of `name` after `Microsoft.Gaming.Tooling.XMAT.` | Same |
-| `DeviceId` | `ext.device.localId` | `resources["ext.device.localId"]` |
 | `AppVersion` | `ext.app.ver` | `resources["ext.app.ver"]` |
 | `BuildChannel` | `data.BuildChannel` | `resources.BuildChannel` |
 | `SessionId`, `Feature`, `Operation`, `Outcome`, `DurationMs`, `Count`, `Stage`, `CaptureOrigin` | Corresponding `data` field | Same |
 
 The templates intentionally filter to `BuildChannel = Public`; local sample data will not appear in those
 results unless you deliberately adapt a query for local testing. Never relabel local samples as production.
+Launch and rolling-activity counts use session IDs, not devices or people. Returning-machine and
+machine-retention metrics are unavailable without a persistent identifier.
 Daily adoption joins feature events to their session's observed launch, so a session spanning midnight
 stays in its launch-day cohort. Analysis funnels distinguish live (`User`/`Restored`) from `Imported`
 origins; a mixed session is credited to both only if it analyzed both origins. These are session-level
@@ -482,9 +479,7 @@ local envelope:
     "ext.os.name": "Windows",
     "ext.os.ver": "10.0.26100.0",
     "BuildChannel": "Local",
-    "ext.device.localId": "s:11111111-1111-1111-1111-111111111111",
-    "ext.xbl.sbx": "SAMPLE_SANDBOX",
-    "MachineIdAvailable": true
+    "ext.xbl.sbx": "SAMPLE_SANDBOX"
   },
   "data": {
     "SchemaVersion": 1,
@@ -524,9 +519,9 @@ be local-only and must cover SDK-added fields as well as XMAT's explicit attribu
 
 ### Sample safety, delivery, and troubleshooting
 
-- Local samples include your real permitted machine ID and host sandbox when available. Before sharing
-  the file, replace or remove those values if the recipient does not need them. The examples above use
-  synthetic identifiers; do not commit real sample files.
+- Local samples include the host sandbox when available. Before sharing the file, replace or remove it
+  if the recipient does not need it. The examples above use synthetic session and operation identifiers;
+  do not commit real sample files.
 - Captured traffic, URLs, addresses, account information, scripts, paths, exception messages, and stack
   traces are excluded from telemetry. Captures and debug/support logs are separate and may contain them.
 - Sampling uses a bounded 256-event memory queue and a background file writer. Lines are flushed as

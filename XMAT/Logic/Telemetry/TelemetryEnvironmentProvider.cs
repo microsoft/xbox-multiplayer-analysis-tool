@@ -28,11 +28,6 @@ namespace XMAT.Telemetry
             ];
             try
             {
-                using var machineKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\SQMClient");
-                if (machineKey?.GetValue("MachineId") is string machineId && Guid.TryParse(machineId, out var id))
-                {
-                    fields.Add(new("ext.device.localId", $"s:{id:D}"));
-                }
                 using var sandboxKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\XboxLive");
                 fields.Add(new("ext.xbl.sbx", NormalizeSandbox(sandboxKey?.GetValue("Sandbox") as string, diagnose)));
             }
@@ -40,7 +35,6 @@ namespace XMAT.Telemetry
             {
                 diagnose("EnvironmentReadFailed");
             }
-            fields.Add(new("MachineIdAvailable", fields.Exists(x => x.Key == "ext.device.localId")));
             return fields;
         }
 
