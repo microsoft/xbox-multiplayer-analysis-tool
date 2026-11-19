@@ -160,6 +160,7 @@ namespace XMAT.WebServiceCapture
             CancelPortButton.Content = Localization.GetLocalizedString("PROXY_PORT_CANCEL_APPLY");
             CheckButton.Content = Localization.GetLocalizedString("WEBCAP_CHECK");
             AnalyzeButton.Content = Localization.GetLocalizedString("WEBCAP_ANALYZE");
+            ShapingButton.Content = Localization.GetLocalizedString("SHAPING_TITLE");
             AnalyzeButton.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearButton.Content = Localization.GetLocalizedString("WEBCAP_CLEAR");
             AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
@@ -1190,6 +1191,43 @@ namespace XMAT.WebServiceCapture
                 return;
             }
             _methodValues.EnsureValue(item.Method);
+        }
+
+        private void NetworkShaping_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = TryGetCaptureContext(DataContext, out var context, out var controller) &&
+                !context.IsReadOnly && !controller.IsTransitioning && CaptureAppModel.AppModel.CanModifyCaptureData;
+        }
+
+        private async void NetworkShaping_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!TryGetCaptureContext(DataContext, out var context, out var controller) || context.IsReadOnly)
+            {
+                return;
+            }
+            var dialog = new NetworkShapingWindow(controller.Shaping.Current, controller.BodyTimeoutSeconds, controller.IsRunning)
+            {
+                Owner = Window.GetWindow(this),
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+            var result = await controller.ConfigureShapingAsync(dialog.SelectedProfile, dialog.BodyTimeoutSeconds);
+            if (!result.Succeeded || result.Diagnostics.Count != 0)
+            {
+                MessageBox.Show(
+                    result.Succeeded
+                        ? string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic =>
+                            Localization.GetLocalizedString(diagnostic.Code == "capture.shaping.notification-failed"
+                                ? "SHAPING_NOTIFICATION_WARNING" : "SHAPING_TIMEOUT_WARNING")))
+                        : Localization.GetLocalizedString(result.Diagnostics.Any(diagnostic =>
+                            diagnostic.Code == SetNetworkShapingOperation.HistoryFullCode)
+                                ? "SHAPING_HISTORY_FULL" : "SHAPING_INVALID"),
+                    Localization.GetLocalizedString("SHAPING_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
 
         private async void ChangePort_Executed(object sender, ExecutedRoutedEventArgs e)

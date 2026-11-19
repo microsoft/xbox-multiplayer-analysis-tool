@@ -13,6 +13,7 @@ using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Replay;
 
@@ -73,6 +74,20 @@ namespace XMAT.Cli
                 if (report.Export != null)
                 {
                     WriteExport(writer, report.Export);
+                }
+                if (report.Capture != null)
+                {
+                    writer.WriteStartObject("capture");
+                    writer.WriteNumber("records", report.Capture.Records);
+                    writer.WriteNumber("bytes", report.Capture.Publication.Bytes);
+                    writer.WriteString("sha256", report.Capture.Publication.Sha256);
+                    writer.WriteBoolean("protected", report.Capture.Publication.Protected);
+                    if (report.Capture.Shaping != null)
+                    {
+                        writer.WritePropertyName("networkShaping");
+                        writer.WriteRawValue(NetworkShapingMetadata.Serialize(report.Capture.Shaping));
+                    }
+                    writer.WriteEndObject();
                 }
 
                 if (report.Replay != null)
@@ -621,6 +636,11 @@ namespace XMAT.Cli
             writer.WriteString("sha256", analysis.InputSha256);
             writer.WriteEndObject();
             WriteLimits(writer, analysis.Limits);
+            if (analysis.Shaping != null)
+            {
+                writer.WritePropertyName("networkShaping");
+                writer.WriteRawValue(NetworkShapingMetadata.Serialize(analysis.Shaping));
+            }
 
             if (analysis.StoredText != null)
             {

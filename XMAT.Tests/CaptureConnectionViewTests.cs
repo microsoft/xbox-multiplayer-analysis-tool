@@ -91,6 +91,25 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void ShapingStatusIsNotCoveredByTheDetailsTabs()
+        {
+            _application.Run(window =>
+            {
+                var view = View(Controller());
+                WpfTestHost.Show(window, view);
+                var status = (TextBlock)view.FindName("ShapingStatus");
+                Assert.False(string.IsNullOrEmpty(status.Text));
+                System.Windows.Point start = status.TranslatePoint(new System.Windows.Point(2, status.ActualHeight / 2), view);
+
+                var hit = System.Windows.Media.VisualTreeHelper.HitTest(view, start)?.VisualHit;
+
+                Assert.Same(status, hit);
+                window.Content = null;
+                WpfTestHost.Pump();
+            });
+        }
+
+        [Fact]
         public void ReloadingView_KeepsOneSubscriptionAndDetachesOnUnload()
         {
             _application.Run(window =>

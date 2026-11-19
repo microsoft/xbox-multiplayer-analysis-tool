@@ -47,6 +47,9 @@ xmat curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--in
           [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
           [--unconditional] [--http-version auto|1.1] [--allow-origin-change] [--accept-stored-text]
           [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
+xmat capture --port N --duration-seconds N --out FILE.xmatcap [--listen IP] [--root-pfx FILE]
+             [--shape off|min|avg|exc|broken|disconnect] [--down-kbps N] [--up-kbps N]
+             [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -56,6 +59,78 @@ After parsing `replay`, `compose`, `curl` or `save-request`, xmat first checks t
 or volume target, without reading input or touching the file system. It then reads, freezes and admits the input. Only
 an admitted run tries to reserve private output; that later step discovers a missing parent, an existing output or a
 reservation-time storage failure.
+
+### Foreground proxy capture
+
+`capture` listens on `127.0.0.1` by default. Choose a specific PC address with `--listen IP` for a development kit
+or another PC; `0.0.0.0` accepts connections on all IPv4 interfaces. Configure the client to use that explicit proxy
+separately. This command never changes system proxy settings, certificates, firewall rules or console settings,
+and does not require an administrator or a packet driver. Routing a consumer retail console through it is not provided.
+
+The required duration is 1-86400 seconds. At normal expiry the listener stops and a new private `.xmatcap` file
+is published atomically; an existing file is never overwritten. Its parent directory must already exist and support
+Windows permissions. Readiness is printed to stderr; stdout remains one final `xmat-cli/1` JSON document, with a
+`capture` object containing record count, file size, SHA-256, protection status and optional `networkShaping` history.
+**Ctrl+C cancels and publishes nothing**, matching analyze/export. Interrupted or failed runs remove their private
+staging files; cleanup failures return exit 7. Captures contain raw traffic and should be treated as sensitive.
+New captures use the literal-text format, so replay and sanitized export do not require legacy-text consent.
+The recorder stops with a failure rather than publishing an incomplete result if it exceeds 100000 sessions,
+64 MiB in one projected update, or 512 MiB of cumulative projected data. These are capture limits, not analysis limits.
+
+Responses use the proxy's default streaming policy, independent of GUI preferences: media and event streams flow
+immediately, other responses stream when they exceed the **32 MiB** capture prefix limit. Forwarding is not limited
+to that prefix. Saved captures retain truncation markers, response trailers and known live-header provenance;
+Unsanitized SAZ exports preserve them alongside shaping history. Normal duration expiry records the received prefix and end
+timestamp of an open stream before publishing. Streaming preference controls are not CLI options yet.
+
+Without `--root-pfx`, HTTPS/WSS CONNECT tunnels are forwarded and shaped but not decrypted; only their CONNECT
+records are saved. Inspection requires an explicit **passwordless RSA or ECDSA CA PFX containing its private key**, whose public
+root the client already trusts. Protect this input file with private Windows permissions. The certificate is loaded
+ephemerally; xmat never imports it into a store. Windows TLS requires temporary private-key containers for generated
+host certificates: these are deleted on normal certificate disposal, but forced termination may leave orphaned
+key files. This is separate from trust-store installation. There is no implicit reuse of the GUI's certificate or preferences.
+Scripts, automatic device configuration, process attribution, WebSocket payload archiving and interactive stop/save
+are not part of this foreground command.
+
+For example, `xmat capture --port 8888 --duration-seconds 120 --out shaped.xmatcap --shape min
+--body-timeout-seconds 1800` applies the min preset while preserving a bounded total upload deadline.
+See [network shaping](web-proxy.md#network-shaping) for rates, RTT semantics and scope.
+`--shape-profile FILE` accepts the following JSON instead of the shaping flags:
+
+```json
+{
+  "version": 1,
+  "initial": { "mode": "shape", "downKbps": 1000, "upKbps": 700, "latencyMs": 50, "jitterMs": 0 },
+  "bodyTimeoutSeconds": 120,
+  "schedule": [
+    { "afterSeconds": 30, "profile": { "mode": "broken" } },
+    { "afterSeconds": 45, "profile": { "mode": "disconnect" } },
+    { "afterSeconds": 60, "profile": { "mode": "off" } }
+  ]
+}
+```
+
+Times are relative to listener readiness, strictly increasing and before the requested end time. At most 1024
+changes and 256 KiB of profile JSON are accepted. Unknown properties are rejected. Live changes affect existing
+connections; `broken` rejects only new connections, while `disconnect` also aborts existing ones.
+The GUI and CLI share profile validation and the shaping operation; GUI preferences are never CLI defaults.
+`analyze` and `export` preserve the recorded conditions without activating them, including sanitized SAZ export.
+
+Capture failures use stable codes and never echo paths or values:
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `cli.output.exists`, `capture.output.exists` | 5 | `--out` already exists |
+| `capture.output.locked` | 5 | Another program locked `--out` while publishing |
+| `cli.output.parent-missing`, `capture.output.parent-missing` | 2 / 3 | The folder that should contain `--out` does not exist |
+| `capture.listen.unavailable` | 5 | `--listen`/`--port` is in use, reserved or not assigned to this PC |
+| `capture.ca.invalid` | 3 | `--root-pfx` is unreadable, expired, password-protected, or not an RSA or ECDSA CA that may sign certificates, with its private key |
+| `capture.profile.unreadable` | 3 | The `--shape-profile` file could not be read |
+| `capture.profile.invalid` | 3 | Profile JSON, values or schedule are invalid, or a change is at or after the duration |
+| `capture.output.unprotected` | 6 | `--out` is on storage without Windows permissions |
+| `capture.failed` | 6 | Capture failed after starting, for example a recorder limit |
+
+### Analyze and export
 
 - `xmat analyze` reads a Fiddler archive (`.saz`) or an XMAT capture (`.xmatcap`), recognized by its content, and runs
   the Xbox Live service call rules on it. It writes `summary.json` (schema `xmat-analysis/1`) to `DIR`, which must not
@@ -196,9 +271,10 @@ reservation-time storage failure.
   (`.saz`) or, only with `--format sanitized-saz`, a sanitized Fiddler archive. The format otherwise follows `FILE`'s
   extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
   limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
-  `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
-  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line or
-  header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
+  `analysis.*` codes, except that an input over a limit is `export.input.limit`, as is a Fiddler archive of devices
+  whose [network shaping](web-proxy.md#network-shaping) histories together exceed its limits, and session data that
+  cannot be exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line
+  or header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
   `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. A sanitized
   archive needs a capture whose text format is known: an unmarked XMAT capture is refused before anything is written
   (`capture.text.ambiguous-export`, exit code 3); export a copy marked with `xmat mark-capture-text` instead. An
@@ -848,8 +924,8 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
 | 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, `export` has no session to write, capture-text marking refuses the input or interpretation, or `export --format sanitized-saz` reads an unmarked XMAT capture (`capture.text.ambiguous-export`; nothing is published); for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `replay`, `save-request` and `curl` an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`) |
-| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s `--out` is on storage without Windows permissions (`export.output.unprotected`) |
+| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`), `capture`'s `--out` is locked while publishing (`capture.output.locked`), or `capture`'s listening address or port is unavailable (`capture.listen.unavailable`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s or `capture`'s `--out` is on storage without Windows permissions (`export.output.unprotected` or `capture.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |
@@ -908,9 +984,10 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Delete sessions from a capture (`capture.delete-sessions`) | (none) | GUI only by policy (S11, XMAT). Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the capture list; headless runs export the sessions to keep instead |
-| Capture an explicit-proxy (generic) device (`capture.generic`) | (not available yet) | Planned (S5, XMAT-021) |
+| Capture an explicit-proxy (generic) device (`capture.generic`) | `xmat capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] [--shape off\|min\|avg\|exc\|broken\|disconnect] [--down-kbps N] [--up-kbps N] [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]` | Supported (S5) |
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
+| Shape capture bandwidth and latency (`capture.network-shaping`) | `xmat capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] [--shape off\|min\|avg\|exc\|broken\|disconnect] [--down-kbps N] [--up-kbps N] [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]` | Supported (S8a) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
 | Stream responses and limit how much of each response body a capture keeps (`capture.response-streaming`) | (not available yet) | Planned (S8a, XMAT-021) |

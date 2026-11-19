@@ -7,8 +7,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using XMAT.Operations.Captures;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -52,7 +54,8 @@ namespace XMAT.WebServiceCapture
     internal sealed record BoundedSazReadResult(
         IReadOnlyList<ProxyConnectionModel> Records,
         int SkippedIncompleteFrames,
-        int SkippedMalformedHeaderLines);
+        int SkippedMalformedHeaderLines,
+        NetworkShapingMetadata Shaping = null);
 
     internal static class BoundedSazReader
     {
@@ -99,6 +102,7 @@ namespace XMAT.WebServiceCapture
                 using var archive = new ZipArchive(input, ZipArchiveMode.Read, true);
                 var frames = new Dictionary<uint, FrameParts>();
                 long totalUncompressedBytes = 0;
+                byte[] shapingBytes = null;
 
                 foreach (var entry in archive.Entries)
                 {
@@ -106,6 +110,11 @@ namespace XMAT.WebServiceCapture
                     var match = FrameEntryPattern.Match(entry.Name);
                     FrameParts frame = null;
                     string kind = null;
+                    bool shapingEntry = entry.FullName == NetworkShapingMetadata.ArchiveEntry;
+                    if (shapingEntry && (shapingBytes != null || entry.Length > NetworkShapingMetadata.MaximumBytes))
+                    {
+                        throw new BoundedSazException(BoundedSazFailure.Malformed);
+                    }
                     if (match.Success &&
                         uint.TryParse(match.Groups["frame"].Value, out var frameId))
                     {
@@ -124,13 +133,17 @@ namespace XMAT.WebServiceCapture
 
                     var bytes = ReadEntry(
                         entry,
-                        kind != null,
+                        kind != null || shapingEntry,
                         limits,
                         ref totalUncompressedBytes,
                         cancellationToken);
                     if (kind != null)
                     {
                         frame.Set(kind, bytes);
+                    }
+                    if (shapingEntry)
+                    {
+                        shapingBytes = bytes;
                     }
                 }
 
@@ -195,7 +208,8 @@ namespace XMAT.WebServiceCapture
                 return new BoundedSazReadResult(
                     records,
                     skippedIncompleteFrames,
-                    skippedMalformedHeaderLines);
+                    skippedMalformedHeaderLines,
+                    shapingBytes == null ? null : NetworkShapingMetadata.Parse(Encoding.UTF8.GetString(shapingBytes)));
             }
             catch (OperationCanceledException)
             {

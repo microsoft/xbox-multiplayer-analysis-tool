@@ -97,6 +97,20 @@ namespace XMAT.Cli
                 yield return "Sessions without process information (older captures, Fiddler archives without x-ProcessInfo,";
                 yield return "Xbox or other remote devices) never match --process; the JSON counts them as unknown.";
             }
+            else if (command.Name == CliCommands.Capture)
+            {
+                yield return string.Empty;
+                yield return "Runs a foreground explicit proxy and publishes a new private .xmatcap file when its duration ends.";
+                yield return "The port is required; --listen defaults to 127.0.0.1. Configure the client proxy separately.";
+                yield return "No system proxy, trust-store, firewall or console settings are changed. TLS is opaque unless";
+                yield return "--root-pfx supplies a private, passwordless RSA or ECDSA CA PFX trusted by the client. Protect that private key.";
+                yield return "Rates are shared across this listener's connections; latency/jitter are added RTT in milliseconds.";
+                yield return "Ranges: rates 0-1000000 kbps (0 = unlimited), latency 0-10000 ms, jitter 0 to the latency.";
+                yield return "A version-1 JSON --shape-profile can schedule live changes. Do not mix it with shaping flags.";
+                yield return "Duration is 1-86400 seconds. The 120-second upload deadline can be explicitly set to 1-1800.";
+                yield return "Ctrl+C cancels and publishes nothing, like analyze/export; normal duration expiry saves the capture.";
+                yield return "Recording is bounded to 100000 sessions and 512 MiB of projected data; a limit failure publishes nothing.";
+            }
             else if (command.Name == CliCommands.Export)
             {
                 yield return string.Empty;

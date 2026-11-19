@@ -4,11 +4,14 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Windows;
 
 namespace XMAT.WebServiceCapture.Proxy
@@ -26,6 +29,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private const int RootCertValidityYears = 4;
         private const int HostCertValidityYears = 3;
+        private const string RsaKeyAlgorithm = "1.2.840.113549.1.1.1";
+        private const string EcdsaKeyAlgorithm = "1.2.840.10045.2.1";
 
         private readonly X509Store _rootStore;
         private readonly X509Store _myStore;
@@ -33,6 +38,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private X509Certificate2 _rootCert;
 
         private readonly ConcurrentDictionary<string, X509Certificate2> _certCache = new();
+        private readonly ConcurrentDictionary<string, Lazy<X509Certificate2>> _pendingCerts = new();
         private readonly bool _storeCerts;
         private readonly object _rootLock = new();
 
@@ -50,14 +56,44 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
+        internal CertificateManager(X509Certificate2 rootCertificate)
+        {
+            ArgumentNullException.ThrowIfNull(rootCertificate);
+            if (!rootCertificate.HasPrivateKey ||
+                rootCertificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow ||
+                rootCertificate.NotBefore.ToUniversalTime() > DateTime.UtcNow ||
+                rootCertificate.Extensions.OfType<X509BasicConstraintsExtension>()
+                    .All(extension => !extension.CertificateAuthority) ||
+                rootCertificate.Extensions.OfType<X509KeyUsageExtension>()
+                    .Any(extension => !extension.KeyUsages.HasFlag(X509KeyUsageFlags.KeyCertSign)) ||
+                rootCertificate.GetKeyAlgorithm() is not (RsaKeyAlgorithm or EcdsaKeyAlgorithm))
+            {
+                throw new ArgumentException(
+                    "A currently valid RSA or ECDSA CA certificate that may sign certificates, with its private key, is required.");
+            }
+            _rootCert = rootCertificate; // The caller retains ownership of the supplied CA.
+        }
+
         public void Dispose()
         {
             _rootStore?.Close();
             _myStore?.Close();
+            if (_rootStore == null)
+            {
+                foreach (X509Certificate2 certificate in _certCache.Values)
+                {
+                    certificate.Dispose();
+                }
+                _certCache.Clear();
+            }
         }
 
         public bool Initialize()
         {
+            if (_rootStore == null)
+            {
+                return _rootCert != null;
+            }
             bool success = CreateRootCertificate();
 
             if (success)
@@ -90,19 +126,55 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             hostname = GetHostname(hostname);
 
-            return _certCache.GetOrAdd(hostname, host =>
+            if (_certCache.TryGetValue(hostname, out X509Certificate2 cached))
             {
-                X509Certificate2 cert = CreateHostCertificate(host);
+                return cached;
+            }
+
+            // One creation per host, so no duplicate is leaked; different hosts still generate keys in parallel.
+            Lazy<X509Certificate2> pending = _pendingCerts.GetOrAdd(
+                hostname,
+                host => new Lazy<X509Certificate2>(
+                    () => CreateAndCacheHostCertificate(host), LazyThreadSafetyMode.ExecutionAndPublication));
+            try
+            {
+                return pending.Value;
+            }
+            finally
+            {
+                _pendingCerts.TryRemove(KeyValuePair.Create(hostname, pending));
+            }
+        }
+
+        private X509Certificate2 CreateAndCacheHostCertificate(string hostname)
+        {
+            if (_certCache.TryGetValue(hostname, out X509Certificate2 cached))
+            {
+                return cached;
+            }
+            X509Certificate2 cert = CreateHostCertificate(hostname);
+            try
+            {
                 _myStore?.Add(cert);
+                _certCache[hostname] = cert;
                 return cert;
-            });
+            }
+            catch
+            {
+                cert.Dispose();
+                throw;
+            }
         }
 
         public bool CreateRootCertificate()
         {
             lock (_rootLock)
             {
-if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                if (_rootStore == null)
+                {
+                    return _rootCert != null && _rootCert.NotAfter > DateTime.UtcNow;
+                }
+                if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
@@ -172,7 +244,7 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
 
         public X509Certificate2 CreateHostCertificate(string hostname)
         {
-            RSA rsa = RSA.Create(2048);
+            using RSA rsa = RSA.Create(2048);
 
             CertificateRequest req = new CertificateRequest(
                 $"CN={hostname}, O={IssuerName}",
@@ -207,8 +279,9 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
 
             // Safety net: clamp notAfter to never exceed the issuer cert's NotAfter in case
             // the root cert expires before host certs.
+            X509Certificate2 issuer = Volatile.Read(ref _rootCert);
             DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddYears(HostCertValidityYears);
-            DateTimeOffset issuerNotAfter = _rootCert.NotAfter;
+            DateTimeOffset issuerNotAfter = issuer.NotAfter;
 
             if (issuerNotAfter <= DateTimeOffset.UtcNow)
                 throw new InvalidOperationException("Root certificate has expired and cannot be used to issue host certificates.");
@@ -217,20 +290,37 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
             {
                 notAfter = issuerNotAfter;
             }
+            DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddYears(-1);
+            DateTimeOffset issuerNotBefore = issuer.NotBefore;
+            if (notBefore < issuerNotBefore)
+            {
+                notBefore = issuerNotBefore;
+            }
 
-            X509Certificate2 cert = req.Create(
-                _rootCert,
-                DateTimeOffset.UtcNow.AddYears(-1),
+            // An explicit signer lets an ECDSA authority issue the RSA host certificate.
+            using RSA issuerRsa = issuer.GetRSAPrivateKey();
+            using ECDsa issuerEcdsa = issuerRsa == null ? issuer.GetECDsaPrivateKey() : null;
+            X509SignatureGenerator signer = issuerRsa != null
+                ? X509SignatureGenerator.CreateForRSA(issuerRsa, RSASignaturePadding.Pkcs1)
+                : issuerEcdsa != null
+                    ? X509SignatureGenerator.CreateForECDsa(issuerEcdsa)
+                    : throw new InvalidOperationException("The root certificate has no RSA or ECDSA private key.");
+            using X509Certificate2 cert = req.Create(
+                issuer.SubjectName,
+                signer,
+                notBefore,
                 notAfter,
                 serial);
 
-            X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
+            using X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
             certWithKey.FriendlyName = hostname;
 
+            // Schannel needs a key container. Without PersistKeySet the loaded certificate owns its deletion.
             X509Certificate2 certWithExportableKey = X509CertificateLoader.LoadPkcs12(
                 certWithKey.Export(X509ContentType.Pfx, CertPassword),
                 CertPassword,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
+                X509KeyStorageFlags.Exportable |
+                    (_rootStore == null ? X509KeyStorageFlags.DefaultKeySet : X509KeyStorageFlags.PersistKeySet));
             return certWithExportableKey;
         }
 

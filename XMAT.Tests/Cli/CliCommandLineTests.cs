@@ -49,7 +49,7 @@ namespace XMAT.Tests.Cli
         [InlineData("analyze a.saz --out results --telemetry-sample", "cli.usage.unknown-option")]
         // Commands, options, values and doctor targets planned for later releases are usage errors until they ship.
         [InlineData("convert a.xmatcap --to saz --out results", "cli.usage.unknown-command")]
-        [InlineData("help capture", "cli.usage.unknown-command")]
+        [InlineData("help capture-xbox", "cli.usage.unknown-command")]
         [InlineData("analyze a.saz --out results --ruleset lta", "cli.usage.unknown-option")]
         [InlineData("analyze a.saz --out results --fail-on warning", "cli.usage.invalid-value")]
         [InlineData("doctor --for capture-xbox", "cli.usage.unknown-target")]
@@ -610,7 +610,7 @@ namespace XMAT.Tests.Cli
             Assert.Equal(
                 new[]
                 {
-                    CliCommands.Analyze, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.Export,
+                    CliCommands.Analyze, CliCommands.Capture, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.Export,
                     CliCommands.MarkCaptureText, CliCommands.Replay, CliCommands.SaveRequest,
                 },
                 report.Commands.Select(command => command.Name));

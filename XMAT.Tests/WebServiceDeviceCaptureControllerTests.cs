@@ -27,6 +27,143 @@ namespace XMAT.Tests
     public class WebServiceDeviceCaptureControllerTests
     {
         [Fact]
+        public async Task ImportedShapingIsVisibleButNeverActivated()
+        {
+            var recorded = new NetworkShapingController();
+            recorded.Apply(NetworkShapingProfile.Preset("min"));
+            var controller = CreateController(new PreferencesModel());
+            controller.ImportedShaping = NetworkShapingMetadata.From(recorded, 1800);
+            Assert.Equal(NetworkShapingMode.Off, controller.Shaping.Current.Mode);
+            Assert.Equal(120, controller.BodyTimeoutSeconds);
+            Assert.Equal(Localization.GetLocalizedString("SHAPING_RECORDED"), controller.ShapingStatusText);
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120)).Succeeded);
+            Assert.NotNull(controller.RecordedShaping);
+            Assert.Equal(NetworkShapingMode.Off, controller.Shaping.Current.Mode);
+        }
+
+        [Fact]
+        public async Task ClearingCaptureDropsOldHistoryButPreservesTheCurrentCondition()
+        {
+            var controller = CreateController(new PreferencesModel());
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120);
+            controller.ImportedShaping = controller.RecordedShaping;
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120);
+            controller.ClearAllCaptures();
+            Assert.Null(controller.ImportedShaping);
+            Assert.Null(controller.RecordedShaping);
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("avg"), 120);
+            controller.ClearAllCaptures();
+            Assert.Equal(NetworkShapingProfile.Preset("avg"), controller.Shaping.Current);
+            Assert.Single(Assert.Single(controller.RecordedShaping.Traces).Changes);
+        }
+
+        [Fact]
+        public async Task ReplacingCapturedRowsDropsTheOutgoingShapingHistory()
+        {
+            var controller = CreateController(new PreferencesModel());
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120);
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120);
+            Assert.NotNull(controller.RecordedShaping);
+            controller.ReplaceShapingHistory(null);
+            Assert.Null(controller.RecordedShaping);
+            Assert.Equal(NetworkShapingMode.Off, controller.Shaping.Current.Mode);
+        }
+
+        [Fact]
+        public async Task ChangingTheDeadlineKeepsCompletedTrafficUnderItsOriginalDeadline()
+        {
+            var controller = CreateController(new PreferencesModel());
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 60)).Succeeded);
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120)).Succeeded);
+            Assert.Equal(60, Assert.Single(controller.RecordedShaping.Traces).BodyTimeoutSeconds);
+
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120);
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 300)).Succeeded);
+            Assert.Equal(new[] { 60, 120, 300 }, controller.RecordedShaping.Traces.Select(trace => trace.BodyTimeoutSeconds));
+            Assert.Equal(NetworkShapingMode.Shape, controller.RecordedShaping.Traces[1].Changes[^1].Profile.Mode);
+
+            controller.ClearAllCaptures();
+            Assert.Equal(300, Assert.Single(controller.RecordedShaping.Traces).BodyTimeoutSeconds);
+        }
+
+        [Fact]
+        public async Task DeadlineChangesStopBeforeTheSavedTraceLimit()
+        {
+            var recorded = new NetworkShapingController();
+            recorded.Apply(NetworkShapingProfile.Preset("min"));
+            NetworkShapingTrace trace = Assert.Single(NetworkShapingMetadata.From(recorded, 120).Traces);
+            var controller = CreateController(new PreferencesModel());
+            controller.ImportedShaping = new NetworkShapingMetadata(
+                1, Enumerable.Repeat(trace, NetworkShapingMetadata.MaximumTraces - 1).ToArray());
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 60)).Succeeded);
+
+            var full = await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120);
+
+            Assert.False(full.Succeeded);
+            Assert.Equal(SetNetworkShapingOperation.HistoryFullCode, Assert.Single(full.Diagnostics).Code);
+            Assert.Equal(60, controller.BodyTimeoutSeconds);
+            Assert.Equal(
+                NetworkShapingMetadata.MaximumTraces,
+                NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(controller.RecordedShaping)).Traces.Count);
+        }
+
+        [Fact]
+        public async Task ImportsIntoAWritableTabLeaveRoomToDisconnectAndTurnOff()
+        {
+            static NetworkShapingMetadata History(int traces, int changesPerTrace = 1)
+            {
+                var trace = new NetworkShapingTrace(120, Enumerable.Range(1, changesPerTrace)
+                    .Select(sequence => new NetworkShapingChange(
+                        sequence, DateTimeOffset.UnixEpoch, NetworkShapingProfile.Preset("min")))
+                    .ToArray());
+                return new NetworkShapingMetadata(1, Enumerable.Repeat(trace, traces).ToArray());
+            }
+            // The live trace restarts at the current condition, then Disconnect and Off must still fit.
+            int changeRoom = NetworkShapingMetadata.MaximumChanges - 3;
+            foreach ((NetworkShapingMetadata fits, NetworkShapingMetadata full) in new[]
+            {
+                (History(NetworkShapingMetadata.MaximumTraces - 1), History(NetworkShapingMetadata.MaximumTraces)),
+                (History(1, changeRoom), History(1, changeRoom + 1)),
+            })
+            {
+                CreateController(new PreferencesModel(), readOnly: true).EnsureRoomForImportedShaping(full);
+                var controller = CreateController(new PreferencesModel());
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120)).Succeeded);
+                Assert.Throws<InvalidDataException>(() => controller.EnsureRoomForImportedShaping(full));
+
+                controller.EnsureRoomForImportedShaping(fits);
+                controller.ReplaceShapingHistory(fits);
+
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("disconnect"), 120)).Succeeded);
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120)).Succeeded);
+                Assert.NotNull(NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(controller.RecordedShaping)));
+            }
+        }
+
+        [Fact]
+        public async Task LiveShapingIsStoredInTheDeviceRowAsExactJson()
+        {
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable devices = database.CreateTable(
+                "CaptureDevices",
+                new Field<long>("DeviceType"),
+                new Field<string>("DeviceName"),
+                new Field<long>("CaptureType"),
+                new Field<string>(NetworkShapingMetadata.DeviceField));
+            long row = devices.AddRow((long)DeviceType.XboxConsole, "test-console", (long)CaptureType.WebProxy, string.Empty);
+            var controller = CreateController(new PreferencesModel());
+            XMAT.Models.CaptureAppModel.RecordShapingIn(devices, row, controller);
+
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 60)).Succeeded);
+
+            string stored = devices.Subset(NetworkShapingMetadata.DeviceField)
+                .DataRecordsFrom(row, 1).Single().Str(NetworkShapingMetadata.DeviceField);
+            Assert.Equal(NetworkShapingMetadata.Serialize(controller.RecordedShaping), stored);
+            Assert.NotNull(NetworkShapingMetadata.Parse(stored));
+        }
+
+        [Fact]
         public async Task CanCloseAsync_WithPromptDisabled_SkipsProxyCheckAndPrompt()
         {
             var preferences = new PreferencesModel { PromptToDisableOnClose = false };

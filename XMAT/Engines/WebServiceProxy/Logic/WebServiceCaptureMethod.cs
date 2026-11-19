@@ -137,6 +137,7 @@ namespace XMAT.WebServiceCapture
                                 : "WEBCAP_IMPORT_ARCHIVE_LIMIT"),
                         ex);
                 }
+                captureController.EnsureRoomForImportedShaping(import.Shaping);
                 var connections = import.Records;
                 var hostFilters = captureController.UpdateFilter(
                     connections.Select(connection => connection.Host).Distinct().ToList());
@@ -166,7 +167,8 @@ namespace XMAT.WebServiceCapture
                         import.SkippedIncompleteFrames,
                     SkippedMalformedHeaderLines:
                         import.SkippedMalformedHeaderLines,
-                    Source: import.Source);
+                    Source: import.Source,
+                    Shaping: import.Shaping);
             });
 
             captureController.PrepareForActiveCaptureData();
@@ -177,6 +179,9 @@ namespace XMAT.WebServiceCapture
             LoadedCaptureDatabaseRegistry.AssignImported(
                 captureController,
                 imported.Source);
+            TryNotifyCaptureReplacement(
+                () => captureController.ReplaceShapingHistory(imported.Shaping),
+                logError);
             TryNotifyCaptureReplacement(
                 () => captureController.SetImportNotice(
                     imported.SkippedIncompleteFrames > 0 ||

@@ -340,13 +340,36 @@ namespace XMAT.Operations.Analysis
                 }
             }
 
+            NetworkShapingMetadata shaping = NetworkShapingMetadata.Combine(
+                selectedDevices.Select(device => device.Device.Shaping));
+            if (shaping != null)
+            {
+                diagnostics.Add(new OperationDiagnostic(
+                    "analysis.network-shaped",
+                    OperationDiagnosticSeverity.Warning,
+                    "Network shaping was recorded; timing and rate findings reflect simulated conditions."));
+                if (!NetworkShapingMetadata.FitsLimits(shaping))
+                {
+                    diagnostics.Add(new OperationDiagnostic(
+                        "analysis.network-shaping.omitted",
+                        OperationDiagnosticSeverity.Warning,
+                        "The devices' network shaping histories together exceed their limits and are not reported; " +
+                        "analyze one device at a time to report them."));
+                    shaping = null;
+                }
+                else if (options.ProduceLegacyReports)
+                {
+                    NetworkShapingReport.WriteMetadata(context.WorkingDirectory, shaping);
+                }
+            }
             var summary = new AnalysisSummary(
                 InputKindName(loaded.Kind),
                 loaded.InputSha256,
                 loaded.StoredText,
                 deviceSummaries,
                 totalCalls,
-                totalFindings);
+                totalFindings,
+                shaping);
             if (totalCalls == 0 ||
                 deviceSummaries.All(device => device.Consoles.Count == 0))
             {
