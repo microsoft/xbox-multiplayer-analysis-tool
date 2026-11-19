@@ -124,6 +124,214 @@ namespace XMAT.Tests.Operations.Export
             Assert.True(analysis.Value.Summary.TotalCalls > 0);
         }
 
+        // xmat export reads XMAT's SAZ flags for a streamed response's trailers and truncated capture, and keeps both in the
+        // optional columns of an XMATCAP.
+        [Fact]
+        public async Task Execute_SazResponseTrailersAndTruncationRoundTripThroughXmatcap()
+        {
+            using var directory = new ExportTestDirectory();
+            string source = directory.PathOf("streamed.saz");
+            ProxyConnectionModel streamed = ProcessCaptures.ExportRecord(1);
+            streamed.SetResponseCaptureDetails("x-checksum: abc123\r\n", 16);
+            SazArchive.Write(source, new[] { streamed });
+            string output = directory.PathOf("streamed.xmatcap");
+
+            OperationResult<ExportCaptureResult> export = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    source,
+                    null,
+                    null,
+                    Selection(),
+                    CaptureExportFormat.Xmatcap,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Succeeded, export.Outcome);
+            using var capture = new SqLtReadonlyDatabase(output);
+            var model = new ProxyConnectionModel(
+                Assert.Single(capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords));
+            Assert.Equal(("x-checksum: abc123\r\n", 16L), (model.ResponseTrailers, model.ResponseBodyTruncatedAt));
+        }
+
+        // A plain Fiddler archive whose malformed header line could hold a secret: xmat export marks the session, keeps the
+        // mark in an XMATCAP copy's HeadersUninspectable column and an ordinary SAZ copy's x-xmat-headers-uninspectable
+        // flag, and leaves the session out of a sanitized archive made from the original or either copy.
+        [Fact]
+        public async Task Execute_KeepsTheUninspectableHeaderMarkThroughXmatcapAndSazCopies()
+        {
+            const string canary = "CLI-LINE-CANARY";
+            using var directory = new ExportTestDirectory();
+            string source = directory.PathOf("p.saz");
+            SazArchive.WriteRaw(
+                source,
+                Encoding.ASCII.GetBytes(
+                    "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n" +
+                    "x session-token: " + canary + "\r\n\r\n{\"keep\":\"public-marker\"}"),
+                Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"echo\":\"" + canary + "\"}"));
+            string capture = directory.PathOf("c.xmatcap");
+            string archive = directory.PathOf("a.saz");
+
+            await ExportFileAsync(source, CaptureExportFormat.Xmatcap, capture);
+            await ExportFileAsync(capture, CaptureExportFormat.Saz, archive);
+
+            using (var database = new SqLtReadonlyDatabase(capture))
+            {
+                var row = (IRawDataRecord)Assert.Single(
+                    database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+                Assert.True(row.TryReadRaw("HeadersUninspectable", out object mark));
+                Assert.Equal(1L, mark);
+            }
+            Assert.Contains(
+                new KeyValuePair<string, string>("x-xmat-headers-uninspectable", "1"),
+                ProcessCaptures.SessionFlags(ProcessCaptures.Entries(archive)["raw/1_m.xml"]));
+            string[] inputs = { source, capture, archive };
+            for (var index = 0; index < inputs.Length; index++)
+            {
+                string sanitized = directory.PathOf($"s{index}.saz");
+                await ExportFileAsync(inputs[index], CaptureExportFormat.SanitizedSaz, sanitized);
+                string text = string.Join("\n", ProcessCaptures.Entries(sanitized).Values.Select(Encoding.Latin1.GetString));
+                Assert.Contains("Host: redacted.invalid", text, StringComparison.Ordinal);
+                Assert.DoesNotContain(canary, text, StringComparison.Ordinal);
+            }
+        }
+
+        // A capture saved before XMAT recorded header history has an unknown history, which xmat export keeps through an
+        // ordinary SAZ copy (its x-xmat-headers-uninspectable flag) and an XMATCAP copy of that archive (its
+        // HeadersUninspectable column), without warning. A sanitized export of the copy's Game.exe sessions succeeds and
+        // warns once with the number it wrote, leaving out the sessions that the selection left out.
+        [Fact]
+        public async Task Execute_KeepsAnUnknownHeaderHistoryThroughCopiesAndWarnsOfTheSessionsItSanitizes()
+        {
+            using var directory = new ExportTestDirectory();
+            string legacy = ProcessCaptures.WriteXmatcap(
+                directory.Root, "l.xmatcap", ProcessCaptures.MixedSessions, legacy: true);
+            string archive = directory.PathOf("a.saz");
+            string capture = directory.PathOf("c.xmatcap");
+
+            OperationResult<ExportCaptureResult> toArchive = await ExportFileAsync(legacy, CaptureExportFormat.Saz, archive);
+            Dictionary<string, byte[]> archiveEntries = ProcessCaptures.Entries(archive);
+            FiddlerSazImportResult archiveImport =
+                FiddlerSazHandler.ImportSazFileWithDiagnostics(archive, CancellationToken.None);
+            var loadedDiagnostics = new List<OperationDiagnostic>();
+            using (LoadedInput loaded = new CaptureInputReader().Read(
+                AnalysisInput.FromFile(archive),
+                AnalysisLimits.Default,
+                loadedDiagnostics,
+                CancellationToken.None))
+            {
+                Assert.Empty(loadedDiagnostics);
+                Assert.All(loaded.Devices.SelectMany(device => device.Records), record =>
+                {
+                    Assert.True(((IRawDataRecord)record).TryReadRaw(
+                        WebProxyCaptureSchema.HeadersUninspectable,
+                        out object history));
+                    Assert.Equal(-1L, history);
+                });
+            }
+            OperationResult<ExportCaptureResult> toCapture = await ExportFileAsync(archive, CaptureExportFormat.Xmatcap, capture);
+            OperationResult<ExportCaptureResult> sanitized = await ExportFileAsync(
+                capture,
+                CaptureExportFormat.SanitizedSaz,
+                directory.PathOf("s.saz"),
+                Selection(process: ProcessFilterTestSupport.Spec(new[] { "Game.exe" })));
+
+            Assert.All(Enumerable.Range(1, 8), frame => Assert.Contains(
+                new KeyValuePair<string, string>("x-xmat-headers-uninspectable", "-1"),
+                ProcessCaptures.SessionFlags(archiveEntries[$"raw/{frame}_m.xml"])));
+            using (var database = new SqLtReadonlyDatabase(capture))
+            {
+                IDataRecord[] rows = database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToArray();
+                Assert.Equal(8, rows.Length);
+                Assert.All(rows, row =>
+                {
+                    Assert.True(((IRawDataRecord)row).TryReadRaw("HeadersUninspectable", out object history));
+                    Assert.Equal(-1L, history);
+                });
+            }
+            Assert.Empty(toArchive.Diagnostics);
+            Assert.Empty(toCapture.Diagnostics);
+            Assert.Equal(0, archiveImport.SkippedMalformedHeaderLines);
+            Assert.All(archiveImport.Records, record =>
+                Assert.Equal(HeaderProvenance.Unknown, record.HeaderProvenance));
+            Assert.Equal(4, sanitized.Value.Counts.Exported);
+            Assert.Equal(4, SazArchive.UnknownHeaderProvenanceSessions(sanitized.Value.Sanitization));
+            OperationDiagnostic warning = Assert.Single(sanitized.Diagnostics);
+            Assert.Equal(
+                ("export.sanitization.header-provenance-unknown", OperationDiagnosticSeverity.Warning),
+                (warning.Code, warning.Severity));
+            Assert.Equal(
+                "Header history is unknown for 4 exported sessions. Earlier processing may have discarded context needed to " +
+                    "recognize secrets. Sanitization inspected the data available; review the archive before sharing.",
+                warning.Message);
+        }
+
+        // xmat export keeps each message's stored header text from a Fiddler archive through an XMATCAP copy and back: a
+        // request whose start line and headers XMAT wrote as UTF-8 keeps its characters above U+00FF, a supplementary one
+        // included, and a Latin-1 response keeps its e-acute and no-break space. Each copy chooses the encoding again.
+        [Fact]
+        public async Task Execute_KeepsStoredHeaderTextThroughXmatcapAndBackToSaz()
+        {
+            const string requestHeaders = "POST /caf\u00E9 HTTP/1.1\r\nHost: example.test\r\n" +
+                "x-display-name: \u010Capek \U0001F600\r\n\r\n";
+            const string responseHeaders = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nx-note: caf\u00E9\u00A0\r\n\r\n";
+            using var directory = new ExportTestDirectory();
+            string source = directory.PathOf("u.saz");
+            SazArchive.WriteRaw(
+                source,
+                Encoding.UTF8.GetBytes(requestHeaders + "body"),
+                Encoding.Latin1.GetBytes(responseHeaders + "ok"),
+                new KeyValuePair<string, string>("x-xmat-request-header-encoding", "utf-8"));
+            string capture = directory.PathOf("c.xmatcap");
+            string archive = directory.PathOf("a.saz");
+
+            await ExportFileAsync(source, CaptureExportFormat.Xmatcap, capture);
+            await ExportFileAsync(capture, CaptureExportFormat.Saz, archive);
+
+            using (var database = new SqLtReadonlyDatabase(capture))
+            {
+                IDataRecord row = Assert.Single(
+                    database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+                Assert.Equal(requestHeaders, row.Str(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders));
+                Assert.Equal(responseHeaders, row.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
+            }
+            Dictionary<string, byte[]> entries = ProcessCaptures.Entries(archive);
+            IReadOnlyList<KeyValuePair<string, string>> flags = ProcessCaptures.SessionFlags(entries["raw/1_m.xml"]);
+            Assert.Equal(Encoding.UTF8.GetBytes(requestHeaders + "body"), entries["raw/1_c.txt"]);
+            Assert.Equal(Encoding.Latin1.GetBytes(responseHeaders + "ok"), entries["raw/1_s.txt"]);
+            Assert.Contains(new KeyValuePair<string, string>("x-xmat-request-header-encoding", "utf-8"), flags);
+            Assert.DoesNotContain(flags, flag => flag.Key == "x-xmat-response-header-encoding");
+            ProxyConnectionModel imported = Assert.Single(FiddlerSazHandler.ImportSazFile(archive, CancellationToken.None));
+            Assert.Equal((requestHeaders, responseHeaders), (imported.RequestLineAndHeaders, imported.ResponseLineAndHeaders));
+        }
+
+        private static async Task<OperationResult<ExportCaptureResult>> ExportFileAsync(
+            string input,
+            CaptureExportFormat format,
+            string output,
+            CaptureSelectionSpec selection = null)
+        {
+            OperationResult<ExportCaptureResult> result = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    input,
+                    null,
+                    null,
+                    selection ?? Selection(),
+                    format,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            return result;
+        }
+
         [Fact]
         public async Task Execute_CountsIncompleteAndUnavailableRowsWithoutSubstitution()
         {

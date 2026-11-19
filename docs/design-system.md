@@ -155,7 +155,7 @@ What a state means to the person looking at it sets how XMAT shows it, the same 
 | Problem | Red, with a cross | 5xx, a device that can't be reached, a web proxy that couldn't stop cleanly |
 | Needs attention | Amber, with a warning sign | 4xx, a device whose proxy setting can't be read |
 | Live | The recording dot and Capturing | A running capture or trace |
-| Working | What's happening, in words, without color | A trace connecting, starting, stopping, downloading or disconnecting |
+| Working | What's happening, in words, without color | A trace connecting, starting, stopping, downloading or disconnecting, a response still streaming |
 | Routine | No color | 2xx, 3xx, a request without a status yet, an idle capture, a proxy set as expected |
 
 In charts, where color is the data, each status class has a fill of its own: 2xx green, 3xx blue, 4xx amber, 5xx red
@@ -166,7 +166,9 @@ A table shows an HTTP status with `StatusText` ([`XMAT/Controls/StatusText.cs`](
 by [`XMAT/Styles/Status.xaml`](../XMAT/Styles/Status.xaml) with the problem and warning icons. Screen readers hear the
 code and what a problem or a warning means. A problem's or a warning's row also takes a faint wash of its color
 (`ProblemRowBrush`, `AttentionRowBrush`), so it stands out when the table is scrolled across; a contrast theme shows no
-wash, and the icon and words carry the meaning. The original look keeps its whole-row colors.
+wash, and the icon and words carry the meaning. While a response is still streaming, its status cell says
+**Streaming** in secondary text and shows the code once the response ends. The original look keeps its whole-row
+colors.
 
 - **STATUS-1** Every state XMAT shows has one meaning, set in `StatusMeanings`. A state gets its meaning there before
   a view shows it; one without a meaning throws.

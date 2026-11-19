@@ -37,8 +37,8 @@
             </ds:StoryExample>
         </ds:StorySection>
 
-        <ds:StorySection Title="Inspector text" StyleName="InspectorTextBoxStyle, in RecessedSurfaceStyle"
-                         Description="Request and response text in the inspector: read only, in Consolas, in a recessed well that scrolls.">
+        <ds:StorySection Title="Inspector text" StyleName="InspectorTextBoxStyle, in RecessedSurfaceStyle, with ResponseNoticeTextStyle"
+                         Description="Request and response text in the inspector: read only, in Consolas, in a recessed well that scrolls. A response still streaming, or one the capture limit cut, has a notice in secondary text above it, and trailers that followed the body show under its headers.">
             <ds:StoryExample Caption="Headers of a request">
                 <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Width="460" Height="132">
                     <ScrollViewer>
@@ -47,6 +47,25 @@
                                  Text="GET https://api.example.com/sessions/42 HTTP/1.1&#x0a;Host: api.example.com&#x0a;Accept: application/json&#x0a;User-Agent: XboxServicesAPI/2024.06&#x0a;x-xbl-contract-version: 107"/>
                     </ScrollViewer>
                 </ContentControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A response still streaming, with trailers">
+                <StackPanel Width="460">
+                    <TextBlock Style="{DynamicResource ResponseNoticeTextStyle}"
+                               Text="Still streaming: the capture is completed when the response ends."/>
+                    <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Height="132">
+                        <ScrollViewer>
+                            <StackPanel>
+                                <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                         TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Response headers"
+                                         Text="HTTP/1.1 200 OK&#x0a;Content-Type: text/event-stream&#x0a;Transfer-Encoding: chunked"/>
+                                <TextBlock Text="Trailers" FontWeight="SemiBold" Margin="0,8,0,2"/>
+                                <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                         TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Trailers"
+                                         Text="x-checksum: abc123"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </ContentControl>
+                </StackPanel>
             </ds:StoryExample>
         </ds:StorySection>
 

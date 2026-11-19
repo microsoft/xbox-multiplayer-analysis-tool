@@ -839,6 +839,18 @@
         <Setter Property="TextWrapping" Value="Wrap"/>
     </Style>
 
+    <!-- The notice above a captured response, such as Still streaming, in the pending color; hidden when empty. -->
+    <Style x:Key="ResponseNoticeTextStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="Margin" Value="10,0,10,4"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
+        <Style.Triggers>
+            <Trigger Property="Text" Value="">
+                <Setter Property="Visibility" Value="Collapsed"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <Style x:Key="CaptureTabStripStyle" TargetType="Border"/>
 
     <Style x:Key="TimelineHeaderStyle" TargetType="Border">

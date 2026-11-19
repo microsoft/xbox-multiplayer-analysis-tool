@@ -13,14 +13,19 @@ using System.Windows.Data;
 namespace XMAT
 {
     // An HTTP status in a table's cell, with its meaning (StatusMeanings). The new look (Styles/Status.xaml) shows a
-    // problem's or a warning's code in its color after its icon, and other codes as the row's text. Without a look's
-    // style, as in the original look, the code shows as a table's text columns show text. Screen readers hear the code,
-    // and for a problem or a warning what it means, since they don't see the color or the icon.
+    // problem's or a warning's code in its color after its icon, a response still streaming as Streaming in secondary
+    // text, and other codes as the row's text. Without a look's style, as in the original look, the code shows as a
+    // table's text columns show text. Screen readers hear the code, and for a problem, a warning or a stream what it
+    // means, since they don't see the color, the icon or the code.
     public sealed class StatusText : Control
     {
         public static readonly DependencyProperty StatusProperty = DependencyProperty.Register(
             nameof(Status), typeof(string), typeof(StatusText),
-            new PropertyMetadata(null, (text, e) => ((StatusText)text).Meaning = StatusMeanings.OfHttpStatus((string)e.NewValue)));
+            new PropertyMetadata(null, (text, e) => ((StatusText)text).UpdateMeaning()));
+
+        public static readonly DependencyProperty IsStreamingProperty = DependencyProperty.Register(
+            nameof(IsStreaming), typeof(bool), typeof(StatusText),
+            new PropertyMetadata(false, (text, e) => ((StatusText)text).UpdateMeaning()));
 
         private static readonly DependencyPropertyKey MeaningPropertyKey = DependencyProperty.RegisterReadOnly(
             nameof(Meaning), typeof(StatusMeaning), typeof(StatusText), new PropertyMetadata(StatusMeaning.Routine));
@@ -47,19 +52,36 @@ namespace XMAT
             set => SetValue(StatusProperty, value);
         }
 
+        // Whether the response is still arriving, as a streamed response is until it ends. That's work under way
+        // (StatusMeaning.Working), whatever its code.
+        public bool IsStreaming
+        {
+            get => (bool)GetValue(IsStreamingProperty);
+            set => SetValue(IsStreamingProperty, value);
+        }
+
         public StatusMeaning Meaning
         {
             get => (StatusMeaning)GetValue(MeaningProperty);
             private set => SetValue(MeaningPropertyKey, value);
         }
 
-        // What screen readers hear: the code, and what a problem or a warning means.
-        internal string SpokenText => Meaning switch
-        {
-            StatusMeaning.Problem => Localization.GetLocalizedString("STATUS_TEXT_PROBLEM", Status),
-            StatusMeaning.Attention => Localization.GetLocalizedString("STATUS_TEXT_ATTENTION", Status),
-            _ => Status ?? string.Empty,
-        };
+        // What the new look shows instead of the code while the response streams.
+        public static string StreamingText => Localization.GetLocalizedString("STATUS_TEXT_STREAMING");
+
+        // What screen readers hear: the code, and what a problem, a warning or a stream means.
+        internal string SpokenText => IsStreaming
+            ? Localization.GetLocalizedString("STATUS_TEXT_STREAMING_SPOKEN", Status)
+            : Meaning switch
+            {
+                StatusMeaning.Problem => Localization.GetLocalizedString("STATUS_TEXT_PROBLEM", Status),
+                StatusMeaning.Attention => Localization.GetLocalizedString("STATUS_TEXT_ATTENTION", Status),
+                _ => Status ?? string.Empty,
+            };
+
+        private void UpdateMeaning() => Meaning = IsStreaming
+            ? StatusMeanings.Of(ResponseProgress.Streaming)
+            : StatusMeanings.OfHttpStatus(Status);
 
         protected override AutomationPeer OnCreateAutomationPeer() => new StatusTextAutomationPeer(this);
 

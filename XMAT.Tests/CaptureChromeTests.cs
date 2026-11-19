@@ -632,7 +632,8 @@ namespace XMAT.Tests
                 var selectorBounds = selector.TransformToAncestor(request).TransformBounds(new Rect(selector.RenderSize));
                 Assert.True(metadataBounds.Bottom + 8 <= selectorBounds.Top + 1,
                     "Metadata must wrap in its heading row, leaving an eight-pixel gap before view selectors.");
-                var text = Descendants(request).OfType<TextBox>().Single();
+                // The headers' text; the trailers' text under it is hidden, since a request has none.
+                var text = Descendants(request).OfType<TextBox>().Single(box => box.IsVisible);
                 Assert.True(text.IsReadOnly);
                 Assert.Contains("example.test", text.Text, StringComparison.Ordinal);
                 var well = Descendants(request).OfType<ContentControl>()

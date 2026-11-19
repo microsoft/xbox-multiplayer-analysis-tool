@@ -42,6 +42,7 @@ namespace XMAT.Tests.DesignSystem
             Check<DeviceStatusEnum>(state => StatusMeanings.Of(state));
             Check<ProxyConfigurationState>(state => StatusMeanings.Of(state));
             Check<ProxyState>(state => StatusMeanings.Of(state));
+            Check<ResponseProgress>(progress => StatusMeanings.Of(progress));
             Assert.True(missing.Count == 0, string.Join(Environment.NewLine, missing));
 
             void Check<T>(Func<T, object> meaning) where T : struct, Enum
@@ -116,6 +117,60 @@ namespace XMAT.Tests.DesignSystem
                         }
 
                         window.Content = null;
+                    }
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                }
+            });
+        }
+
+        // A response still streaming is work under way, whatever its code. In the new look its status cell says
+        // Streaming in secondary text, without an icon, and shows the code once the response ends. The original look
+        // keeps the code, and shows the row as pending (CaptureConnectionViewTests). Screen readers hear both.
+        [Fact]
+        public void StreamingResponse_SaysStreamingInSecondaryText_UntilItEnds()
+        {
+            _application.Run(window =>
+            {
+                bool wasNewLook = LookState.Current.IsNewLook;
+                try
+                {
+                    foreach (bool newLook in new[] { true, false })
+                    {
+                        LookState.Current.IsNewLook = newLook;
+                        ResourceDictionary resources = ThemeManager.CreateLook(newLook);
+                        ThemeManager.LoadTheme(resources, "Light", newLook, highContrast: false);
+                        window.Resources = resources;
+                        Color Of(string key) => ((SolidColorBrush)window.FindResource(key)).Color;
+                        foreach (string code in new[] { "200", "503" })
+                        {
+                            var cell = new StatusText { Status = code, IsStreaming = true };
+                            WpfTestHost.Show(window, cell);
+                            TextBlock text = DesignSystemWindowTests.Descendants(cell).OfType<TextBlock>().Single();
+                            Assert.True(cell.Meaning == StatusMeaning.Working,
+                                $"STATUS-1: a {code} response still streaming means {cell.Meaning}, not Working.");
+                            Assert.Equal($"{code}, still streaming", cell.SpokenText);
+                            if (newLook)
+                            {
+                                var icon = (Path)cell.Template.FindName("Icon", cell);
+                                Assert.True(text.Text == "Streaming" && ((SolidColorBrush)text.Foreground).Color == Of("TextSecondaryBrush"),
+                                    $"STATUS-1: a {code} response still streaming shows \"{text.Text}\", not Streaming in secondary text.");
+                                Assert.True(icon.Visibility != Visibility.Visible,
+                                    $"STATUS-1: a {code} response still streaming has an icon.");
+                            }
+                            else
+                            {
+                                Assert.Equal(code, text.Text);
+                            }
+
+                            cell.IsStreaming = false;
+                            WpfTestHost.Pump();
+                            Assert.Equal(code, text.Text);
+                            Assert.Equal(StatusMeanings.OfHttpStatus(code), cell.Meaning);
+                            window.Content = null;
+                        }
                     }
                 }
                 finally

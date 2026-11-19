@@ -275,6 +275,13 @@
         </Style.Triggers>
     </Style>
 
+    <!-- The notice above a captured response, such as Still streaming: work under way, so it's secondary text
+         (StatusMeaning.Working). -->
+    <Style x:Key="ResponseNoticeTextStyle" TargetType="TextBlock" BasedOn="{StaticResource NoticeTextStyle}">
+        <Setter Property="Margin" Value="{DynamicResource HeadingBottomSpacing}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+    </Style>
+
     <Style x:Key="TimelineHeaderStyle" TargetType="Border">
         <Setter Property="MinHeight" Value="{DynamicResource ControlMinHeight}"/>
     </Style>

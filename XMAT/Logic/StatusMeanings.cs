@@ -22,6 +22,13 @@ namespace XMAT
         Problem,
     }
 
+    // Where a captured response is: still arriving, as a streamed response is until it ends, or complete.
+    public enum ResponseProgress
+    {
+        Complete,
+        Streaming,
+    }
+
     // The meaning of every state XMAT shows. A view takes a state's meaning from here rather than choosing a color, and
     // a state added without a meaning throws, so the design system tests catch it (STATUS-1).
     internal static class StatusMeanings
@@ -38,6 +45,15 @@ namespace XMAT
 
         // An HTTP status as the capture records it, such as "429".
         internal static StatusMeaning OfHttpStatus(string status) => Of(TrafficSummary.ClassOf(status));
+
+        // A captured response's progress. A response still streaming is work under way, whatever its status: its status
+        // cell says Streaming until it ends, and then shows its code.
+        internal static StatusMeaning Of(ResponseProgress progress) => progress switch
+        {
+            ResponseProgress.Complete => StatusMeaning.Routine,
+            ResponseProgress.Streaming => StatusMeaning.Working,
+            _ => throw Unmapped(progress),
+        };
 
         // A network trace's state.
         internal static StatusMeaning Of(DeviceStatusEnum state) => state switch

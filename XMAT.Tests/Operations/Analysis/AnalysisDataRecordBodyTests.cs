@@ -209,6 +209,36 @@ namespace XMAT.Tests.Operations.Analysis
                 second.BodyIdentity);
         }
 
+        // An import keeps a header value above U+00FF, such as U+010C (C with caron) read as UTF-8, but WebHeaderCollection
+        // checks each character's low byte and refuses it. The analysis leaves that line out of its header lookup instead
+        // of failing, and the stored request text keeps it.
+        [Fact]
+        public void ConverterAnalyzesARequestWithAHeaderLineAHeaderCollectionRefuses()
+        {
+            const string unicodeLine = "X-Display-Name: \u010Capek";
+            ProxyConnectionModel model = new(
+                42,
+                "200",
+                new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Utc),
+                TimeSpan.FromMilliseconds(25),
+                "https",
+                "example.com:443",
+                "POST",
+                "/path",
+                "POST /path HTTP/1.1\r\nHost: example.com\r\nUser-Agent: XboxServicesAPI\r\n" + unicodeLine + "\r\n\r\n",
+                Array.Empty<byte>(),
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Array.Empty<byte>(),
+                "10.0.0.1");
+
+            ServiceCallItem item = WebServiceCaptureRecordConverter.Convert(
+                AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, model));
+
+            Assert.NotNull(item);
+            Assert.Equal("example.com", item.Host);
+            Assert.Contains(unicodeLine, item.ReqHeader, StringComparison.Ordinal);
+        }
+
         private sealed class RawBodyRecord :
             IDataRecord,
             IRawBodyDataRecord

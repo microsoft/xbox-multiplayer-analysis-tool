@@ -34,6 +34,8 @@ namespace XMAT.DesignSystem
                 Enum.GetValues<ProxyConfigurationState>().Select(state => new StateView(state.ToString(), StatusMeanings.Of(state)))));
             StatesSection.Items.Add(Group("XMAT's web proxy",
                 Enum.GetValues<ProxyState>().Select(state => new StateView(state.ToString(), StatusMeanings.Of(state)))));
+            StatesSection.Items.Add(Group("A captured response",
+                Enum.GetValues<ResponseProgress>().Select(progress => new StateView(progress.ToString(), StatusMeanings.Of(progress)))));
             foreach (TrafficStatusClass status in Enum.GetValues<TrafficStatusClass>())
             {
                 ChartsSection.Items.Add(ChartExample(status));

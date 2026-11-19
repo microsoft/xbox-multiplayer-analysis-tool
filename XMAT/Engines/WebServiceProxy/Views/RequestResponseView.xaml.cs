@@ -143,6 +143,29 @@ namespace XMAT.WebServiceCapture
                 typeof(RequestResponseView),
                 new PropertyMetadata(false, OnPreviewInputChanged));
 
+        // A note about the captured message, such as a truncated capture; hidden when empty.
+        public string Notice
+        {
+            get => (string)GetValue(NoticeProperty);
+            set => SetValue(NoticeProperty, value);
+        }
+
+        public static readonly DependencyProperty NoticeProperty =
+            DependencyProperty.Register(nameof(Notice), typeof(string), typeof(RequestResponseView));
+
+        // Trailer lines that followed the body; their section is hidden when empty. The section takes the look's
+        // inspector text style, so its visibility is set here rather than by a style of its own.
+        public string Trailers
+        {
+            get => (string)GetValue(TrailersProperty);
+            set => SetValue(TrailersProperty, value);
+        }
+
+        public static readonly DependencyProperty TrailersProperty =
+            DependencyProperty.Register(nameof(Trailers), typeof(string), typeof(RequestResponseView),
+                new PropertyMetadata(null, (view, e) => ((RequestResponseView)view).TrailersText.Visibility =
+                    string.IsNullOrEmpty((string)e.NewValue) ? Visibility.Collapsed : Visibility.Visible));
+
         public RequestResponseView()
         {
             _preview = new BodyPreviewPipeline(this);
@@ -152,6 +175,7 @@ namespace XMAT.WebServiceCapture
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
             System.Windows.Automation.AutomationProperties.SetName(JsonTree, Localization.GetLocalizedString("A11Y_JSON_TREE"));
+            TrailersLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_TRAILERS");
 
             Loaded += (_, _) => StartPreviews();
             Unloaded += (_, _) => StopPreview();

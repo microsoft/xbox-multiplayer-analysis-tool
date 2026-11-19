@@ -73,6 +73,12 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
+        internal bool Contains(string key) => _headers.ContainsKey(key);
+
+        internal bool Remove(string key) => _headers.Remove(key);
+
+        internal int Count => _headers.Count;
+
         public override string ToString()
         {
             var sb = new StringBuilder();

@@ -18,6 +18,7 @@
         <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
         <app:HttpStatusMeaningConverter x:Key="statusMeaningConverter" />
         <local:ProcessDisplayConverter x:Key="processDisplayConverter" />
+        <local:ResponseCaptureNoticeConverter x:Key="responseCaptureNoticeConverter" />
         <!-- Filled for the right-clicked or focused row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
                      Background="{DynamicResource MenuBackgroundBrush}"
@@ -234,12 +235,13 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=20}"/>
                 <!-- The status's meaning sets how it shows (app:StatusText): the new look colors a problem's or a
-                     warning's status cell and washes its row, and the original look colors the whole row's text, below. -->
+                     warning's status cell and washes its row, and says Streaming while a response is still arriving;
+                     the original look colors the whole row's text, below. -->
                 <DataGridTemplateColumn Header="STATUS" SortMemberPath="Status" ClipboardContentBinding="{Binding Status}"
                                         Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=20}">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <app:StatusText Status="{Binding Status}"/>
+                            <app:StatusText Status="{Binding Status}" IsStreaming="{Binding IsResponseStreaming}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
@@ -302,6 +304,15 @@
                                 <Condition Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True"/>
                             </MultiDataTrigger.Conditions>
                             <Setter Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
+                        </MultiDataTrigger>
+                        <!-- The original look shows a response still streaming as pending; the new look's status cell says
+                             Streaming instead (Working). -->
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="False"/>
+                                <Condition Binding="{Binding IsResponseStreaming}" Value="True"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
                         </MultiDataTrigger>
                     </Style.Triggers>
                 </Style>
@@ -374,7 +385,14 @@
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyIsDecoded="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay}"
-                                               />
+                                               Trailers="{Binding SelectedItem.ResponseTrailers, ElementName=ConnectionList, Mode=OneWay}">
+                        <local:RequestResponseView.Notice>
+                            <MultiBinding Converter="{StaticResource responseCaptureNoticeConverter}" Mode="OneWay">
+                                <Binding Path="SelectedItem.IsResponseStreaming" ElementName="ConnectionList" Mode="OneWay"/>
+                                <Binding Path="SelectedItem.ResponseBodyTruncatedAt" ElementName="ConnectionList" Mode="OneWay"/>
+                            </MultiBinding>
+                        </local:RequestResponseView.Notice>
+                    </local:RequestResponseView>
 
                     <!-- The original look shows the request details over the top right of the request view. -->
                     <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch"

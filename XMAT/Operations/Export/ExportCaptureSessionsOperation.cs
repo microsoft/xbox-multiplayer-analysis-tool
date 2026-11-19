@@ -264,6 +264,7 @@ namespace XMAT.Operations.Export
                 IReadOnlyDictionary<string, CaptureExportCounts> completedDevices =
                     CompletedDevices(selected.Devices, sessionByKey, selected.Keys, unavailableByDevice);
                 AddUnavailableDiagnostic(diagnostics, unavailable);
+                AddHeaderProvenanceDiagnostic(diagnostics, writeSummary.Sanitization);
                 result = result with
                 {
                     Counts = completedCounts,
@@ -291,7 +292,12 @@ namespace XMAT.Operations.Export
             catch (CaptureExportCleanupException exception)
             {
                 AddUnavailableDiagnostic(diagnostics, unavailable);
-                result = exception.Publication != null && selected != null
+                bool publishedBeforeCleanup = exception.Publication != null && selected != null;
+                if (publishedBeforeCleanup)
+                {
+                    AddHeaderProvenanceDiagnostic(diagnostics, writeSummary?.Sanitization);
+                }
+                result = publishedBeforeCleanup
                     ? result with
                     {
                         Counts = CompletedCounts(selected.Counts, exported, unavailable),
@@ -500,6 +506,23 @@ namespace XMAT.Operations.Export
                     "export.rows.unavailable",
                     OperationDiagnosticSeverity.Warning,
                     "One or more selected capture rows became unavailable."));
+            }
+        }
+
+        // Once per published sanitized archive that holds sessions whose header history is unknown, with how many it holds.
+        // It doesn't fail the export: those sessions were inspected as stored.
+        private static void AddHeaderProvenanceDiagnostic(
+            ICollection<OperationDiagnostic> diagnostics,
+            SanitizedExportSummary sanitization)
+        {
+            int unknown = sanitization?.UnknownHeaderProvenanceSessions ?? 0;
+            if (unknown != 0 &&
+                !diagnostics.Any(diagnostic => diagnostic.Code == CaptureExportWarningCodes.HeaderProvenanceUnknown))
+            {
+                diagnostics.Add(new OperationDiagnostic(
+                    CaptureExportWarningCodes.HeaderProvenanceUnknown,
+                    OperationDiagnosticSeverity.Warning,
+                    CaptureExportWarningCodes.HeaderProvenanceUnknownMessage(unknown)));
             }
         }
 

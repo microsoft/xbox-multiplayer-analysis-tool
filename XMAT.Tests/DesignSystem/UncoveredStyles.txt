@@ -7,7 +7,6 @@ Looks/NewLook.xaml: FilterLabelStyle
 Looks/NewLook.xaml: InspectorTreeViewStyle
 Looks/NewLook.xaml: MainStatusBarStyle
 Looks/NewLook.xaml: MessageGridHeaderStyle
-Looks/NewLook.xaml: NoticeTextStyle
 Looks/NewLook.xaml: PacketGridHeaderStyle
 Looks/NewLook.xaml: PaneSplitterStyle
 Looks/NewLook.xaml: PaneTitleStyle

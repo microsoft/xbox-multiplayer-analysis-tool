@@ -54,6 +54,12 @@
                                    Style="{x:Static DataGridTextColumn.DefaultElementStyle}"/>
                     </StackPanel>
                     <ControlTemplate.Triggers>
+                        <!-- A response still streaming is work under way: the word, in secondary text, instead of the
+                             code, which shows when the response ends. -->
+                        <Trigger Property="Meaning" Value="Working">
+                            <Setter TargetName="Code" Property="Text" Value="{x:Static local:StatusText.StreamingText}"/>
+                            <Setter TargetName="Code" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                        </Trigger>
                         <Trigger Property="Meaning" Value="Attention">
                             <Setter TargetName="Icon" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="Icon" Property="Data" Value="{StaticResource AttentionIconGeometry}"/>

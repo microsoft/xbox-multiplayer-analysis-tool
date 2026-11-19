@@ -60,6 +60,9 @@
             <ds:StoryExample Caption="Working">
                 <TextBlock Text="Downloading trace…" Foreground="{DynamicResource TextSecondaryBrush}"/>
             </ds:StoryExample>
+            <ds:StoryExample Caption="Working, in a table: a response still streaming">
+                <app:StatusText Status="200" IsStreaming="True"/>
+            </ds:StoryExample>
             <ds:StoryExample Caption="Routine">
                 <app:StatusText Status="200"/>
             </ds:StoryExample>
