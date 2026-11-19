@@ -101,8 +101,8 @@ namespace XMAT.DesignSystem
                 "NewCaptureWindowTests.TheAddressField_ShowsBeforeItsCardIsChosen_AndUsingItChoosesTheCard"),
 
             new DesignRule("INPUT-1", RuleLevel.Must, "Text boxes and dropdowns",
-                "A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row does. A dropdown that filters looks like a checked toggle and keeps its name, and the filter row says what each filter shows, beside Clear filters, which turns every filter off.",
-                "People see what a list hides without opening each filter, and get every row back in one step, while the row keeps its layout as filters change. A check box beside the dropdown left them wondering what the check boxes in it were for.",
+                "A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row does. A dropdown that filters looks like a checked toggle, keeps its name and names the values it shows in its tooltip. The filter row stays one line, with Clear filters in it, which turns every filter off and is available while any filter is on.",
+                "People see which filters are on at a glance and get every row back in one step, while the row keeps its line and layout as filters change. A check box beside the dropdown left them wondering what the check boxes in it were for, and a second line for what the filters show looked broken.",
                 "CaptureConnectionViewTests.Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest"),
 
             new DesignRule("DIALOG-1", RuleLevel.Must, "Dialogs",

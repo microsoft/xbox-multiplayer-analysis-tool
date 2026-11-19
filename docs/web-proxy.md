@@ -177,21 +177,24 @@ exports what the search shows.
 Use the **Status**, **Host** and **Method** lists to filter by status code, host, or
 method. Each lists the values found in the capture. With **New look** on, pick the
 values to show: only requests with a picked value show, and with none picked (**All**),
-every request shows. A list that filters looks pressed, and the line under the filters
-says what each one shows, such as **Status: 404, 503**; a value that first appears
-while a list filters stays hidden. **Clear filters**, on that line while anything
-filters the list, turns every filter off and empties the search. With **New look** off,
-check the box beside a list to turn its filter on; only checked values show, and **\***
-checks or clears every value. Filters combine and update as traffic arrives.
+every request shows. A list that filters looks pressed, and its tooltip says what it
+shows, such as **Status: 404, 503**; a value that first appears while a list filters
+stays hidden. **Clear filters**, between the lists and **Process**, turns every filter
+off and empties the search; it is available while anything filters the list. With
+**New look** off, check the box beside a list to turn its filter on; only checked
+values show, and **\*** checks or clears every value. Filters combine and update as
+traffic arrives.
 In the list, a 5xx status shows in red with a cross and a 4xx status in amber with a
 warning sign, and its row takes a faint wash of that color. **#** and **Status** stay in
 place when the list scrolls sideways. With **New look** off, rows with status codes of
 400 or higher are colored red.
 
-When the traffic pane is too narrow for the filters, the new look folds them into a
-**Filters** button with a funnel icon. The button opens a list of the same filters, and
-a dot on it shows that a filter is on. The filters return to their row when it is wide
-enough again. A process filter's summary stays in view on its line under the button.
+When the traffic pane is too narrow for the filters, the new look first shows
+**Clear filters** as its icon alone, a funnel with a cross, and then folds the filters
+into a **Filters** button with a funnel icon. The button opens a list of the same filters, and
+a dot on it shows that a filter is on. The list ends with **Clear filters** and
+**Process**. The filters return to their row when it is wide enough again. A process
+filter's summary stays in view on its line under the button.
 
 ![Filtering connections by host](../ReadmeImages/9.png)
 

@@ -241,6 +241,40 @@
         </Setter>
     </Style>
 
+    <!-- Clear filters, in a filter row: its name while the row has room, and only its icon, a funnel with a cross, while
+         the row is tight (FilterOverflowHost.IsCompact), before the row folds into its Filters button. Its tooltip names it
+         while it shows only the icon. Dimmed while nothing is filtered. -->
+    <Style x:Key="ClearFiltersButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Height" Value="{DynamicResource ControlHeight}"/>
+        <Setter Property="Padding" Value="12,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+        <Setter Property="Content" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+        <Setter Property="AutomationProperties.Name" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+        <Style.Triggers>
+            <Trigger Property="local:FilterOverflowHost.IsCompact" Value="True">
+                <Setter Property="Width" Value="28"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="ToolTip" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+                <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+                <Setter Property="ContentTemplate">
+                    <Setter.Value>
+                        <DataTemplate>
+                            <Grid Width="26" Height="26">
+                                <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                                <TextBlock Text="&#xE894;" FontFamily="Segoe MDL2 Assets" FontSize="8" Margin="0,0,4,5"
+                                           HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- The popup of a folded filter row is a dropdown surface; its filters stand one above another, 8px apart. -->
     <Style x:Key="FilterOverflowPopupStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>

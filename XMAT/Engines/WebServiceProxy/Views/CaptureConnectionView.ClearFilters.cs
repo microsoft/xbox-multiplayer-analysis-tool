@@ -9,8 +9,9 @@ using XMAT.Operations.Processes;
 
 namespace XMAT.WebServiceCapture
 {
-    // The new look's Clear filters, at the end of the filter row while anything filters the table: the Status, Host and
-    // Method filters, the process filter or the search. It shows every request again.
+    // The new look's Clear filters, in the filter row between the dropdowns and Process. It is available while anything
+    // filters the table: the Status, Host and Method filters, the process filter or the search, and shows every request
+    // again.
     public partial class CaptureConnectionView
     {
         // What the Status filter calls a request without a status.
@@ -23,20 +24,10 @@ namespace XMAT.WebServiceCapture
 
         private void UpdateClearFilters()
         {
-            if (ClearFiltersButton == null)
+            if (ClearFiltersButton != null)
             {
-                return;
+                ClearFiltersButton.IsEnabled = LookState.Current.IsNewLook && IsAnythingFiltered;
             }
-
-            bool newLook = LookState.Current.IsNewLook;
-            ClearFiltersButton.Visibility = newLook && IsAnythingFiltered ? Visibility.Visible : Visibility.Collapsed;
-            string values = newLook
-                ? string.Join(" · ", new[] { StatusFilters, HostFilters, MethodFilters }
-                    .Where(filter => filter is { HasPicks: true })
-                    .Select(filter => filter.Summary))
-                : string.Empty;
-            FilterValuesText.Text = values;
-            FilterValuesText.Visibility = values.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void ClearFilters_Click(object sender, RoutedEventArgs e) => ClearFilters();

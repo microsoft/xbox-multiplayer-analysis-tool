@@ -138,10 +138,17 @@
                                          BlankText="{x:Static local:CaptureConnectionView.NoStatusText}"/>
                     <app:CheckBoxFilters x:Name="HostFilters"   Grid.Column="2" FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
                     <app:CheckBoxFilters x:Name="MethodFilters" Grid.Column="3" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
+                    <!-- The new look's Clear filters sits in the row, between the dropdowns and Process, so the row keeps one
+                         line and its layout as filters change. It is there whenever the row is, available while anything
+                         filters the table, the search included, and shows only its icon while the row is tight. Each
+                         dropdown names the values it shows in its tooltip. -->
+                    <Button x:Name="ClearFiltersButton" Grid.Column="4" Style="{DynamicResource ClearFiltersButtonStyle}"
+                            Margin="0,0,8,0" IsEnabled="False" Visibility="{app:Look New=Visible, Original=Collapsed}"
+                            app:FilterOverflowHost.Compacts="True" Click="ClearFilters_Click"/>
                     <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
-                    <ToggleButton x:Name="ProcessFilterButton" Grid.Column="4" Style="{DynamicResource FilterToggleButtonStyle}" HorizontalAlignment="Left"
+                    <ToggleButton x:Name="ProcessFilterButton" Grid.Column="5" Style="{DynamicResource FilterToggleButtonStyle}" HorizontalAlignment="Left"
                                   IsChecked="{Binding IsOpen, ElementName=ProcessFilterPopup, Mode=TwoWay}" Content="Process"/>
-                    <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
+                    <Popup x:Name="ProcessFilterPopup" Grid.Column="5" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
                            StaysOpen="False" AllowsTransparency="False">
                         <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
                         <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
@@ -165,21 +172,13 @@
                             </StackPanel>
                         </Border>
                     </Popup>
-                    <!-- The new look's line under the filters: what the Status, Host and Method filters show, then the process
-                         filter's summary and Show all, and Clear filters. -->
-                    <TextBlock x:Name="FilterValuesText" Grid.Column="5" VerticalAlignment="Center" Margin="0,0,12,0" Visibility="Collapsed"
+                    <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters,
+                         while a process filter is on. -->
+                    <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="6" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
                                Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
-                    <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters. -->
-                    <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="5" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
-                               Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
-                    <Button x:Name="ShowAllProcessesButton" Grid.Column="6" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
+                    <Button x:Name="ShowAllProcessesButton" Grid.Column="7" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
                             Margin="{app:Look New='0,0,8,0', Original='0'}"
                             HorizontalAlignment="Left" app:FilterOverflowHost.IsSummary="True" Click="ShowAllProcesses_Click">Show all processes</Button>
-                    <!-- The new look's Clear filters shows while anything filters the table, the search included. It sits on
-                         the summaries' line under the row, so it never folds the row and stays in view when the row folds. -->
-                    <Button x:Name="ClearFiltersButton" Grid.Column="7" Height="24" Padding="12,0"
-                            VerticalAlignment="Center" HorizontalAlignment="Left" Visibility="Collapsed" Click="ClearFilters_Click"
-                            app:FilterOverflowHost.IsSummary="True" Content="{x:Static app:CheckBoxFilters.ClearFiltersText}"/>
                 </Grid>
             </app:FilterOverflowHost>
         </app:SearchFilterRow>

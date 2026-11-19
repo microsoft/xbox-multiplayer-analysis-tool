@@ -20,12 +20,13 @@ using System.Windows.Threading;
 namespace XMAT
 {
     // Shows a row of filters, the children of Filters, while the row has room for them at their natural widths. When it
+    // doesn't, children marked Compacts, such as Clear filters, take their narrower form first (IsCompact); when it still
     // doesn't, a Filters button takes the row's place. The button opens a popup that lists the same filters one above
-    // another, and they return to the row when the popup closes, so each filter keeps its state, bindings and name.
+    // another, in full, and they return to the row when the popup closes, so each filter keeps its state, bindings and name.
     // Children marked IsInlineOnly, such as the row's label, stay in the row. Children marked IsSummary, such as a
     // filter's summary and the button that clears it, sit on a line of their own under the row or the Filters button:
     // they never fold, never count toward folding and never join the popup. While IsOverflowEnabled is false the row
-    // never folds and keeps its summaries.
+    // never folds or compacts and keeps its summaries.
     [ContentProperty(nameof(Filters))]
     public sealed class FilterOverflowHost : FrameworkElement
     {
@@ -57,11 +58,24 @@ namespace XMAT
         public static readonly DependencyProperty IsSummaryProperty = DependencyProperty.RegisterAttached(
             "IsSummary", typeof(bool), typeof(FilterOverflowHost), new FrameworkPropertyMetadata(false));
 
+        public static readonly DependencyProperty CompactsProperty = DependencyProperty.RegisterAttached(
+            "Compacts", typeof(bool), typeof(FilterOverflowHost), new FrameworkPropertyMetadata(false));
+
+        // Set on the row while its compacting children show their narrower form, and inherited, so their styles switch
+        // on it. A filter lent to the popup inherits the popup's value, false, so the popup shows it in full.
+        public static readonly DependencyProperty IsCompactProperty = DependencyProperty.RegisterAttached(
+            "IsCompact", typeof(bool), typeof(FilterOverflowHost),
+            new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.Inherits));
+
         private readonly FilterOverflowButton _button;
         private readonly Popup _popup;
         private readonly Border _surface;
         private readonly FilterOverflowList _list;
         private readonly WrapPanel _summaryLine = new();
+
+        // The width that each compacting child last had in full, which says how wide the row would be in full while it
+        // is compact.
+        private readonly Dictionary<UIElement, double> _fullWidths = new();
 
         // The filters that the open popup lists, in row order, with the place in the row that each returns to.
         private readonly List<(UIElement Child, int Index)> _lent = new();
@@ -168,6 +182,14 @@ namespace XMAT
 
         public static void SetIsSummary(DependencyObject element, bool value) => element.SetValue(IsSummaryProperty, value);
 
+        public static bool GetCompacts(DependencyObject element) => (bool)element.GetValue(CompactsProperty);
+
+        public static void SetCompacts(DependencyObject element, bool value) => element.SetValue(CompactsProperty, value);
+
+        public static bool GetIsCompact(DependencyObject element) => (bool)element.GetValue(IsCompactProperty);
+
+        public static void SetIsCompact(DependencyObject element, bool value) => element.SetValue(IsCompactProperty, value);
+
         protected override Visual GetVisualChild(int index)
         {
             Panel filters = Filters;
@@ -207,7 +229,7 @@ namespace XMAT
                 // While the open popup lists the filters, the row stays folded.
                 if (_lent.Count == 0)
                 {
-                    SetIsOverflowing(IsOverflowEnabled && filters.DesiredSize.Width > availableSize.Width + Epsilon);
+                    FitRow(filters, availableSize.Width, rowSize.Height);
                 }
             }
 
@@ -234,9 +256,11 @@ namespace XMAT
             var host = (FilterOverflowHost)d;
             host._button.SetCurrentValue(ToggleButton.IsCheckedProperty, false);
             host.ReturnSummaries();
+            host._fullWidths.Clear();
             if (e.OldValue is Panel old)
             {
                 old.SetCurrentValue(VisibilityProperty, Visibility.Visible);
+                old.ClearValue(IsCompactProperty);
                 host.RemoveVisualChild(old);
                 host.RemoveLogicalChild(old);
             }
@@ -312,6 +336,43 @@ namespace XMAT
 
             return false;
         }
+
+        // Lays the row out in full when it fits, compact when only that fits, and folds it when neither does. While the row
+        // is compact, its width in full is its width now plus what each compacting child gave up, from the width it last
+        // had in full. Each change is measured at once, so the row settles in one pass.
+        private void FitRow(Panel filters, double room, double height)
+        {
+            var unbounded = new Size(double.PositiveInfinity, height);
+            bool canFold = IsOverflowEnabled;
+            if (GetIsCompact(filters) && (!canFold || FullWidth(filters) <= room + Epsilon))
+            {
+                filters.SetValue(IsCompactProperty, false);
+                filters.Measure(unbounded);
+            }
+
+            if (!GetIsCompact(filters))
+            {
+                foreach (UIElement child in CompactingChildren(filters))
+                {
+                    _fullWidths[child] = child.DesiredSize.Width;
+                }
+
+                if (canFold && filters.DesiredSize.Width > room + Epsilon && CompactingChildren(filters).Any())
+                {
+                    filters.SetValue(IsCompactProperty, true);
+                    filters.Measure(unbounded);
+                }
+            }
+
+            SetIsOverflowing(canFold && filters.DesiredSize.Width > room + Epsilon);
+        }
+
+        private static IEnumerable<UIElement> CompactingChildren(Panel filters) =>
+            filters.Children.OfType<UIElement>().Where(child => GetCompacts(child) && child.Visibility != Visibility.Collapsed);
+
+        private double FullWidth(Panel filters) =>
+            filters.DesiredSize.Width + CompactingChildren(filters).Sum(child =>
+                _fullWidths.TryGetValue(child, out double full) ? Math.Max(0, full - child.DesiredSize.Width) : 0);
 
         private void SetIsOverflowing(bool overflowing)
         {

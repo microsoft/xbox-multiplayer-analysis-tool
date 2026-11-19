@@ -878,6 +878,11 @@
         <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
+    <!-- The original look has no Clear filters; the button is collapsed there. -->
+    <Style x:Key="ClearFiltersButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Content" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+    </Style>
+
     <Style x:Key="PaneSplitterStyle" TargetType="GridSplitter" BasedOn="{StaticResource {x:Type GridSplitter}}"/>
 
     <Style x:Key="ColumnSplitterStyle" TargetType="GridSplitter" BasedOn="{StaticResource {x:Type GridSplitter}}"/>

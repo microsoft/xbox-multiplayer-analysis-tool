@@ -533,7 +533,7 @@ namespace XMAT.Tests
                 Assert.All(filters, filter => Assert.False(filter.IsVisible));
 
                 // The popup lists the filters themselves, in row order, 8px apart inside 12px of padding: the dropdowns as
-                // wide as the list, the Process button at its own width.
+                // wide as the list, Clear filters and the Process button at their own widths.
                 window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources("FilterOverflowPopupStyle"));
                 button.IsChecked = true;
                 WpfTestHost.Pump();
@@ -560,8 +560,12 @@ namespace XMAT.Tests
                     var dropdown = (UIElement)((CheckBoxFilters)filter).FindName("FilterList");
                     Assert.InRange(Bounds(dropdown, list).Right - list.ActualWidth, -0.5, 0.5);
                 });
-                Assert.InRange(Bounds(filters[3], list).Width - filters[3].DesiredSize.Width, -0.5, 0.5);
-                Assert.True(Bounds(filters[3], list).Width < list.ActualWidth / 2);
+                Assert.All(filters.Skip(3), filter =>
+                {
+                    Thickness margin = ((FrameworkElement)filter).Margin;
+                    Assert.InRange(Bounds(filter, list).Width - (filter.DesiredSize.Width - margin.Left - margin.Right), -0.5, 0.5);
+                    Assert.True(Bounds(filter, list).Width < list.ActualWidth / 2);
+                });
 
                 button.IsChecked = false;
                 WpfTestHost.Pump();
@@ -588,7 +592,7 @@ namespace XMAT.Tests
                     Assert.False(button.IsVisible);
                     Assert.All(filters, filter => Assert.Same(row, VisualTreeHelper.GetParent(filter)));
                     Assert.Same(row, VisualTreeHelper.GetParent(indicator));
-                    Assert.Equal(5, Grid.GetColumn(indicator));
+                    Assert.Equal(6, Grid.GetColumn(indicator));
                     Assert.True(filters[0].IsVisible);
                 }
                 finally
@@ -649,6 +653,57 @@ namespace XMAT.Tests
             });
         }
 
+        // In a tight traffic pane, Clear filters shows only its icon, 28 square and named in its tooltip, so the row keeps
+        // every filter rather than folding. Narrower still, the row folds, and the popup lists Clear filters in full. Wide
+        // again, Clear filters shows its name.
+        [Fact]
+        public void ATightFilterRow_ShowsClearFiltersAsItsIcon_BeforeItFolds()
+        {
+            _application.Run(window =>
+            {
+                var view = View(Controller());
+                ShowAt(window, view, 1600);
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
+                var clear = (Button)view.FindName("ClearFiltersButton");
+                var process = (UIElement)view.FindName("ProcessFilterButton");
+                string name = Localization.GetLocalizedString("FILTERS_CLEAR");
+                Assert.False(host.IsOverflowing);
+                Assert.False(FilterOverflowHost.GetIsCompact(clear));
+                Assert.Equal(name, clear.Content);
+                Assert.True(clear.ActualWidth > 28);
+                Assert.Null(clear.ToolTip);
+
+                window.Width = 1280;
+                WpfTestHost.Pump();
+                Assert.False(host.IsOverflowing);
+                Assert.True(FilterOverflowHost.GetIsCompact(clear));
+                Assert.True(clear.IsVisible);
+                Assert.Equal(28, clear.ActualWidth, 1);
+                Assert.Equal(name, clear.ToolTip);
+                Assert.Equal(name, AutomationProperties.GetName(clear));
+                Assert.True(Bounds(clear, host).Right <= Bounds(process, host).Left);
+                Assert.True(Bounds(process, host).Right <= host.ActualWidth + 0.5);
+
+                window.Width = 700;
+                WpfTestHost.Pump();
+                Assert.True(host.IsOverflowing);
+                window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources("FilterOverflowPopupStyle"));
+                host.OverflowButton.IsChecked = true;
+                WpfTestHost.Pump();
+                Assert.True(host.OverflowPopup.Child.IsAncestorOf(clear));
+                Assert.False(FilterOverflowHost.GetIsCompact(clear));
+                Assert.True(clear.ActualWidth > 28);
+                host.OverflowButton.IsChecked = false;
+                WpfTestHost.Pump();
+
+                window.Width = 1600;
+                WpfTestHost.Pump();
+                Assert.False(host.IsOverflowing);
+                Assert.False(FilterOverflowHost.GetIsCompact(clear));
+                Assert.True(clear.ActualWidth > 28);
+            });
+        }
+
         [Fact]
         public void FoldedFilters_MarkTheFiltersButtonWhileAnyFilterIsOn()
         {
@@ -673,28 +728,27 @@ namespace XMAT.Tests
                 Assert.Equal("Filters (2 active)", AutomationProperties.GetName(button));
                 Assert.Equal(AutomationProperties.GetName(button), button.ToolTip);
 
-                // The process filter's summary, Show all processes and Clear filters stay in view on their line under the
-                // Filters button, 4px below it, and the popup doesn't repeat them. A pane this narrow wraps Show all under
-                // the summary, and Clear filters under Show all, rather than cutting any short.
+                // The process filter's summary and Show all processes stay in view on their line under the Filters button,
+                // 4px below it, and the popup doesn't repeat them. A pane this narrow wraps Show all under the summary
+                // rather than cutting either short. Clear filters folds with the row, and the popup lists it.
                 var indicator = (TextBlock)view.FindName("ProcessFilterIndicator");
                 var showAll = (Button)view.FindName("ShowAllProcessesButton");
                 var clear = (Button)view.FindName("ClearFiltersButton");
                 Assert.True(indicator.IsVisible);
                 Assert.True(showAll.IsVisible);
-                Assert.True(clear.IsVisible);
+                Assert.False(clear.IsVisible);
                 Assert.InRange(Bounds(indicator, host).Left - Bounds(button, host).Left, -0.5, 0.5);
                 Assert.InRange(Bounds(indicator, host).Top - Bounds(button, host).Bottom, 3.5, 4.5);
                 Assert.InRange(Bounds(showAll, host).Left - Bounds(indicator, host).Left, -0.5, 0.5);
                 Assert.InRange(Bounds(showAll, host).Top - Bounds(indicator, host).Bottom, -0.5, 0.5);
-                Assert.InRange(Bounds(clear, host).Left - Bounds(indicator, host).Left, -0.5, 0.5);
-                Assert.InRange(Bounds(clear, host).Top - Bounds(showAll, host).Bottom, -0.5, 0.5);
-                Assert.InRange(Bounds(clear, host).Bottom - host.ActualHeight, -0.5, 0.5);
+                Assert.InRange(Bounds(showAll, host).Bottom - host.ActualHeight, -0.5, 0.5);
                 button.IsChecked = true;
                 WpfTestHost.Pump();
                 Assert.True(host.OverflowPopup.IsOpen);
                 Assert.False(host.OverflowPopup.Child.IsAncestorOf(indicator));
                 Assert.False(host.OverflowPopup.Child.IsAncestorOf(showAll));
-                Assert.False(host.OverflowPopup.Child.IsAncestorOf(clear));
+                Assert.True(host.OverflowPopup.Child.IsAncestorOf(clear));
+                Assert.True(clear.IsEnabled);
                 Assert.True(indicator.IsVisible);
                 button.IsChecked = false;
                 WpfTestHost.Pump();
@@ -862,9 +916,10 @@ namespace XMAT.Tests
         }
 
         // In the new look the dropdown is the filter, without a check box beside it: picking values shows only those, and
-        // with none picked, All is, and every request shows. The dropdown says what it shows. A value that appears while
-        // the filter is on wasn't picked, so its requests stay hidden. Clear filters, there while anything filters, turns
-        // off the dropdowns, the process filter and the search.
+        // with none picked, All is, and every request shows. The dropdown keeps its name and says what it shows in its
+        // tooltip. A value that appears while the filter is on wasn't picked, so its requests stay hidden. Clear filters
+        // sits in the row, between Method and Process, so the row keeps one line; it is available while anything filters,
+        // and turns off the dropdowns, the process filter and the search.
         [Fact]
         public void Filters_ShowOnlyThePickedValues_AndClearFiltersShowsEveryRequest()
         {
@@ -881,30 +936,47 @@ namespace XMAT.Tests
                 ShowAt(window, view, 1600);
                 var status = (CheckBoxFilters)view.FindName("StatusFilters");
                 var hosts = (CheckBoxFilters)view.FindName("HostFilters");
+                var methods = (CheckBoxFilters)view.FindName("MethodFilters");
+                var process = (ToggleButton)view.FindName("ProcessFilterButton");
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
                 var grid = (DataGrid)view.FindName("ConnectionList");
                 var clear = (Button)view.FindName("ClearFiltersButton");
+                var statusList = (ComboBox)status.FindName("FilterList");
                 string[] Shown() => grid.Items.OfType<ProxyConnectionModel>().Select(row => row.Status).OrderBy(s => s).ToArray();
+                double rowHeight = host.ActualHeight;
+                void AssertOneLine(string when)
+                {
+                    Assert.True(clear.IsVisible, $"INPUT-1: Clear filters isn't in the filter row {when}.");
+                    Rect bounds = Bounds(clear, host);
+                    Assert.True(Bounds(methods, host).Right <= bounds.Left + 0.5 && bounds.Right <= Bounds(process, host).Left + 0.5,
+                        $"INPUT-1: Clear filters isn't between Method and Process {when}.");
+                    Assert.True(Math.Abs(host.ActualHeight - rowHeight) < 0.5,
+                        $"INPUT-1: the filter row is {host.ActualHeight:0} tall {when}, not one line of {rowHeight:0}.");
+                }
+
                 Assert.False(((CheckBox)status.FindName("EnableFilters")).IsVisible, "INPUT-1: a check box sits beside the Status dropdown.");
-                Assert.False(clear.IsVisible, "INPUT-1: Clear filters shows while nothing filters.");
+                AssertOneLine("while nothing filters");
+                Assert.False(clear.IsEnabled, "INPUT-1: Clear filters is available while nothing filters.");
                 Assert.Equal("Status", status.Summary);
+                Assert.Null(statusList.ToolTip);
                 Assert.True(PickBox(status, "*").IsChecked, "INPUT-1: All isn't picked while nothing is.");
                 Assert.Equal("All", PickBox(status, "*").Content);
 
                 Toggle(PickBox(status, "503"));
                 Assert.True(status.IsFilterEnabled, "INPUT-1: picking 503 doesn't turn the Status filter on.");
                 Assert.True(Shown().SequenceEqual(new[] { "503" }), "INPUT-1: picking 503 doesn't show only 503.");
-                var values = (TextBlock)view.FindName("FilterValuesText");
-                Assert.True(values.IsVisible && values.Text == "Status: 503", $"INPUT-1: the filter row says \"{values.Text}\", not what Status shows.");
-                Assert.True(((ComboBox)status.FindName("FilterList")).Text == "Status", "INPUT-1: the Status dropdown doesn't keep its name.");
+                Assert.True(Equals(statusList.ToolTip, "Status: 503"), $"INPUT-1: the Status dropdown's tooltip says \"{statusList.ToolTip}\", not what it shows.");
+                Assert.True(statusList.Text == "Status", "INPUT-1: the Status dropdown doesn't keep its name.");
                 Assert.Equal("Status: 503", status.Summary);
                 Assert.False(PickBox(status, "*").IsChecked);
                 Assert.True(PickBox(status, "503").IsChecked);
                 Assert.False(PickBox(status, "200").IsChecked);
-                Assert.True(clear.IsVisible, "INPUT-1: Clear filters doesn't show while a filter is on.");
+                Assert.True(clear.IsEnabled, "INPUT-1: Clear filters isn't available while a filter is on.");
+                AssertOneLine("while a filter is on");
 
                 Toggle(PickBox(status, "404"));
                 Assert.Equal(new[] { "404", "503" }, Shown());
-                Assert.Equal("Status: 404, 503", values.Text);
+                Assert.Equal("Status: 404, 503", statusList.ToolTip);
 
                 controller.ProxyConnections.Add(CaptureTimelineTestData.Create(4, host: "d.example.test", status: "500"));
                 WpfTestHost.Pump();
@@ -917,12 +989,13 @@ namespace XMAT.Tests
                 Assert.Equal(new[] { "200", "404", "500", "503" }, Shown());
                 Assert.Equal("Status", status.Summary);
                 Assert.True(PickBox(status, "*").IsChecked);
-                Assert.False(clear.IsVisible);
+                Assert.False(clear.IsEnabled);
 
                 Toggle(PickBox(status, "200"));
                 Toggle(PickBox(hosts, "b.example.test"));
                 Assert.Empty(Shown());
-                Assert.Equal("Status: 200 · Host: b.example.test", values.Text);
+                Assert.Equal("Host: b.example.test", ((ComboBox)hosts.FindName("FilterList")).ToolTip);
+                AssertOneLine("while two filters are on");
                 var search = (SearchBox)view.FindName("SearchBox");
                 search.Text = "example";
                 view.ApplySearch();
@@ -934,7 +1007,18 @@ namespace XMAT.Tests
                 Assert.Equal(string.Empty, search.Text);
                 Assert.True(ProcessFilter.IsEmpty(controller.ProcessFilter));
                 Assert.Equal(4, grid.Items.Count);
-                Assert.False(clear.IsVisible);
+                Assert.False(clear.IsEnabled);
+                AssertOneLine("once the filters are cleared");
+
+                // The search alone makes Clear filters available.
+                search.Text = "a.example";
+                view.ApplySearch();
+                WpfTestHost.Pump();
+                Assert.True(clear.IsEnabled, "INPUT-1: Clear filters isn't available while the search filters.");
+                clear.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                WpfTestHost.Pump();
+                Assert.Equal(string.Empty, search.Text);
+                Assert.False(clear.IsEnabled);
 
                 // A new list holds new values, so the values picked before don't carry over: the filter turns off.
                 Toggle(PickBox(status, "404"));
@@ -1156,7 +1240,7 @@ namespace XMAT.Tests
 
         // The filters that fold into the Filters button, in row order.
         private static UIElement[] Filters(CaptureConnectionView view) =>
-            new[] { "StatusFilters", "HostFilters", "MethodFilters", "ProcessFilterButton" }
+            new[] { "StatusFilters", "HostFilters", "MethodFilters", "ClearFiltersButton", "ProcessFilterButton" }
                 .Select(name => (UIElement)view.FindName(name)).ToArray();
 
         private static double Middle(UIElement element, Visual ancestor) =>

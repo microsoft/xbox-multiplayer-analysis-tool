@@ -260,19 +260,9 @@ namespace NetworkTraceCaptureControls
 
         private CheckBoxFilters[] AllFilters() => new[] { PidFilters, TidFilters, ProtocolFilters, SourceIpFilters, DestIpFilters };
 
-        // The new look says what the filters show, and offers Clear filters, while any filter is on.
-        private void UpdateClearFilters()
-        {
-            bool newLook = LookState.Current.IsNewLook;
-            string values = newLook
-                ? string.Join(" · ", AllFilters().Where(filter => filter.HasPicks).Select(filter => filter.Summary))
-                : string.Empty;
-            FilterValuesText.Text = values;
-            FilterValuesText.Visibility = values.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-            ClearFiltersButton.Visibility = newLook && AllFilters().Any(filter => filter.IsFilterEnabled)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
+        // The new look's Clear filters is available while any filter is on.
+        private void UpdateClearFilters() =>
+            ClearFiltersButton.IsEnabled = LookState.Current.IsNewLook && AllFilters().Any(filter => filter.IsFilterEnabled);
 
         private void LookState_Changed(object sender, PropertyChangedEventArgs e) => UpdateClearFilters();
 

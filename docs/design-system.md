@@ -228,10 +228,11 @@ files of their own as they are worked on.
 ### Text boxes and dropdowns
 
 - **INPUT-1** A filter's dropdown is the filter: only the values picked in it show, and with none picked, every row
-  does. A dropdown that filters looks like a checked toggle and keeps its name, so the row keeps its layout, and the
-  filter row says what each filter shows, such as **Status: 404, 503**, beside Clear filters, which turns every filter
-  off. A value that first appears while a filter is on stays hidden, because nobody picked it. The original look keeps
-  its check box beside each dropdown.
+  does. A dropdown that filters looks like a checked toggle, keeps its name, so the row keeps its layout, and names the
+  values it shows in its tooltip, such as **Status: 404, 503**. The filter row stays one line, with Clear filters in it,
+  which turns every filter off and is available while any filter is on; in a tight row it shows only its icon, before
+  the row folds. A value that first appears while a filter is on stays hidden, because nobody picked it. The original
+  look keeps its check box beside each dropdown.
 
 ### Dialogs
 
