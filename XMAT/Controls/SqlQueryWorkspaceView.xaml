@@ -3,6 +3,7 @@
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
   xmlns:local="clr-namespace:XMAT"
   xmlns:sql="clr-namespace:XMAT.SqlQueries"
+  DataContext="{x:Null}"
   PreviewKeyDown="View_PreviewKeyDown">
   <UserControl.CommandBindings>
     <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"

@@ -5,6 +5,7 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
@@ -24,6 +25,49 @@ namespace XMAT.Tests
         private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
 
         public SqlQueryWorkspaceViewTests(CaptureUiApplicationFixture application) => _application = application;
+
+        [Fact]
+        public void ToolbarBindingsUseOnlyTheWorkspaceAttachedToTheLazyView()
+        {
+            _application.Run(window =>
+            {
+                var inherited = new CaptureAppModel(window.Dispatcher);
+                var view = new SqlQueryWorkspaceView();
+                var root = new Grid { DataContext = inherited };
+                root.Children.Add(view);
+                WpfTestHost.Show(window, root);
+
+                Assert.Null(view.DataContext);
+
+                var workspace = new SqlQueryWorkspaceModel(new Sources(), window.Dispatcher);
+                try
+                {
+                    view.AttachWorkspace(workspace);
+                    WpfTestHost.Pump();
+
+                    Assert.Same(workspace, view.DataContext);
+                    Button[] createButtons = Descendants(view).OfType<Button>().Where(button =>
+                        BindingOperations.GetBinding(button, UIElement.IsEnabledProperty)?.Path.Path ==
+                            nameof(SqlQueryWorkspaceModel.CanCreateDocument)).ToArray();
+                    TextBlock message = Assert.Single(Descendants(view).OfType<TextBlock>(), text =>
+                        BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path ==
+                            nameof(SqlQueryWorkspaceModel.Message));
+
+                    Assert.Equal(4, createButtons.Length);
+                    Assert.All(createButtons, button =>
+                    {
+                        Assert.True(button.IsEnabled);
+                        Assert.Equal(
+                            BindingStatus.Active,
+                            BindingOperations.GetBindingExpression(button, UIElement.IsEnabledProperty).Status);
+                    });
+                    Assert.Equal(
+                        BindingStatus.Active,
+                        BindingOperations.GetBindingExpression(message, TextBlock.TextProperty).Status);
+                }
+                finally { Complete(workspace.DisposeAsync().AsTask()); }
+            });
+        }
 
         [Fact]
         public void MainWorkspaceSwitchRetainsTheCaptureGridAndSqlEditorCaretUndoAndSuccessfulResult()
