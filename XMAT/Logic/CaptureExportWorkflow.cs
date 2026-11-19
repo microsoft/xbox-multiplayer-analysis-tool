@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
@@ -33,7 +35,9 @@ namespace XMAT
 
         Task<CaptureExportDestination> ChooseDestinationAsync(bool sanitizedOnly);
 
-        Task<bool> ConfirmSanitizedAsync();
+        // Asks for consent to a sanitized archive; unknownHeaderProvenanceSessions counts the sessions to export whose
+        // header history is unknown, which the question warns about when there are any.
+        Task<bool> ConfirmSanitizedAsync(long unknownHeaderProvenanceSessions);
 
         // Asks, for this export only, whether to publish where Windows cannot restrict access to the file.
         Task<bool> ConfirmUnprotectedAsync(string path);
@@ -45,9 +49,10 @@ namespace XMAT
     }
 
     // Exports sessions of one capture tab. It holds the data-operation lease from the snapshot to the publication, asks
-    // for confirmation with counts, a destination named for its format and, for a sanitized archive, consent, then runs
-    // the shared export operation with progress and Cancel. Where Windows cannot restrict access to the destination it
-    // asks once whether to publish anyway. The snapshot is always disposed and the lease always released.
+    // for confirmation with counts, a destination named for its format and, for a sanitized archive, consent that warns of
+    // the sessions whose header history is unknown, then runs the shared export operation with progress and Cancel. Where
+    // Windows cannot restrict access to the destination it asks once whether to publish anyway. The snapshot is always
+    // disposed and the lease always released.
     internal sealed class CaptureExportWorkflow
     {
         private readonly ICaptureExportDialogService _dialogs;
@@ -115,7 +120,9 @@ namespace XMAT
                 }
 
                 if (destination == null ||
-                    (destination.Format == CaptureExportFormat.SanitizedSaz && !await _dialogs.ConfirmSanitizedAsync()))
+                    (destination.Format == CaptureExportFormat.SanitizedSaz &&
+                        !await _dialogs.ConfirmSanitizedAsync(
+                            UnknownHeaderProvenanceSessions(snapshot.Sessions, preflight.Value.Keys))))
                 {
                     return;
                 }
@@ -168,6 +175,15 @@ namespace XMAT
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"Capture export snapshot could not be closed: {ex}");
             }
+        }
+
+        // The sessions to export whose header history is unknown, from the snapshot's metadata alone.
+        private static long UnknownHeaderProvenanceSessions(
+            IReadOnlyList<CaptureExportSession> sessions, IReadOnlyList<CaptureRowKey> eligible)
+        {
+            var keys = new HashSet<CaptureRowKey>(eligible);
+            return sessions.LongCount(session =>
+                keys.Contains(session.Key) && session.HeaderProvenance == HeaderProvenance.Unknown);
         }
 
         // File > Export and Export Sanitized: every session of the selected tab, never another tab's.

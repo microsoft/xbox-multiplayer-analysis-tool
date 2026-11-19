@@ -63,7 +63,8 @@ namespace XMAT.Tests.Proxy
             ProxyRequestReadPolicy requestPolicy = null,
             ProxyRequestBufferBudget requestBufferBudget = null,
             bool registerRequestReader = true,
-            Action<int, LogLevel, string> logObserver = null)
+            Action<int, LogLevel, string> logObserver = null,
+            HttpMessageHandler upstreamHandler = null)
         {
             X509Certificate2 certificate = CreateCertificate();
             proxy ??= new WebServiceProxy();
@@ -88,7 +89,8 @@ namespace XMAT.Tests.Proxy
             }
 
             var tunnels = new InterceptedTunnelRegistry();
-            var upstream = new HttpClient(WebServiceProxy.CreateUpstreamHandler());
+            var upstream = new HttpClient(
+                upstreamHandler ?? WebServiceProxy.CreateUpstreamHandler());
             var logger = new Logger();
             var application = new InterceptedProxyApplication(
                 proxy,
@@ -167,6 +169,14 @@ namespace XMAT.Tests.Proxy
             UseProxy = true,
             ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         });
+
+        // The proxy's upstream timeout: its wait for response headers and for each body read.
+        // Set it before the first request.
+        public TimeSpan UpstreamTimeout
+        {
+            get => _upstream.Timeout;
+            set => _upstream.Timeout = value;
+        }
 
         public async ValueTask DisposeAsync()
         {

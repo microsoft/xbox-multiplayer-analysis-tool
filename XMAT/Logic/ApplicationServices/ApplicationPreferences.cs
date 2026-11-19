@@ -229,7 +229,8 @@ namespace XMAT.ApplicationServices
                 throw new AdministrationException(AdministrationFailure.PrerequisiteRequired);
             return new(proxy.FirstPort, proxy.LastPort, proxy.PromptToDisableOnClose,
                 analysis.PacketsPerSecondThreshold, analysis.MaximumMTU, analysis.DuplicatePacketWindow,
-                preferences.Language, preferences.Theme);
+                preferences.Language, preferences.Theme,
+                proxy.AutoStreamMediaAndEvents, proxy.StreamAllResponses, proxy.CaptureLimitMegabytes);
         }
 
         internal static AppPreferencesModel CreateDraft(ApplicationPreferenceValues values)
@@ -254,6 +255,9 @@ namespace XMAT.ApplicationServices
             proxy.FirstPort = (ushort)values.FirstProxyPort;
             proxy.LastPort = (ushort)values.LastProxyPort;
             proxy.PromptToDisableOnClose = values.PromptToDisableProxyOnClose;
+            proxy.AutoStreamMediaAndEvents = values.AutoStreamMediaAndEvents;
+            proxy.StreamAllResponses = values.StreamAllResponses;
+            proxy.CaptureLimitMegabytes = values.CaptureLimitMegabytes;
             analysis.PacketsPerSecondThreshold = values.PacketsPerSecondThreshold;
             analysis.MaximumMTU = values.MaximumMtu;
             analysis.DuplicatePacketWindow = values.DuplicatePacketWindowMilliseconds;
@@ -270,6 +274,8 @@ namespace XMAT.ApplicationServices
                 values.LastProxyPort < values.FirstProxyPort || values.LastProxyPort > 65535 ||
                 values.PacketsPerSecondThreshold < 0 || values.MaximumMtu is < 1 or > 65535 ||
                 values.DuplicatePacketWindowMilliseconds < 0 ||
+                values.CaptureLimitMegabytes < options.MinimumCaptureLimitMegabytes ||
+                values.CaptureLimitMegabytes > options.MaximumCaptureLimitMegabytes ||
                 !options.Languages.Contains(values.Language, StringComparer.OrdinalIgnoreCase) ||
                 !options.Themes.Contains(values.Theme, StringComparer.Ordinal))
                 throw new AdministrationException(AdministrationFailure.InvalidRequest);
@@ -282,6 +288,9 @@ namespace XMAT.ApplicationServices
             Add(nameof(after.FirstProxyPort), before.FirstProxyPort, after.FirstProxyPort);
             Add(nameof(after.LastProxyPort), before.LastProxyPort, after.LastProxyPort);
             Add(nameof(after.PromptToDisableProxyOnClose), before.PromptToDisableProxyOnClose, after.PromptToDisableProxyOnClose);
+            Add(nameof(after.AutoStreamMediaAndEvents), before.AutoStreamMediaAndEvents, after.AutoStreamMediaAndEvents);
+            Add(nameof(after.StreamAllResponses), before.StreamAllResponses, after.StreamAllResponses);
+            Add(nameof(after.CaptureLimitMegabytes), before.CaptureLimitMegabytes, after.CaptureLimitMegabytes);
             Add(nameof(after.PacketsPerSecondThreshold), before.PacketsPerSecondThreshold, after.PacketsPerSecondThreshold);
             Add(nameof(after.MaximumMtu), before.MaximumMtu, after.MaximumMtu);
             Add(nameof(after.DuplicatePacketWindowMilliseconds), before.DuplicatePacketWindowMilliseconds, after.DuplicatePacketWindowMilliseconds);

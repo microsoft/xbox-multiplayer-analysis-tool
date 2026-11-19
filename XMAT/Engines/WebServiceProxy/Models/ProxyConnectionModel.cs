@@ -74,6 +74,20 @@ namespace XMAT.WebServiceCapture.Models
 
         internal CaptureTextSource CaptureTextSource { get; private set; }
 
+        // Trailer lines ("name: value\r\n") that followed the response body; empty when there were none.
+        public string ResponseTrailers { get; private set; } = string.Empty;
+
+        // The response body bytes the capture kept when it passed the capture limit; 0 when it is complete.
+        public long ResponseBodyTruncatedAt { get; private set; }
+
+        // What is known about this session's header history (see HeaderProvenance): no known loss for what XMAT captured,
+        // unknown for a capture or archive that doesn't record it, and uninspectable when an import left header lines out
+        // or couldn't trust their encoding, so a sanitized export leaves the pair out (see SazSanitizer).
+        internal HeaderProvenance HeaderProvenance { get; private set; }
+
+        // The response's status and headers were recorded, but it has not ended yet: a streamed response still arriving.
+        public bool IsResponseStreaming => !string.IsNullOrEmpty(ResponseLineAndHeaders) && !HasRecordedResponseTimestamp;
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 
@@ -224,6 +238,9 @@ namespace XMAT.WebServiceCapture.Models
             ReplayNote = model.ReplayNote;
             SentRaw = model.SentRaw;
             RawRequestWrite = model.RawRequestWrite;
+            ResponseTrailers = model.ResponseTrailers;
+            ResponseBodyTruncatedAt = model.ResponseBodyTruncatedAt;
+            HeaderProvenance = model.HeaderProvenance;
             ClientProcess = model.ClientProcess;
             IsProcessResolving = model.IsProcessResolving;
 
@@ -365,6 +382,17 @@ namespace XMAT.WebServiceCapture.Models
             Id = connectionId;
         }
 
+        internal void SetResponseCaptureDetails(string trailers, long truncatedAt)
+        {
+            ResponseTrailers = trailers ?? string.Empty;
+            ResponseBodyTruncatedAt = Math.Max(truncatedAt, 0);
+        }
+
+        internal void SetHeaderProvenance(HeaderProvenance provenance)
+        {
+            HeaderProvenance = provenance;
+        }
+
         internal void SetClientProcess(ClientProcessInfo info, bool resolving = false)
         {
             ClientProcessInfo value = info ?? ClientProcessInfo.NotRecorded;
@@ -451,6 +479,9 @@ namespace XMAT.WebServiceCapture.Models
                     [WebServiceCaptureMethod
                         .FieldKey_ClientIP] =
                         ClientIP,
+                    [WebProxyCaptureSchema.ResponseTrailers] = ResponseTrailers,
+                    [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = ResponseBodyTruncatedAt,
+                    [WebProxyCaptureSchema.HeadersUninspectable] = (long)HeaderProvenance,
                 },
                 ClientProcess);
         }
@@ -576,6 +607,10 @@ namespace XMAT.WebServiceCapture.Models
             {
                 ClientIP = clientIP;
             }
+
+            ResponseTrailers = WebProxyCaptureSchema.ReadResponseTrailers(dataRecord);
+            ResponseBodyTruncatedAt = WebProxyCaptureSchema.ReadResponseBodyTruncatedAt(dataRecord);
+            HeaderProvenance = WebProxyCaptureSchema.ReadHeaderProvenance(dataRecord);
 
             ClientProcessInfo process = ClientProcessRecordCodec.Read(dataRecord);
             if (ClientProcess.Status != ClientProcessStatus.NotRecorded && process != ClientProcess)

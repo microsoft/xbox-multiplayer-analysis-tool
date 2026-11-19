@@ -57,12 +57,14 @@ namespace XMAT.SharedInterfaces
     public sealed record ApplicationPreferenceValues(
         int FirstProxyPort, int LastProxyPort, bool PromptToDisableProxyOnClose,
         int PacketsPerSecondThreshold, int MaximumMtu, int DuplicatePacketWindowMilliseconds,
-        string Language, string Theme);
+        string Language, string Theme,
+        bool AutoStreamMediaAndEvents = true, bool StreamAllResponses = false, int CaptureLimitMegabytes = 32);
     public sealed record ApplicationPreferenceOptions(
         IReadOnlyList<string> Languages, IReadOnlyList<string> Themes,
         int MinimumPort = 1, int MaximumPort = 65535, int MinimumPacketsPerSecondThreshold = 0,
         int MaximumPacketsPerSecondThreshold = int.MaxValue, int MinimumMtu = 1, int MaximumMtu = 65535,
-        int MinimumDuplicateWindowMilliseconds = 0, int MaximumDuplicateWindowMilliseconds = int.MaxValue);
+        int MinimumDuplicateWindowMilliseconds = 0, int MaximumDuplicateWindowMilliseconds = int.MaxValue,
+        int MinimumCaptureLimitMegabytes = 1, int MaximumCaptureLimitMegabytes = 40);
     public sealed record ApplicationPreferenceSnapshot(
         long Revision, ApplicationPreferenceValues Values, ApplicationPreferenceOptions Options,
         IReadOnlyList<int> ReservedProxyPorts, bool ChangeInProgress);

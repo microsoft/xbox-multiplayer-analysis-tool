@@ -22,6 +22,7 @@ namespace XMAT.Tests
         [InlineData("threshold")]
         [InlineData("mtu")]
         [InlineData("window")]
+        [InlineData("capture-limit")]
         [InlineData("language")]
         [InlineData("theme")]
         public void InvalidTypedUpdatesHaveNoEffects(string field)
@@ -37,6 +38,7 @@ namespace XMAT.Tests
                     "threshold" => before.Values with { PacketsPerSecondThreshold = -1 },
                     "mtu" => before.Values with { MaximumMtu = 65536 },
                     "window" => before.Values with { DuplicatePacketWindowMilliseconds = -1 },
+                    "capture-limit" => before.Values with { CaptureLimitMegabytes = 0 },
                     "language" => before.Values with { Language = "..\\en-us" },
                     _ => before.Values with { Theme = "Unknown" }
                 };
@@ -67,9 +69,10 @@ namespace XMAT.Tests
                     return Task.CompletedTask;
                 };
                 var before = Complete(setup.Preferences.InspectAsync());
-                var values = new ApplicationPreferenceValues(9100, 9110, false, 42, 1400, 2000, "fr-fr", "Dark");
+                var values = new ApplicationPreferenceValues(
+                    9100, 9110, false, 42, 1400, 2000, "fr-fr", "Dark", false, true, 16);
                 var plan = Complete(Task.Run(() => setup.Preferences.PrepareAsync(before.Revision, values)));
-                Assert.Equal(8, plan.Differences.Count);
+                Assert.Equal(11, plan.Differences.Count);
                 Assert.True(plan.LanguageRestartRequired);
                 var notifiedOnDispatcher = false;
                 setup.Model.PreferencesModel.PropertyChanged += (_, _) =>

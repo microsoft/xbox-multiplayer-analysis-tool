@@ -39,6 +39,7 @@ namespace XMAT
             ThemeLabel.Text = Localization.GetLocalizedString("CTRL_PREF_THEME");
             LanguageRestart.Text = Localization.GetLocalizedString("CTRL_PREF_LANGUAGE_RESTART");
             Save.IsEnabled = false;
+            Loaded += (_, _) => SizeToContent = SizeToContent.Manual;
             Loaded += async (_, _) => await LoadDraftAsync();
             Closed += (_, _) => _closed = true;
         }
@@ -71,7 +72,7 @@ namespace XMAT
 
         internal async Task<ApplicationPreferenceChange> SaveDraftAsync()
         {
-            ProxyOptions.CommitPortRange();
+            ProxyOptions.CommitPreferences();
             TraceOptions.CommitDraft();
             _draft.Language = LanguageChoice.SelectedItem as string;
             _draft.Theme = ThemeChoice.SelectedItem as string;

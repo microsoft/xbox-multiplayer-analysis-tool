@@ -20,5 +20,20 @@
             <TextBlock x:Name="PortRangeLabel" TextAlignment="Left" Text=" to "/>
             <TextBox x:Name="EndingPort" Width="50" Text="{Binding LastPort, Mode=OneWay}" HorizontalContentAlignment="Center"/>
         </StackPanel>
+        <StackPanel Orientation="Vertical" HorizontalAlignment="Left" Margin="0,10,0,0">
+            <TextBlock x:Name="StreamingLabel" HorizontalAlignment="Stretch" FontWeight="Bold" Text="Streaming"/>
+            <CheckBox x:Name="AutoStreamCheckBox" IsChecked="{Binding AutoStreamMediaAndEvents, UpdateSourceTrigger=Explicit}">
+                <TextBlock x:Name="AutoStreamLabel" TextWrapping="Wrap" Text="Automatically stream audio, video and event streams"/>
+            </CheckBox>
+            <CheckBox x:Name="StreamAllCheckBox" IsChecked="{Binding StreamAllResponses, UpdateSourceTrigger=Explicit}">
+                <TextBlock x:Name="StreamAllLabel" TextWrapping="Wrap" Text="Stream all responses"/>
+            </CheckBox>
+            <TextBlock x:Name="StreamingNote" TextWrapping="Wrap" Margin="0,2,0,4" Foreground="{DynamicResource SecondaryForegroundBrush}"
+                       Text="Streamed responses reach the device as they arrive, so scripts cannot change or block them."/>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="CaptureLimitLabel" VerticalAlignment="Center" Text="Capture limit (MB):"/>
+                <TextBox x:Name="CaptureLimit" Width="50" Margin="4,0,0,0" Text="{Binding CaptureLimitMegabytes, Mode=OneWay}" HorizontalContentAlignment="Center"/>
+            </StackPanel>
+        </StackPanel>
     </StackPanel>
 </UserControl>

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.DataAbstractionLayer;
@@ -68,7 +69,9 @@ namespace XMAT.Operations.Export
         bool AllowUnprotectedOutput = false);
 
     // Key is the exact ProxyConnectionModel.RowKey for live, loaded, and imported tabs. Host, Path, Status, and Method
-    // are frozen stored/display values: NULL becomes "", with no other normalization.
+    // are frozen stored/display values: NULL becomes "", with no other normalization. HeaderProvenance is the stored header
+    // history, which a GUI sanitized export reports before it writes anything; a session built without it has an unknown
+    // history.
     internal sealed record CaptureExportSession(
         CaptureRowKey Key,
         string DeviceId,
@@ -79,7 +82,8 @@ namespace XMAT.Operations.Export
         ClientProcessInfo Process,
         bool HasRecordedResponseHeaders,
         bool HasRecordedResponseTimestamp,
-        long PayloadVersion)
+        long PayloadVersion,
+        HeaderProvenance HeaderProvenance = HeaderProvenance.Unknown)
     {
         internal bool IsComplete => HasRecordedResponseHeaders && HasRecordedResponseTimestamp;
         internal bool NoRecordedResponse => !HasRecordedResponseHeaders;
@@ -193,6 +197,19 @@ namespace XMAT.Operations.Export
 
         // A sanitized archive needs text whose meaning is known: an unmarked XMAT capture is refused, nothing written.
         internal const string TextAmbiguous = "capture.text.ambiguous-export";
+    }
+
+    // Warnings of an export that still published its file.
+    internal static class CaptureExportWarningCodes
+    {
+        // A published sanitized archive holds sessions whose header history is unknown (HeaderProvenance.Unknown).
+        internal const string HeaderProvenanceUnknown = "export.sanitization.header-provenance-unknown";
+
+        // The fixed text of that warning, with the number of such sessions that the archive holds.
+        internal static string HeaderProvenanceUnknownMessage(long sessions) =>
+            $"Header history is unknown for {sessions.ToString(CultureInfo.InvariantCulture)} exported sessions. Earlier " +
+            "processing may have discarded context needed to recognize secrets. Sanitization inspected the data available; " +
+            "review the archive before sharing.";
     }
 
     // Only expected input, destination-protection, sanitizer, and write failures use this type. Cancellation and

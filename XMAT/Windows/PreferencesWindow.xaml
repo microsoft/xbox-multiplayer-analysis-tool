@@ -4,7 +4,7 @@
         xmlns:wscc="clr-namespace:XMAT.WebServiceCapture"
         xmlns:ntca="clr-namespace:XMAT.NetworkTraceCaptureAnalysis"
         WindowStartupLocation="CenterOwner" WindowStyle="SingleBorderWindow" ResizeMode="NoResize"
-        x:Name="PreferencesWindowTitle" Height="360" Width="420">
+        x:Name="PreferencesWindowTitle" SizeToContent="Height" Width="420">
   <Window.CommandBindings>
     <CommandBinding Command="Save" Executed="Save_Executed" />
   </Window.CommandBindings>
