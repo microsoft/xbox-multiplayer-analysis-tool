@@ -1,11 +1,38 @@
 # Local Agent Access
 
-[Back to README](../README.md) | [Command line](cli.md) | [SQL workspace](sql-workspace.md)
+[Back to README](../README.md) | [Command line](cli.md) | [SQL workspace](sql-workspace.md) |
+[Troubleshooting](troubleshooting.md#agent-access-and-mcp)
 
 XMAT exposes its shared application services through the official Model Context Protocol (MCP) SDK.
 Use a persistent **Headless** host for all non-UI actions, or **Desktop** for the same services with a
 visible WPF application. Headless creates no Application, window, WebView or dialog. It is not the
 short-lived offline analyzer: `xmat analyze` remains the isolated file-analysis route.
+
+## Installation and supported environment
+
+Agent Access is included with the complete 64-bit Windows XMAT distribution; it is not a separate
+service, extension or package. Keep these shipped components together:
+
+- `XboxMultiplayerAnalysisTool.exe` - the Desktop host.
+- `xmat.exe` - local setup, configuration, launch, status, shutdown and offline CLI commands.
+- `AgentBridge\XMAT.AgentBridge.exe` - the protocol-only MCP stdio companion.
+- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and `docs\` - installed runtime guidance and references.
+
+Extract the complete release or CI archive rather than copying only one executable. The application
+requires the same supported x64 Windows and .NET runtimes described in
+[Getting started](getting-started.md#obtain-and-run-xmat). From the trusted installation folder, start
+with:
+
+```powershell
+.\xmat.exe --version
+.\xmat.exe doctor --for agent
+.\xmat.exe agent status
+```
+
+`doctor --for agent` checks the sibling host, bridge, installed instructions and x64 prerequisites
+without enabling access or initializing the desktop, proxy, certificate, devices or WPF application.
+Do not point the MCP client at an arbitrary copy of `XMAT.AgentBridge.exe` from another version.
+Regenerate setup if the installation moves.
 
 ## Trust and data sharing
 
@@ -51,6 +78,8 @@ takes effect in that host even if saving fails; other hosts can still use the ol
 which may return here at restart. Resolve the failure before relying on global propagation or
 persistence. A failed save never silently enables increased access.
 
+![Agent Access policy and generated MCP setup with access off and redacted data selected](../ReadmeImages/28.png)
+
 Without the desktop, run from the trusted installation folder:
 
 ```powershell
@@ -65,6 +94,11 @@ Without the desktop, run from the trusted installation folder:
 Choices not specified retain their saved values. Do not enable or broaden policy without the
 user's consent. `start`, `config`, discovery and connecting **never enable or broaden access**.
 Setup edits only `agent-access.json`, not ordinary desktop preferences or external client files.
+The saved per-user policy is
+`%APPDATA%\Microsoft\Xbox Multiplayer Analysis Tool\agent-access.json`, and is intentionally separate
+from `app-settings.json`. A persisted disabling or restriction must be distinguished from an
+unsaved restriction currently applied in one host: an unsaved change is effective in that host even
+when another host still has the last successfully saved policy.
 
 The config command returns actual machine-specific executable paths, PowerShell-safe registration
 where verified, client-compatible JSON/TOML, config-file guidance and management commands:
@@ -75,6 +109,26 @@ where verified, client-compatible JSON/TOML, config-file guidance and management
 | Claude Code | Generated `claude mcp add --transport stdio --scope user xmat -- ...`; `/mcp` for management. User config is `%USERPROFILE%\.claude.json`. |
 | Codex CLI | Generated `[mcp_servers.xmat]` TOML for `%USERPROFILE%\.codex\config.toml`; `/mcp` for status. |
 | Gemini CLI | Generated user-scoped stdio registration and `mcpServers` JSON for `%USERPROFILE%\.gemini\settings.json`; `/mcp` for management. No `trust: true` or approval-bypass default. |
+
+For example, a Copilot client configuration can look like the following. Treat it as a schema sample:
+use the exact generated `command` path from the current installation instead of copying this path
+verbatim.
+
+```json
+{
+  "mcpServers": {
+    "xmat": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\XMAT\\AgentBridge\\XMAT.AgentBridge.exe",
+      "args": [
+        "--discover",
+        "--launch",
+        "headless"
+      ]
+    }
+  }
+}
+```
 
 `/mcp` configures/manages servers; it is not a universal action-confirmation command.
 Native client tool approvals and negotiated MCP form elicitation are different; rendering and
@@ -179,6 +233,48 @@ Defaults include a 60-second deadline, 512 MiB result-store limit and four retai
 per relevant connection cache. Snapshot/scratch/staging/model memory is additional. Release results/
 downloads with their typed release tools. Projection counts/data-view labels explain omissions.
 Raw detail-byte reads are unavailable under redaction; use protected SQL values instead.
+
+## Tool categories, paging and ownership
+
+After connecting, call `xmat_get_session` and discover the server's live schemas. The MCP schema is
+the authority for tool names, required fields, limits and availability; the names below are stable
+examples, while a newer client should tolerate added tools and fields.
+
+| Task | Representative tools |
+|---|---|
+| Establish context and lifecycle state | `xmat_get_session`, `xmat_get_host_lifecycle`, `xmat_get_startup_recovery`, `xmat_get_operation` |
+| Discover captures and schema | `xmat_list_sources`, `xmat_list_captures`, `xmat_describe_schema`, `xmat_list_resources` |
+| Search and analyze evidence | `xmat_search_captures`, `xmat_get_data_page`, `xmat_get_data_details`, `xmat_run_analysis`, `xmat_get_finding_evidence` |
+| Run and read-only SQL | `xmat_run_query`, `xmat_get_query_page`, `xmat_get_query_value`, `xmat_release_query_result` |
+| Export exact results or application artifacts | `xmat_export_query_result`, `xmat_get_query_export_chunk`, `xmat_release_query_export`, `xmat_save_query_result`, `xmat_export_analysis_report`, `xmat_export_diagnostics` |
+| Open, save or import capture data | `xmat_open_capture`, `xmat_load_capture`, `xmat_save_capture`, `xmat_import_saz`, `xmat_import_etl`, `xmat_clear_capture` |
+| Manage devices, capture and proxy state under Full control | `xmat_add_device`, `xmat_remove_device`, `xmat_describe_devices`, `xmat_set_capture_running`, `xmat_set_device_proxy`, `xmat_set_pending_proxy_port`, `xmat_apply_proxy_port` |
+| Work with scripts under Full control | `xmat_list_scripts`, `xmat_read_script`, `xmat_update_script`, `xmat_validate_script`, `xmat_set_script_enabled`, `xmat_save_script` |
+| Recover or stop owned work | `xmat_resolve_startup_recovery`, `xmat_acknowledge_trace_recovery`, `xmat_retry_resource_cleanup`, `xmat_take_over_resource`, `xmat_stop_host` |
+
+Availability still depends on the selected global policy, the current source/device/host state and the
+tool's prerequisites. An action absent from the selected access level should produce a structured
+refusal; do not fall back to UI automation, raw database access or another tool that bypasses policy.
+
+Responses are bounded. A page normally contains at most 100 rows / 64 KiB, and the server may return
+fewer rows to keep a response inside its byte budget. Continue only with the returned cursor or
+offset. IDs and cursors belong to the current connection; closing a connection does not transfer private
+results, chunks, downloads or live-resource ownership to a later connection.
+
+A representative read-only workflow is:
+
+1. Call `xmat_get_session` and inspect the effective sharing/actions policy and host mode.
+2. Call `xmat_list_sources`, select an explicit `sourceId`, and call `xmat_describe_schema`.
+3. Call `xmat_run_query` or the typed analysis/search tools with that exact source.
+4. Poll `xmat_get_operation` until complete, then read the referenced result with
+   `xmat_get_result`.
+5. Read `xmat_get_query_page` or exact byte chunks in order. Export from the immutable result instead
+   of rerunning the query.
+6. Release the query result/download with the corresponding typed release tool when finished.
+
+Acceptance is not completion. A stable `idempotencyKey` protects an exact retry, but changing any
+arguments with the same key is invalid. Do not blindly retry an uncertain overwrite, publication,
+console change, capture action or recovery effect; inspect the operation and resource state first.
 
 ## Exports, typed paths and confirmations
 
@@ -316,6 +412,25 @@ CLI stop verifies process exit and never substitutes kill for graceful shutdown.
 a prerequisite: explicit local setup can re-enable it for recovery. Human desktop Close retains its dialogs.
 When available before transport closure, CLI stop also returns the prepared shutdown receipt and
 backup locations; the durable backup manifest records the final prepared/committed outcome.
+
+## Troubleshooting Agent Access
+
+| Symptom | Suggested recovery |
+|---|---|
+| `agent.AccessDisabled` or a ready host has no MCP listener | Review the trust disclosure, then enable locally with the desktop Agent Access window or `xmat agent setup --accept`. `start`, `config` and discovery never enable access. |
+| `agent.NotReady`, `agent.Ambiguous` or `agent.WrongElevation` | Run `agent status`, use the reported instance, and keep the client/host at the same Windows user and elevation. Do not launch around an existing host. |
+| `agent.StartupFailed`, `agent.StartupTimeout` or `agent.HandshakeFailed` | Inspect status and the trusted sibling paths; regenerate config after moving the install. A timeout can leave a starting host, so do not start duplicate hosts blindly. |
+| `agent.ExternalLaunchRequired` | A job or sandbox forbids independent process lifetime. Open an ordinary Windows terminal and use the reported launch command; XMAT does not bypass containment or install a service/task. |
+| A save policy reports failure | Treat a restriction as effective in the current host, but not guaranteed to have reached other hosts or future restarts. Resolve persistence before relying on global propagation. A failed save never silently broadens access. |
+| `agent.confirmation-required` or `confirmation` appears | Inspect the exact consequences and, when supported, respond through negotiated elicitation. Otherwise send the exact session/request/policy-bound token to `xmat_confirm_operation` on the same connection. A stale token must be re-planned. |
+| An operation/pipe closes after a consequential action | A closed transport or requested receipt is not proof of rollback or process exit. Reinspect operation/resource/host lifecycle state before retrying. |
+| A path is refused | Supply an absolute local NTFS/ReFS path without UNC/network/mapped/device/alternate-stream/reparse components. Explicit overwrite is separate from an ordinary new file save. |
+| A client sees no tools or different arguments | Regenerate current client setup and discover the live MCP schemas. Client-specific `/mcp` UIs, approval models and auto-approval behavior vary by version. |
+| More detail is needed | Run the local [debug-log workflow](troubleshooting.md#collect-debug-logs). Logs may contain captured data, scripts and identifiers; review them before sharing. |
+
+The CLI guide lists the [agent commands and exit-code behavior](cli.md#agent-setup-and-persistent-hosts).
+MCP tool refusal, policy failure and transport state should remain structured: do not replace them with
+shell commands, raw database access or UI automation.
 
 ## Installed agent instructions
 
