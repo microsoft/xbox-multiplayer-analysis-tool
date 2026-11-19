@@ -14,6 +14,8 @@ namespace XMAT.DesignSystem
         {
             // The pages show XMAT's controls with the labels XMAT gives them.
             Localization.LoadLanguage("en-us");
+            // Hiding a traffic overview on a page hides that example only: the design system never saves XMAT's settings.
+            TrafficOverview.SaveShownPreference = _ => { };
             MainWindow = new DesignSystemWindow("Light", comfortView: true);
             MainWindow.Show();
         }

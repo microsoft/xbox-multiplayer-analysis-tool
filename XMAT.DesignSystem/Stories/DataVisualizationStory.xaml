@@ -1,0 +1,94 @@
+<ds:Story x:Class="XMAT.DesignSystem.DataVisualizationStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          xmlns:capture="clr-namespace:XMAT.WebServiceCapture;assembly=XboxMultiplayerAnalysisTool"
+          xmlns:analysis="clr-namespace:XMAT.XboxLiveCaptureAnalysis;assembly=XboxMultiplayerAnalysisTool"
+          Title="Data visualization"
+          Summary="XMAT's charts show a capture's traffic and what an analysis found: how many requests arrived, how fast and with what status, when each one ran, how a column's values or a report's amounts are spread, and each endpoint's calls against its limits. Charts that show status color each status class the same way (STATUS-3, on the Status page)."
+          Section="Components"
+          DefinedIn="XMAT/Controls/TrafficOverview.xaml, XMAT/Controls/TrafficCharts.cs, XMAT/Styles/TrafficOverview.xaml, XMAT/Engines/WebServiceProxy/Views/CaptureTimelineView.xaml, XMAT/Engines/WebServiceProxy/Views/CaptureVolumeChart.cs, XMAT/Controls/ColumnSummaryPopup.cs, XMAT/Controls/ColumnSummaryView.cs, XMAT/Styles/DataViz.xaml, XMAT/Controls/HistogramView.cs, XMAT/Engines/CaptureAnalysis/ReportViews/CallRateView.xaml, XMAT/Engines/CaptureAnalysis/ReportViews/Controls/CallRateChart.cs, XMAT/Styles/AnalysisCharts.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Traffic overview" StyleName="TrafficOverview (default style)"
+                         Description="Above the timeline: how many requests the table shows, their rate over the capture, the share of each status class and the busiest hosts. While capturing, it refreshes once a second and shows the rate in the last second. Selecting a status class or a host filters the table to it. As it narrows, No status leaves first, then the busiest hosts, and then the status becomes a line of text.">
+            <ds:StoryExample Caption="While capturing">
+                <local:TrafficOverview x:Name="CapturingOverview" Width="790" Margin="0"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Narrower: the busiest hosts leave">
+                <local:TrafficOverview x:Name="NarrowerOverview" Width="520" Margin="0"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Narrowest: the status as text">
+                <local:TrafficOverview x:Name="NarrowestOverview" Width="400" Margin="0"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Timeline" StyleName="CaptureTimelineView, TimelineHeaderStyle, TimelineWellStyle"
+                         Description="Each request as a bar from when it was sent to when its response ended, in its status class's color, with its status, method and path when the bar is long enough. Waterfall gives each request a row in the order they started; By host groups the rows by host. Selecting a bar selects its request in the table.">
+            <ds:StoryExample Caption="Waterfall">
+                <capture:CaptureTimelineView x:Name="Timeline" Width="790" Height="270"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Volume" StyleName="CaptureVolumeChart, in TimelineWellStyle"
+                         Description="The timeline's Volume view: requests per second as a line over a light fill. A stopped capture shows all of it, in wider steps when its seconds don't fit; while capturing, it shows the last minute, the newest second at the right. Hovering a point shows its time and count, and selecting it selects its first request.">
+            <ds:StoryExample x:Name="WholeVolume" Caption="A capture"/>
+            <ds:StoryExample x:Name="LiveVolume" Caption="While capturing: the last minute"/>
+        </ds:StorySection>
+
+        <!-- Each summary's surface leaves room around it for its shadow; the examples line it up with the captions. -->
+        <ds:StorySection Title="Column summary" StyleName="ColumnSummaryView (default style)"
+                         Description="The info icon at the right of a traffic table column's header opens a summary of the column's values in the rows the table shows: the most common first, each with a bar, a count and a share. Status bars take the status classes' colors and other bars are neutral. Past seven values, the six most common show with the rest in one row. Selecting a value filters the table to it.">
+            <ds:StoryExample Caption="Status, with the selected request's value marked">
+                <local:ColumnSummaryView x:Name="StatusSummary" Margin="-12,-4,-12,-8"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Host, past seven values">
+                <local:ColumnSummaryView x:Name="HostSummary" Margin="-12,-4,-12,-8"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Histogram" StyleName="HistogramView (default style)"
+                         Description="How an amount is spread over the values in a report, such as the packets each source sent in a network capture's analysis: the largest first, each with a bar against the largest, in a column summary's lanes. For amounts that add up, such as packets or bytes, the total and the number of values are under the title, and each value has its share of the total. Past seven values, the six largest show with the rest in one row, and Show all lists every value.">
+            <ds:StoryExample Caption="A few values">
+                <local:HistogramView x:Name="FewValues" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="More than seven values">
+                <local:HistogramView x:Name="ManyValues" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Show all">
+                <local:HistogramView x:Name="AllValues" Width="340" IsExpanded="True"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Histogram of averages" StyleName="HistogramView (default style)"
+                         Description="Amounts that don't add up, such as bytes per packet: what they measure in place of a total, and no shares or row for the rest. Past seven values, the six largest show, and Show all lists every value.">
+            <ds:StoryExample Caption="More than seven values">
+                <local:HistogramView x:Name="Averages" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="No values">
+                <local:HistogramView x:Name="NoValues" Width="340"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Histograms in a report" StyleName="HistogramView, in a Grid.IsSharedSizeScope"
+                         Description="Histograms in one shared size scope take the widest label and amount lanes among them, so their bars start and end at the same places, as in the network capture analysis.">
+            <ds:StoryExample Caption="Two histograms sharing their lanes">
+                <StackPanel Width="340" Grid.IsSharedSizeScope="True">
+                    <local:HistogramView x:Name="Protocols"/>
+                    <local:HistogramView x:Name="BytesSent" Margin="0,24,0,0"/>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <!-- The view keeps the space a report puts around it; the examples leave it out. -->
+        <ds:StorySection Title="Call rate" StyleName="CallRateView, CallRateChartStyle"
+                         Description="In an analysis's Per Endpoint report, each endpoint's calls in a limit's window across the capture, against the limit: the limit is a dashed line, and the stretches over it are shaded and drawn thicker in the error color, so color isn't the only cue. The switch shows the burst or the sustained window, and hovering a chart shows a sample's calls.">
+            <ds:StoryExample Caption="Burst window">
+                <analysis:CallRateView x:Name="BurstCallRate" Width="790" Margin="0,-16,0,-12"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Sustained window">
+                <analysis:CallRateView x:Name="SustainedCallRate" Width="790" Margin="0,-16,0,-12"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

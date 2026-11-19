@@ -295,7 +295,8 @@ Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stori
   `XMAT.Tests/DesignSystem/UncoveredStyles.txt`; the list only shrinks, because a new style comes with its example.
 - **Pictures of every page.** `ReferenceImageTests` keeps pictures of each page in Light, in Dark with Comfort view
   off, and in the Night sky contrast theme, and of the open context menu, in
-  [`XMAT.Tests/DesignSystem/Reference`](../XMAT.Tests/DesignSystem/Reference). Pages are rendered on their own, at 96
+  [`XMAT.Tests/DesignSystem/Reference`](../XMAT.Tests/DesignSystem/Reference). Pages are rendered on their own, in a
+  window off screen so that controls that start once they load, such as the capture timeline, draw their data, at 96
   DPI, 100% text size and without animations, so the pictures don't depend on the display. `XMAT.Tests.runsettings`
   runs the tests without DPI awareness, so WPF works at 96 DPI even when Windows was signed in at another scale. When a
   component changes, its pictures fail, and the test writes what it rendered and a picture of the differences, in

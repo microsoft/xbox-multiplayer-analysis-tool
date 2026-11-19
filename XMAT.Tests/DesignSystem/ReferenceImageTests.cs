@@ -16,8 +16,9 @@ using XMAT.Tests.HeadlessParity;
 namespace XMAT.Tests.DesignSystem
 {
     // Pictures of every design system page, kept in XMAT.Tests/DesignSystem/Reference, so a change to a component shows
-    // in review as a changed picture. Each page is rendered on its own, 880px wide at 96 DPI and without animations:
-    // in Light with Comfort view, in Dark with Comfort view off, and in the Night sky contrast theme. The Menus page's
+    // in review as a changed picture. Each page is rendered on its own in a window off screen, so controls that start
+    // once they load, such as the capture timeline, draw their data: 880px wide at 96 DPI and without animations, in
+    // Light with Comfort view, in Dark with Comfort view off, and in the Night sky contrast theme. The Menus page's
     // context menu is pictured open. After an intended change, update the pictures with
     //   $env:XMAT_REFERENCE_WRITE = "1"; dotnet test XMAT.Tests\XMAT.Tests.csproj -c Debug -p:Platform=x64 --filter "FullyQualifiedName~ReferenceImageTests"
     // then clear XMAT_REFERENCE_WRITE and include the changed pictures with the change. A page that renders differently
@@ -78,7 +79,7 @@ namespace XMAT.Tests.DesignSystem
         [MemberData(nameof(Pages))]
         public void Page_MatchesItsReferenceImage(int page, string variant)
         {
-            _application.Run(_ => WithoutAnimations(() =>
+            _application.Run(window => WithoutAnimations(() =>
             {
                 Story story = StoryCatalog.Pages[page]();
                 ResourceDictionary look = Look(variant);
@@ -93,6 +94,14 @@ namespace XMAT.Tests.DesignSystem
                 host.SetResourceReference(Border.BackgroundProperty, "SurfaceCanvasBrush");
                 host.SetResourceReference(TextElement.ForegroundProperty, "TextPrimaryBrush");
                 host.SetResourceReference(TextElement.FontSizeProperty, "BaseFontSize");
+                // The window never activates, so nothing on the page takes the keyboard focus; the canvas gives the page
+                // its own height.
+                window.ShowActivated = false;
+                window.Content = new Canvas { Children = { host } };
+                window.Show();
+                WpfTestHost.Pump();
+                Assert.True(VisualTreeHelper.GetDpi(host).PixelsPerInchX == 96,
+                    "The test host isn't at 96 DPI. XMAT.Tests.runsettings runs it without DPI awareness.");
                 Check(Capture(host, host.Background), $"{FileName(story)}-{variant}", story.Title);
             }));
         }
@@ -126,16 +135,21 @@ namespace XMAT.Tests.DesignSystem
             return look;
         }
 
-        // ELEMENT laid out on its own at 96 DPI, on BACKGROUND. The test host runs without DPI awareness
-        // (XMAT.Tests.runsettings), so Windows gives it a system DPI of 96 whatever scale it was signed in with; text
-        // measured at another scale would make pages a few pixels taller or shorter. The element's DPI is also set to
-        // the bitmap's, so the pictures are the same on any machine.
+        // ELEMENT at 96 DPI, on BACKGROUND: a page in its window, or an element laid out on its own, such as an open
+        // context menu. The test host runs without DPI awareness (XMAT.Tests.runsettings), so Windows gives it a system
+        // DPI of 96 whatever scale it was signed in with; text measured at another scale would make pages a few pixels
+        // taller or shorter. An element laid out on its own also takes the bitmap's DPI, so the pictures are the same on
+        // any machine.
         private static BitmapSource Capture(FrameworkElement element, Brush background)
         {
-            VisualTreeHelper.SetRootDpi(element, new DpiScale(1, 1));
-            double available = element.Width > 0 ? element.Width : double.PositiveInfinity;
-            element.Measure(new Size(available, double.PositiveInfinity));
-            element.Arrange(new Rect(element.DesiredSize));
+            if (VisualTreeHelper.GetParent(element) == null)
+            {
+                VisualTreeHelper.SetRootDpi(element, new DpiScale(1, 1));
+                double available = element.Width > 0 ? element.Width : double.PositiveInfinity;
+                element.Measure(new Size(available, double.PositiveInfinity));
+                element.Arrange(new Rect(element.DesiredSize));
+            }
+
             element.UpdateLayout();
             WpfTestHost.Pump();
             element.UpdateLayout();

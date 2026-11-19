@@ -24,7 +24,7 @@ namespace XMAT.DesignSystem
             () => new MenusStory(),
             () => new DialogsStory(),
             () => new ScrollBarsStory(),
-            () => new HistogramsStory(),
+            () => new DataVisualizationStory(),
         };
     }
 }
