@@ -197,6 +197,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 | `Menus.xaml` | Menu bars, dropdowns, context menus and the More menu |
 | `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, the column summaries a table's column headers open, and the histograms in analysis reports |
 | `Status.xaml` | An HTTP status in a table, and the problem and warning icons |
+| `ToggleSwitch.xaml` | The toggle switch, such as New look in the menu bar. Both looks merge it, so that switch looks the same in either |
 | `Spacing.xaml`, `Motion.xaml` | The 4px spacing grid, and animation durations and curves |
 
 Tables, tree views, tooltips, the status bar and text styles are still in `NewLook.xaml`; they move to

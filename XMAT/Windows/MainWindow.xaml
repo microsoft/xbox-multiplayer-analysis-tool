@@ -39,45 +39,8 @@
         <CommandBinding Command="{x:Static local:AppCommands.ComposeRequest}" Executed="ComposeRequest_Executed"/>
     </Window.CommandBindings>
     <Window.Resources>
-        <!-- A labeled on/off switch. It uses only colors both looks define, so it looks the same in either. -->
-        <Style x:Key="LookSwitchStyle" TargetType="ToggleButton">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
-                                CornerRadius="3" Padding="6,1" SnapsToDevicePixels="True">
-                            <StackPanel Orientation="Horizontal">
-                                <ContentPresenter VerticalAlignment="Center" Margin="0,0,6,0" RecognizesAccessKey="True"/>
-                                <Grid Width="26" Height="14" VerticalAlignment="Center">
-                                    <Border x:Name="Track" CornerRadius="7" BorderThickness="1"
-                                            BorderBrush="{TemplateBinding Foreground}" Background="Transparent"/>
-                                    <Ellipse x:Name="Knob" Width="8" Height="8" Margin="3,0" HorizontalAlignment="Left"
-                                             Fill="{TemplateBinding Foreground}"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentFillBrush}"/>
-                                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource AccentFillBrush}"/>
-                                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentOnFillBrush}"/>
-                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Root" Property="BorderBrush"
-                                        Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- An icon button in the switch's colors, so it too looks the same in either look: two sparkles. -->
+        <!-- An icon button in the colors of the New look switch beside it (ToggleSwitchStyle), so it too looks the same
+             in either look: two sparkles. -->
         <Style x:Key="WhatsNewButtonStyle" TargetType="Button">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
@@ -187,7 +150,7 @@
                         VerticalAlignment="Center" Click="WhatsNew_Click"
                         ToolTip="{x:Static local:MainWindow.WhatsNewText}"
                         AutomationProperties.Name="{x:Static local:MainWindow.WhatsNewText}"/>
-                <ToggleButton x:Name="NewLookToggle" Style="{DynamicResource LookSwitchStyle}" VerticalAlignment="Center"
+                <ToggleButton x:Name="NewLookToggle" Style="{DynamicResource ToggleSwitchStyle}" VerticalAlignment="Center"
                               Checked="NewLookToggle_Changed" Unchecked="NewLookToggle_Changed"/>
             </StackPanel>
         </Grid>

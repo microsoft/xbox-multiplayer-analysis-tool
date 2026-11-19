@@ -4,9 +4,9 @@
           xmlns:sys="clr-namespace:System;assembly=mscorlib"
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Buttons"
-          Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on."
+          Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on; a toggle switch turns a setting on or off."
           Section="Components"
-          DefinedIn="XMAT/Styles/Buttons.xaml">
+          DefinedIn="XMAT/Styles/Buttons.xaml, XMAT/Styles/ToggleSwitch.xaml">
     <StackPanel>
         <ds:StoryUsage>
             <ds:StoryUsage.UseFor>
@@ -83,6 +83,23 @@
             </ds:StoryExample>
             <ds:StoryExample Caption="Disabled">
                 <ToggleButton Content="Wrap lines" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Toggle switch" StyleName="ToggleSwitchStyle"
+                         Description="A setting that takes effect as soon as it's switched, such as New look at the right of the menu bar. An option of a tool, such as Wrap lines, is a toggle button (BUTTON-3).">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsChecked="True"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsEnabled="False"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled, on">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsChecked="True"
+                              IsEnabled="False"/>
             </ds:StoryExample>
         </ds:StorySection>
 

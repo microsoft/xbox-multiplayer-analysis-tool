@@ -1,0 +1,56 @@
+<!-- The toggle switch: a labeled on/off switch for a setting that takes effect at once, such as New look at the right of
+     the menu bar. Both looks merge it, so that switch looks the same in either: its colors are ones both looks define.
+     Disabled, it takes the new look's disabled text color. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Style x:Key="ToggleSwitchStyle" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                            CornerRadius="3" Padding="6,1" SnapsToDevicePixels="True">
+                        <StackPanel Orientation="Horizontal">
+                            <ContentPresenter VerticalAlignment="Center" Margin="0,0,6,0" RecognizesAccessKey="True"/>
+                            <Grid Width="26" Height="14" VerticalAlignment="Center">
+                                <Border x:Name="Track" CornerRadius="7" BorderThickness="1"
+                                        BorderBrush="{TemplateBinding Foreground}" Background="Transparent"/>
+                                <Ellipse x:Name="Knob" Width="8" Height="8" Margin="3,0" HorizontalAlignment="Left"
+                                         Fill="{TemplateBinding Foreground}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentFillBrush}"/>
+                            <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource AccentFillBrush}"/>
+                            <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentOnFillBrush}"/>
+                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush"
+                                    Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsChecked" Value="True"/>
+                                <Condition Property="IsEnabled" Value="False"/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource TextDisabledBrush}"/>
+                            <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource TextDisabledBrush}"/>
+                            <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource SurfacePanelBrush}"/>
+                        </MultiTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

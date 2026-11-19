@@ -10,8 +10,8 @@ namespace XMAT.Tests
     // The new look's own resources as one document: the component style files Looks/NewLook.xaml merges, then
     // Looks/NewLook.xaml itself, so every style comes after the styles it is based on. Tests that take single styles
     // parse them from here, so moving a style between these files doesn't change what they find. The other
-    // dictionaries Looks/NewLook.xaml merges (themes, strings, spacing, motion and the charts) are loaded by the tests
-    // that need them.
+    // dictionaries Looks/NewLook.xaml merges (themes, strings, spacing, motion, the toggle switch and the charts) are
+    // loaded by the tests that need them.
     internal static class NewLookMarkup
     {
         internal static readonly string[] Files =

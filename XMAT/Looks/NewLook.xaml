@@ -11,6 +11,7 @@
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/StringResources.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/Motion.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/Spacing.xaml" />
+        <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/ToggleSwitch.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Themes/LightTheme.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/AnalysisCharts.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/TrafficOverview.xaml" />
