@@ -99,7 +99,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 else
                 {
                     var result = await ExecuteRecordsAsync(controller.GetCaptureRecords(), controller.DeviceName,
-                        directory, step => SetProcessStatus(model, step), analysisRun.ProcessFilter, CancellationToken.None);
+                        directory, step => SetProcessStatus(model, step), analysisRun.ProcessFilter,
+                        CancellationToken.None, controller.RecordedShaping);
                     if (result.Diagnostics.Any(diagnostic => diagnostic.Code == AnalyzeCaptureOperation.WorkLimitCode))
                         return ECaptureAnalyzerResult.WorkLimit;
                     if (result.Outcome is OperationOutcome.InvalidInput or OperationOutcome.NoAnalyzableData)
@@ -123,6 +124,13 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     model.Reports.Add(view);
                 }
             }
+            if (controller.RecordedShaping is { } shaping && NetworkShapingMetadata.FitsLimits(shaping))
+            {
+                NetworkShapingReport.WriteBanner(
+                    directory,
+                    Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_BANNER"),
+                    Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_LINK"));
+            }
             if (!ProcessFilter.IsEmpty(analysisRun.ProcessFilter))
                 WriteProcessScope(directory, analysisRun.ProcessFilter, canonical.ProcessScope);
             if (model.InvestigationData?.Details is CaptureDataDetails completed)
@@ -136,11 +144,12 @@ namespace XMAT.XboxLiveCaptureAnalysis
         internal XboxLiveAnalysisResult AnalyzeRecords(
             IEnumerable<IDataRecord> records, string outputDirectory = null, long runId = 0,
             Action<AnalysisResultsModel.ProcessStep> progress = null, ProcessFilterSpec processFilter = null,
-            CancellationToken cancellationToken = default)
+            NetworkShapingMetadata shaping = null, CancellationToken cancellationToken = default)
         {
             if (_operation == null)
                 throw new InvalidOperationException("The Xbox Live analyzer is not initialized.");
-            var result = ExecuteRecordsAsync(records, string.Empty, outputDirectory, progress, processFilter, cancellationToken)
+            var result = ExecuteRecordsAsync(
+                    records, string.Empty, outputDirectory, progress, processFilter, cancellationToken, shaping)
                 .GetAwaiter().GetResult();
             if (result.Outcome == OperationOutcome.Cancelled)
                 throw new OperationCanceledException(cancellationToken);
@@ -154,8 +163,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
         private Task<OperationResult<AnalysisResult>> ExecuteRecordsAsync(
             IEnumerable<IDataRecord> records, string deviceName, string outputDirectory,
             Action<AnalysisResultsModel.ProcessStep> progress, ProcessFilterSpec processFilter,
-            CancellationToken cancellationToken) =>
-            _operation.ExecuteAsync(new AnalyzeCaptureRequest(AnalysisInput.FromRecords(records, deviceName),
+            CancellationToken cancellationToken, NetworkShapingMetadata shaping = null) =>
+            _operation.ExecuteAsync(new AnalyzeCaptureRequest(AnalysisInput.FromRecords(records, deviceName, shaping),
                 new AnalysisOptions(ProduceLegacyReports: outputDirectory != null, RetainCanonicalResults: true,
                     ProcessFilter: processFilter)),
                 new OperationContext(outputDirectory, progress == null ? null : new ProcessProgress(progress)), cancellationToken);

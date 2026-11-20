@@ -13,6 +13,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
+using XMAT.Operations.Captures;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.ApplicationServices
@@ -22,17 +23,20 @@ namespace XMAT.ApplicationServices
         private readonly Document[] _documents;
         private readonly string _workspaceRoot;
         private readonly long[] _recordIds;
+        private readonly byte[] _shaping;
         private string _desktopDirectory;
         private IReadOnlyList<CaptureReportArtifact> _desktopManifest;
         internal CaptureCompletedReportDescriptor Descriptor { get; }
         internal IReadOnlyList<CaptureReportArtifact> DesktopManifest => _desktopManifest;
-        internal long StorageBytes => _documents.Sum(document => document.JsonBytes.LongLength + 256) + _recordIds.LongLength * 24;
+        internal long StorageBytes => _documents.Sum(document => document.JsonBytes.LongLength + 256) +
+            _recordIds.LongLength * 24 + (_shaping?.LongLength ?? 0);
 
         internal CaptureAnalysisReport(CaptureCompletedReportDescriptor descriptor, TraceAnalysisResult analysis,
-            string workspaceRoot = null, IReadOnlyList<long> recordIds = null)
+            string workspaceRoot = null, IReadOnlyList<long> recordIds = null, NetworkShapingMetadata shaping = null)
         {
             _workspaceRoot = workspaceRoot;
             _recordIds = recordIds?.ToArray() ?? Array.Empty<long>();
+            _shaping = shaping == null ? null : Encoding.UTF8.GetBytes(NetworkShapingMetadata.Serialize(shaping));
             _documents = analysis.Consoles
                 .SelectMany((console, index) => console.Reports.Where(KnownDocument)
                     .OrderBy(report => report.GetType().Name, StringComparer.Ordinal)
@@ -79,7 +83,7 @@ namespace XMAT.ApplicationServices
                     throw new CaptureDataException(CaptureDataError.LimitExceeded);
                 return new Files(_desktopDirectory, Descriptor, false) { Manifest = _desktopManifest };
             }
-            if (_documents.Length == 0)
+            if (_documents.Length == 0 && _shaping == null)
                 throw new CaptureDataException(CaptureDataError.UnsupportedData);
             cancellationToken.ThrowIfCancellationRequested();
             var root = _workspaceRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -132,7 +136,7 @@ namespace XMAT.ApplicationServices
 
         internal IReadOnlyList<CaptureReportArtifact> Manifest(long maximumBytes, CancellationToken cancellationToken)
         {
-            if (_documents.Length == 0)
+            if (_documents.Length == 0 && _shaping == null)
                 throw new CaptureDataException(CaptureDataError.UnsupportedData);
             if (_desktopManifest != null)
             {
@@ -172,6 +176,8 @@ namespace XMAT.ApplicationServices
         {
             yield return ("provenance.json", JsonSerializer.SerializeToUtf8Bytes(Descriptor));
             yield return ("record-ids.json", JsonSerializer.SerializeToUtf8Bytes(_recordIds));
+            if (_shaping != null)
+                yield return ("network-shaping.json", _shaping);
             foreach (var document in _documents)
                 yield return ($"console-{document.ConsoleOrdinal:D4}-{document.Type}.json", document.JsonBytes);
             var webConsoles = _documents.GroupBy(document => document.ConsoleOrdinal)

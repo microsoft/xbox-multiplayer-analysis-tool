@@ -159,6 +159,170 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
         public WebSocketMessagesCollection WebSocketMessages { get; private set; }
         public string DeviceName { get; }
+        public NetworkShapingController Shaping { get; } = new();
+        public int BodyTimeoutSeconds { get; private set; } = 120;
+        private NetworkShapingMetadata _importedShaping;
+        // Completed live traces, each kept with the body deadline that was in force while it was captured.
+        private NetworkShapingMetadata _retainedShaping;
+        internal event EventHandler ShapingMetadataChanged;
+        internal NetworkShapingMetadata ImportedShaping
+        {
+            get => _importedShaping;
+            set
+            {
+                if (ReferenceEquals(_importedShaping, value))
+                {
+                    return;
+                }
+                _importedShaping = value;
+                try
+                {
+                    ShapingMetadataChanged?.Invoke(this, EventArgs.Empty);
+                }
+                finally
+                {
+                    NotifyPropertyChangesSafely(nameof(ShapingStatusText));
+                }
+            }
+        }
+        internal NetworkShapingMetadata RecordedShaping =>
+            NetworkShapingMetadata.Combine(new[]
+            {
+                ImportedShaping,
+                _retainedShaping,
+                _readOnly ? null : NetworkShapingMetadata.From(Shaping, BodyTimeoutSeconds),
+            });
+        public string ShapingStatusText => _readOnly ||
+            (Shaping.Current.Mode == NetworkShapingMode.Off && RecordedShaping != null)
+            ? Localization.GetLocalizedString(RecordedShaping == null ? "SHAPING_OFF" : "SHAPING_RECORDED")
+            : Shaping.Current.Mode == NetworkShapingMode.Shape
+                ? Localization.GetLocalizedString(
+                    "SHAPING_ACTIVE", Shaping.Current.DownKbps, Shaping.Current.UpKbps,
+                    Shaping.Current.LatencyMs, Shaping.Current.JitterMs)
+                : Localization.GetLocalizedString("SHAPING_" + Shaping.Current.Mode.ToString().ToUpperInvariant());
+
+        internal async Task<Operations.OperationResult<NetworkShapingProfile>> ConfigureShapingAsync(
+            NetworkShapingProfile profile,
+            int bodyTimeoutSeconds)
+        {
+            if (_readOnly || IsTransitioning || (IsRunning && BodyTimeoutSeconds != bodyTimeoutSeconds))
+            {
+                return Operations.OperationResult<NetworkShapingProfile>.Failure(
+                    Operations.OperationOutcome.InvalidInput,
+                    new Operations.OperationDiagnostic(
+                        "capture.shaping.running-timeout",
+                        Operations.OperationDiagnosticSeverity.Error,
+                        "A running capture cannot change its body deadline; stop the capture first."));
+            }
+            int previous = BodyTimeoutSeconds;
+            // Invalid settings fall through to the operation, which rejects them without touching history.
+            if (IsValidShaping(profile, bodyTimeoutSeconds))
+            {
+                bool newTrace = bodyTimeoutSeconds != previous;
+                NetworkShapingMetadata retained = newTrace
+                    ? NetworkShapingMetadata.Combine(new[]
+                    {
+                        _retainedShaping,
+                        NetworkShapingMetadata.From(Shaping, previous),
+                    })
+                    : _retainedShaping;
+                if (!CanRecordShaping(profile, retained, newTrace))
+                {
+                    return Operations.OperationResult<NetworkShapingProfile>.Failure(
+                        Operations.OperationOutcome.Conflict,
+                        new Operations.OperationDiagnostic(
+                            SetNetworkShapingOperation.HistoryFullCode,
+                            Operations.OperationDiagnosticSeverity.Error,
+                            SetNetworkShapingOperation.HistoryFullMessage));
+                }
+                if (newTrace)
+                {
+                    // Completed traffic keeps the deadline it was captured under.
+                    _retainedShaping = retained;
+                    ResetShapingHistory();
+                }
+            }
+            BodyTimeoutSeconds = bodyTimeoutSeconds;
+            var result = await new SetNetworkShapingOperation().ExecuteAsync(
+                new SetNetworkShapingRequest(Shaping, profile, bodyTimeoutSeconds),
+                Operations.OperationContext.None,
+                CancellationToken.None);
+            if (!result.Succeeded)
+            {
+                BodyTimeoutSeconds = previous;
+            }
+            RaisePropertyChange(nameof(ShapingStatusText));
+            return result;
+        }
+
+        private static bool IsValidShaping(NetworkShapingProfile profile, int bodyTimeoutSeconds)
+        {
+            try
+            {
+                new NetworkShapingPlan(1, profile, BodyTimeoutSeconds: bodyTimeoutSeconds).Validate();
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        // Keeps the saved metadata within its trace and change limits. Like the live controller, entries
+        // are reserved so that Disconnect and then Off can always be recorded.
+        private bool CanRecordShaping(NetworkShapingProfile profile, NetworkShapingMetadata retained, bool newTrace)
+        {
+            NetworkShapingTrace[] kept = new[] { ImportedShaping, retained }
+                .Where(metadata => metadata != null)
+                .SelectMany(metadata => metadata.Traces)
+                .ToArray();
+            int reserve = profile.Mode switch
+            {
+                NetworkShapingMode.Off => 0,
+                NetworkShapingMode.Disconnect => 1,
+                _ => 2,
+            };
+            int liveChanges = newTrace ? 2 : Shaping.History.Count + 1;
+            return HasRoomForLiveTrace(kept, liveChanges + reserve);
+        }
+
+        private static bool HasRoomForLiveTrace(IReadOnlyCollection<NetworkShapingTrace> kept, int liveChanges) =>
+            kept.Count < NetworkShapingMetadata.MaximumTraces &&
+            kept.Sum(trace => trace.Changes.Count) + liveChanges <= NetworkShapingMetadata.MaximumChanges;
+
+        // Call before replacing any rows. A writable tab keeps recording after an import, so the imported
+        // history must leave room for the live trace (restarted at the current condition) plus Disconnect
+        // and then Off. A read-only tab records nothing live.
+        internal void EnsureRoomForImportedShaping(NetworkShapingMetadata imported)
+        {
+            if (!_readOnly && imported != null && !HasRoomForLiveTrace(imported.Traces, 3))
+            {
+                throw new System.IO.InvalidDataException(Localization.GetLocalizedString("WEBCAP_IMPORT_SHAPING_FULL"));
+            }
+        }
+
+        // Replacing the captured rows replaces their shaping history too. The current condition stays active.
+        internal void ReplaceShapingHistory(NetworkShapingMetadata imported)
+        {
+            _retainedShaping = null;
+            if (_readOnly)
+            {
+                // A read-only tab records no live history; only its imported history changes.
+                ImportedShaping = imported;
+                return;
+            }
+            _importedShaping = imported;
+            ResetShapingHistory();
+        }
+
+        private void ResetShapingHistory()
+        {
+            if (!Shaping.ResetHistory())
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, "Reset the capture's shaping history, but its notification failed.");
+            }
+        }
+
         internal bool CanDeleteSessions =>
             !_readOnly &&
             _captureDataSource == CaptureDataSource.ActiveTable &&
@@ -440,6 +604,7 @@ namespace XMAT.WebServiceCapture
                     new Dictionary<string, object>(StringComparer.Ordinal)
                     {
                         ["DeviceType"] = (long)_deviceType,
+                        [NetworkShapingMetadata.DeviceField] = NetworkShapingMetadata.Serialize(RecordedShaping),
                         ["DeviceName"] = DeviceName,
                         ["CaptureType"] = (long)CaptureType.WebProxy,
                     }),
@@ -665,6 +830,11 @@ namespace XMAT.WebServiceCapture
             _usesDefaultProxyFactory = proxyFactory == null;
             HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
+            Shaping.Changed += (_, _) =>
+            {
+                NotifyPropertyChangesSafely(nameof(ShapingStatusText));
+                ShapingMetadataChanged?.Invoke(this, EventArgs.Empty);
+            };
 
             _deviceType = deviceType;
             _readOnly = readOnly;
@@ -1221,7 +1391,7 @@ namespace XMAT.WebServiceCapture
             ProxyConnectionsCollection Connections, ObservableCollection<CheckedListItem> HostFilters,
             ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> MethodFilters,
             int SkippedIncompleteFrames = 0, int SkippedMalformedHeaderLines = 0,
-            ImportedCaptureSource? Source = null);
+            ImportedCaptureSource? Source = null, NetworkShapingMetadata Shaping = null);
 
         internal bool LastImportSkippedData { get; private set; }
 
@@ -1238,6 +1408,7 @@ namespace XMAT.WebServiceCapture
             _selectedConnectionModel = null;
             if (captures.Source is { } source)
                 LoadedCaptureDatabaseRegistry.AssignImported(this, source);
+            ReplaceShapingHistory(captures.Shaping);
             if (clearMessages)
             {
                 WebSocketMessages = new WebSocketMessagesCollection();
@@ -1259,6 +1430,7 @@ namespace XMAT.WebServiceCapture
             HostFilterList = source.HostFilterList;
             MethodFilterList = source.MethodFilterList;
             ProcessFilter = source.ProcessFilter;
+            _importedShaping = source._importedShaping;
             _selectedConnectionModel = null;
             _selectedWebSocketMessage = null;
             NotifyPropertyChangesSafely(
@@ -1268,6 +1440,7 @@ namespace XMAT.WebServiceCapture
                 nameof(HostFilterList),
                 nameof(MethodFilterList),
                 nameof(ProcessFilter),
+                nameof(ShapingStatusText),
                 nameof(SelectedConnectionModel),
                 nameof(SelectedWebSocketMessage));
         }
@@ -1501,7 +1674,9 @@ namespace XMAT.WebServiceCapture
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
-                Port = port
+                Port = port,
+                Shaping = Shaping,
+                BodyTimeoutSeconds = BodyTimeoutSeconds,
             };
 
             _captureCallbacks.StartAccepting();
@@ -2974,6 +3149,7 @@ namespace XMAT.WebServiceCapture
                         new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName));
                 }
                 _loadedCaptureDataset = null;
+                ReplaceShapingHistory(null);
             }
         }
 
@@ -3005,7 +3181,10 @@ namespace XMAT.WebServiceCapture
 
                     // convert what we can from a Fiddler file into a bunch of
                     // proxy connection models...
-                    ProxyConnections = FiddlerSazHandler.ImportSazFile(fromFilePath, cancelToken);
+                    FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(fromFilePath, cancelToken);
+                    EnsureRoomForImportedShaping(imported.Shaping);
+                    ProxyConnections = imported.Records;
+                    ReplaceShapingHistory(imported.Shaping);
 
                     // ...and then do the actual adding to the table
                     ImportCapturesToTable(

@@ -23,6 +23,7 @@ namespace XMAT.ApplicationServices
         private readonly NetworkTraceEventStage _stage;
         private readonly NetworkTracePacketsCollection _packets;
         internal int Count => _web?.Connections.Count ?? _packets.Count;
+        internal XMAT.Operations.Captures.NetworkShapingMetadata Shaping => _web?.Shaping;
         private PreparedCaptureImport(WebServiceDeviceCaptureController.ImportedCaptures web) { _web = web; }
         private PreparedCaptureImport(NetworkTraceEventStage stage, NetworkTracePacketsCollection packets)
         { _stage = stage; _packets = packets; }

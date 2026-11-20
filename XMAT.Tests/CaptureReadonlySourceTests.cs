@@ -5,8 +5,10 @@
 using System.Runtime.InteropServices;
 using XMAT.ApplicationServices;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Captures;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Proxy;
 using static XMAT.Tests.CaptureDeviceTestData;
 
 namespace XMAT.Tests
@@ -37,6 +39,17 @@ namespace XMAT.Tests
                     CaptureSazImportTests.WriteSaz(path);
                 else
                     File.WriteAllText(path, "frozen event input");
+                NetworkShapingMetadata expectedShaping = null;
+                if (extension == ".saz")
+                {
+                    var shaping = new NetworkShapingController();
+                    shaping.Apply(NetworkShapingProfile.Preset("min"));
+                    expectedShaping = NetworkShapingMetadata.From(shaping, 1800);
+                    using var archive = System.IO.Compression.ZipFile.Open(path, System.IO.Compression.ZipArchiveMode.Update);
+                    using Stream stream = archive.CreateEntry(NetworkShapingMetadata.ArchiveEntry).Open();
+                    stream.Write(System.Text.Encoding.UTF8.GetBytes(NetworkShapingMetadata.Serialize(expectedShaping)));
+                    model.CaptureAnalyzers.Add(CaptureInvestigationTestData.Analyzer());
+                }
                 var original = File.ReadAllBytes(path);
                 var sources = new CaptureReadonlySources(model.CaptureFileInputs, model.CaptureFileLoads, (_, append, token) =>
                 {
@@ -60,6 +73,17 @@ namespace XMAT.Tests
                     Assert.Equal(active.RowId, setup.Database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.Single().RowId);
                     var loaded = Assert.Single(model.CaptureDeviceContexts, context => context.IsReadOnly);
                     Assert.False(loaded.CaptureController.IsRunning);
+                    if (expectedShaping != null)
+                    {
+                        Assert.Equal(
+                            NetworkShapingMetadata.Serialize(expectedShaping),
+                            model.LoadedDatabase.TableByName("CaptureDevices").Dataset.DataRecords
+                                .Single().Str(NetworkShapingMetadata.DeviceField));
+                        var controller = Assert.IsType<WebServiceDeviceCaptureController>(loaded.CaptureController);
+                        Assert.Equal(
+                            NetworkShapingMetadata.Serialize(expectedShaping),
+                            NetworkShapingMetadata.Serialize(controller.RecordedShaping));
+                    }
                     var table = extension == ".etl" ? NetworkTraceCaptureMethod.TableName : WebServiceCaptureMethod.TableName;
                     var snapshot = Complete(model.CaptureQueries.CreateSessionAsync(receipt.SourceId));
                     try
@@ -70,6 +94,20 @@ namespace XMAT.Tests
                         finally { Finish(result.DisposeAsync().AsTask()); }
                     }
                     finally { Finish(snapshot.DisposeAsync().AsTask()); }
+                    if (extension == ".saz")
+                    {
+                        Finish(model.CaptureOperations.SetRunningAsync(target, false));
+                        var analysis = Complete(model.CaptureInvestigation.AnalyzeAsync(
+                            receipt.SourceId, CaptureDataKind.WebProxy, null,
+                            new QueryExecutionOptions(TimeSpan.FromSeconds(30), 4 * 1024 * 1024)));
+                        try
+                        {
+                            var manifest = Complete(analysis.Details.GetReportManifestAsync(
+                                4 * 1024 * 1024));
+                            Assert.Contains(manifest, artifact => artifact.RelativePath == "network-shaping.json");
+                        }
+                        finally { Finish(analysis.DisposeAsync().AsTask()); }
+                    }
                 }
                 finally
                 {

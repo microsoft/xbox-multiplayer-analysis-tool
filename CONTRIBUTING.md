@@ -79,6 +79,10 @@ Analysis operations accept files through `AnalysisInput.FromFile(...)` and in-ap
 `AnalysisInput.FromRecords(...)`. The GUI already uses the records form when it analyzes captures that it owns; a new
 adapter should use the same input seam rather than adding another analysis path.
 
+For the network-shaping architecture, lifecycle invariants, extension checklist, and focused validation commands, see
+[the maintainer guide](docs/network-shaping-design.md). The user-facing behavior is documented in
+[Web proxy: Network shaping](docs/web-proxy.md#network-shaping).
+
 Add or update capabilities in `XMAT/Operations/Capabilities/CapabilityRegistry.cs`. The current statuses are
 `Supported`, `Planned`, `GuiOnly` and `PolicyException`, and the tests in `XMAT.Tests/HeadlessParity` fail when GUI
 commands or other entry points are unclassified. `Supported` currently describes command-line availability. A

@@ -75,6 +75,13 @@ and receive its modifications.
 Scripts can use `await`. XMAT waits for the event's script before forwarding the
 request or response. Each invocation has a **60-second deadline**.
 
+For a simple per-request delay, a Web Request or Web Response script can use
+`await System.Threading.Tasks.Task.Delay(100);`. This delays a whole transaction;
+it does not pace bytes or share a bandwidth budget across concurrent requests.
+For transport-level bandwidth and pipelined latency, prefer the capture toolbar's
+[Network Shaping](web-proxy.md#network-shaping) control. Script delays still add to
+the client's elapsed time and remain subject to the deadline below.
+
 If the deadline expires, XMAT logs an error and drops that transaction without
 sending a response. Stopping capture while a script runs also cancels the wait and
 drops the transaction, but is not logged as a deadline error. A CONNECT request

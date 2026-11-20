@@ -31,6 +31,8 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.Reissue}" Executed="Reissue_Executed" CanExecute="Reissue_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelReissue}" Executed="CancelReissue_Executed" CanExecute="CancelReissue_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ViewVerifyDiff}" Executed="ViewVerifyDiff_Executed" CanExecute="ViewVerifyDiff_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.NetworkShaping}"
+                        Executed="NetworkShaping_Executed" CanExecute="NetworkShaping_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
@@ -110,6 +112,8 @@
             <Button x:Name="CancelPortButton" Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
                     Visibility="{Binding CaptureController.IsPortChangeInProgress, Converter={StaticResource booleanToVisibilityConverter}}"/>
+            <Button x:Name="ShapingButton" Command="{x:Static local:WebServiceProxyCommands.NetworkShaping}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"/>
             <Button x:Name="AnalyzeButton"
                     Command="{x:Static app:AppCommands.AnalyzeCaptures}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
@@ -121,6 +125,10 @@
                 <CheckBox x:Name="AutoScrollButton" Content="Auto Scroll" IsChecked="{Binding AutoScroll, ElementName=CaptureConnectionControl}"/>
             </Grid>
         </ToolBar>
+        <TextBlock x:Name="ShapingStatus" Grid.Row="0" Grid.Column="2" Margin="8,0" VerticalAlignment="Center"
+                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                   Text="{Binding CaptureController.ShapingStatusText}"
+                   ToolTip="{Binding CaptureController.ShapingStatusText}"/>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -231,7 +239,7 @@
 
         <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
+        <TabControl Grid.Row="1" Grid.Column="2" Grid.RowSpan="4">
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>

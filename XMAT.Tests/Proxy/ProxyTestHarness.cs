@@ -64,7 +64,8 @@ namespace XMAT.Tests.Proxy
             ProxyRequestBufferBudget requestBufferBudget = null,
             bool registerRequestReader = true,
             Action<int, LogLevel, string> logObserver = null,
-            HttpMessageHandler upstreamHandler = null)
+            HttpMessageHandler upstreamHandler = null,
+            Action<IConnectionBuilder> configureListen = null)
         {
             X509Certificate2 certificate = CreateCertificate();
             proxy ??= new WebServiceProxy();
@@ -106,7 +107,10 @@ namespace XMAT.Tests.Proxy
                 .ConfigureWebHostDefaults(web =>
                 {
                     web.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0, l =>
-                        l.UseConnectionHandler<ForwardProxyConnectionHandler>()));
+                    {
+                        configureListen?.Invoke(l);
+                        l.UseConnectionHandler<ForwardProxyConnectionHandler>();
+                    }));
                     web.ConfigureServices(s =>
                     {
                         s.AddSingleton(upstream);

@@ -66,7 +66,8 @@ namespace XMAT.Operations.Captures
                         new LoadedDevice(
                             input.DeviceName ?? string.Empty,
                             input.Records,
-                            ownsRecords: false),
+                            ownsRecords: false,
+                            input.Shaping),
                     });
             }
 
@@ -119,28 +120,31 @@ namespace XMAT.Operations.Captures
 
                 string hash = ComputeSha256(snapshot, cancellationToken);
                 snapshot.Seek(0, SeekOrigin.Begin);
-                return detectedKind.Value switch
+                if (detectedKind.Value == AnalysisInputKind.Saz)
                 {
-                    AnalysisInputKind.Saz => new LoadedInput(
+                    List<IDataRecord> records = LoadSaz(
+                        snapshot, limits, diagnostics, cancellationToken, out NetworkShapingMetadata shaping);
+                    return new LoadedInput(
                         AnalysisInputKind.Saz,
                         hash,
                         new[]
                         {
                             new LoadedDevice(
                                 string.Empty,
-                                LoadSaz(snapshot, limits, diagnostics, cancellationToken),
-                                ownsRecords: true),
+                                records,
+                                ownsRecords: true,
+                                shaping),
                         },
                         inputIdentity: SqLtFileIdentity.FromHandle(snapshot.SafeFileHandle),
                         inputPath: input.Path,
                         storedText: new StoredTextSummary(
                             "notApplicable",
                             "notNeeded"),
-                        textSource: CaptureTextSource.Literal),
-                    _ => throw new CaptureInputException(
-                        "analysis.input.unsupported",
-                        "The analysis input format is unsupported."),
-                };
+                        textSource: CaptureTextSource.Literal);
+                }
+                throw new CaptureInputException(
+                    "analysis.input.unsupported",
+                    "The analysis input format is unsupported.");
             }
         }
 
@@ -191,7 +195,8 @@ namespace XMAT.Operations.Captures
             Stream input,
             AnalysisLimits limits,
             ICollection<OperationDiagnostic> diagnostics,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            out NetworkShapingMetadata shaping)
         {
             BoundedSazReadResult result;
             try
@@ -229,6 +234,7 @@ namespace XMAT.Operations.Captures
                 };
             }
 
+            shaping = result.Shaping;
             if (result.SkippedIncompleteFrames > 0)
             {
                 diagnostics.Add(new OperationDiagnostic(
@@ -297,6 +303,8 @@ namespace XMAT.Operations.Captures
                     ref retainedBytes,
                     cancellationToken);
                 var webDeviceNames = new SortedSet<string>(StringComparer.Ordinal);
+                // A device can also have a NetworkTrace row with the same name; shaping belongs to its WebProxy row.
+                var webDeviceRows = new Dictionary<string, IDataRecord>(StringComparer.Ordinal);
                 var skippedUnsupportedDevice = false;
                 foreach (IDataRecord deviceRow in deviceRows)
                 {
@@ -315,6 +323,7 @@ namespace XMAT.Operations.Captures
                             "The capture database schema is invalid.");
                     }
                     webDeviceNames.Add(deviceName);
+                    webDeviceRows.TryAdd(deviceName, deviceRow);
                 }
 
                 if (skippedUnsupportedDevice)
@@ -359,7 +368,8 @@ namespace XMAT.Operations.Captures
                         recordsByDevice.TryGetValue(deviceName, out List<IDataRecord> deviceRecords)
                             ? deviceRecords
                             : new List<IDataRecord>(),
-                        ownsRecords: true));
+                        ownsRecords: true,
+                        NetworkShapingMetadata.Parse(webDeviceRows[deviceName].Str(NetworkShapingMetadata.DeviceField))));
                 }
 
                 return new LoadedInput(
@@ -722,10 +732,12 @@ namespace XMAT.Operations.Captures
     {
         private List<IDataRecord> _ownedRecords;
 
-        internal LoadedDevice(string name, IEnumerable<IDataRecord> records, bool ownsRecords)
+        internal LoadedDevice(
+            string name, IEnumerable<IDataRecord> records, bool ownsRecords, NetworkShapingMetadata shaping = null)
         {
             Name = name;
             Records = records;
+            Shaping = shaping;
             if (ownsRecords)
             {
                 _ownedRecords = records as List<IDataRecord> ?? records.ToList();
@@ -734,6 +746,7 @@ namespace XMAT.Operations.Captures
         }
 
         internal string Name { get; }
+        internal NetworkShapingMetadata Shaping { get; }
         internal IEnumerable<IDataRecord> Records { get; private set; }
 
         internal IEnumerable<IDataRecord> RecordsForConversion() =>

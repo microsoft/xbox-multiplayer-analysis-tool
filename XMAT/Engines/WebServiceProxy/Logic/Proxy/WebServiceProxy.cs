@@ -25,6 +25,9 @@ namespace XMAT.WebServiceCapture.Proxy
         public int Port { get; set; }
         public string LogFilePath { get; set; }
         public LogLevel CurrentLogLevel { get; set; }
+        public NetworkShapingController Shaping { get; set; }
+        public int BodyTimeoutSeconds { get; set; }
+        public IPAddress ListenAddress { get; set; }
     }
 
     internal class WebServiceProxy : IWebServiceProxy
@@ -165,8 +168,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
-        private static readonly Lazy<CertificateManager> _certManager = new(() => new(false));
+        private static readonly Lazy<CertificateManager> _defaultCertManager = new(() => new(false));
         private static readonly object InitializationGate = new();
+        private readonly CertificateManager _certificates;
+        private readonly bool _applicationDiagnostics;
         private IHost _host;
         private InterceptedHttpHost _interceptedHost;
         private readonly InterceptedTunnelRegistry _interceptedTunnels = new();
@@ -185,6 +190,14 @@ namespace XMAT.WebServiceCapture.Proxy
         internal BypassListModel BypassList { get; set; }
         internal ClientProcessResolver ProcessResolver { get; set; } = ClientProcessResolverHost.Shared;
         internal Guid RunId => _runId;
+
+        internal WebServiceProxy(CertificateManager certificates = null, bool applicationDiagnostics = true)
+        {
+            _certificates = certificates;
+            _applicationDiagnostics = applicationDiagnostics;
+        }
+
+        private CertificateManager Certificates => _certificates ?? CertManager;
 
         BypassListModel IWebServiceProxy.BypassList
         {
@@ -404,7 +417,22 @@ namespace XMAT.WebServiceCapture.Proxy
                 InitialProxyRequestReader>();
         }
 
-        internal static CertificateManager CertManager { get { return _certManager.Value; } }
+        internal static CertificateManager CertManager => _defaultCertManager.Value;
+
+        internal static ProxyRequestReadPolicy RequestReadPolicy(WebServiceProxyOptions options)
+        {
+            if (options.BodyTimeoutSeconds is < 0 or > 1800)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(options), "The total request-body timeout must be at most 1800 seconds.");
+            }
+            return options.BodyTimeoutSeconds == 0
+                ? ProxyRequestReadPolicy.Default
+                : ProxyRequestReadPolicy.Default with
+                {
+                    BodyTotalTimeout = TimeSpan.FromSeconds(options.BodyTimeoutSeconds),
+                };
+        }
 
         internal static WebServiceProxy CreateProxy()
         {
@@ -420,6 +448,7 @@ namespace XMAT.WebServiceCapture.Proxy
             WebServiceProxyOptions options,
             CancellationToken cancellationToken = default)
         {
+            RequestReadPolicy(options);
             if (options.Port <= 0 || options.Port > IPEndPoint.MaxPort)
             {
                 throw new ArgumentOutOfRangeException(
@@ -488,7 +517,11 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy startup rollback failed: {ex}");
+                if (_applicationDiagnostics)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy startup rollback failed: {ex}");
+                }
+                _logger.Log(0, LogLevel.ERROR, "Proxy startup rollback failed.");
                 FaultException = new AggregateException(
                     "Proxy startup failed and its rollback also failed.",
                     startFailure,
@@ -520,6 +553,7 @@ namespace XMAT.WebServiceCapture.Proxy
             _openConnections.Clear();
 
             _httpClient = new HttpClient(UpstreamHandlerFactory?.Invoke() ?? CreateUpstreamHandler());
+            ProxyRequestReadPolicy requestPolicy = RequestReadPolicy(options);
 
             // The public listener handles forward-proxy CONNECT requests. The
             // private listener terminates the tunneled TLS and lets Kestrel
@@ -529,6 +563,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 _httpClient,
                 _interceptedTunnels,
                 _logger,
+                requestReadPolicy: requestPolicy,
                 stoppingToken: _cts.Token);
             _interceptedHost = new InterceptedHttpHost(
                 SelectInterceptedCertificate,
@@ -544,8 +579,12 @@ namespace XMAT.WebServiceCapture.Proxy
                 {
                     webBuilder.UseKestrel(serverOptions =>
                     {
-                        serverOptions.Listen(IPAddress.Any, _port, listenOptions =>
+                        serverOptions.Listen(options.ListenAddress ?? IPAddress.Any, _port, listenOptions =>
                         {
+                            if (options.Shaping != null)
+                            {
+                                listenOptions.UseNetworkShaping(options.Shaping);
+                            }
                             listenOptions.UseConnectionHandler<ForwardProxyConnectionHandler>();
                         });
                     });
@@ -555,14 +594,14 @@ namespace XMAT.WebServiceCapture.Proxy
                     });
                     webBuilder.ConfigureServices(services =>
                     {
-                        services.AddSingleton(CertManager);
+                        services.AddSingleton(Certificates);
                         services.AddSingleton(_httpClient);
                         services.AddSingleton(_logger);
                         services.AddSingleton(this);
                         services.AddSingleton(_interceptedHost);
                         services.AddSingleton(_interceptedTunnels);
                         AddRequestReaderServices(
-                            services);
+                            services, requestPolicy);
                         services.AddSingleton<ForwardProxyConnectionHandler>();
                     });
                     webBuilder.Configure(app => { });
@@ -635,7 +674,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 ? hostName
                 : tunnel?.ConnectRequest.Host ?? "localhost";
             return InterceptedCertificateOverride?.Invoke(certificateHost) ??
-                CertManager.GetCertificateForHost(certificateHost);
+                Certificates.GetCertificateForHost(certificateHost);
         }
 
         // Concurrent callers share one stop operation, and the first caller's progress wins.
@@ -703,7 +742,11 @@ namespace XMAT.WebServiceCapture.Proxy
                     }
                     catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                     {
-                        PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy stopped observer failed: {ex}");
+                        if (_applicationDiagnostics)
+                        {
+                            PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy stopped observer failed: {ex}");
+                        }
+                        _logger.Log(0, LogLevel.ERROR, "Proxy stopped observer failed.");
                     }
                 }
             }
@@ -733,7 +776,11 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"A proxy cancellation callback failed: {ex}");
+                if (_applicationDiagnostics)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"A proxy cancellation callback failed: {ex}");
+                }
+                _logger.Log(0, LogLevel.ERROR, "A proxy cancellation callback failed.");
             }
         }
 

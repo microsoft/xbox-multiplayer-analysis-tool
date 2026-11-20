@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.ApplicationServices;
+using XMAT.Operations.Captures;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -117,6 +118,21 @@ namespace XMAT.Models
         internal IReadOnlyList<CaptureDescriptor> GetInvestigationCaptureReferences(Guid sourceId) =>
             _captureDeviceContexts.Where(context => HasInvestigationSource(context, sourceId))
                 .Select(CaptureCatalog.DescribeTarget).ToArray();
+
+        internal NetworkShapingMetadata GetInvestigationShaping(Guid sourceId, string deviceName = null)
+        {
+            lock (_investigationGate)
+            {
+                return NetworkShapingMetadata.Combine(_captureDeviceContexts
+                    .Where(context =>
+                        _investigationSources.TryGetValue(context, out InvestigationSource source) &&
+                        source.Descriptor.Id == sourceId &&
+                        (deviceName == null ||
+                            string.Equals(context.DeviceName, deviceName, StringComparison.Ordinal)) &&
+                        context.CaptureController is WebServiceDeviceCaptureController)
+                    .Select(context => ((WebServiceDeviceCaptureController)context.CaptureController).RecordedShaping));
+            }
+        }
 
         internal Task<DesktopNavigationTarget> RegisterInvestigationNavigationAsync(
             CaptureDataResult result, CaptureDetailKind kind, long itemId, Func<bool> isOwned,

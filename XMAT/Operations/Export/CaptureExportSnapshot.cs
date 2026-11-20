@@ -24,6 +24,7 @@ namespace XMAT.Operations.Export
             new("DeviceType", SqLtDeclaredType.Integer),
             new("DeviceName", SqLtDeclaredType.Text),
             new("CaptureType", SqLtDeclaredType.Integer),
+            new(NetworkShapingMetadata.DeviceField, SqLtDeclaredType.Text),
         ];
 
         private readonly Func<IReadOnlyList<CaptureRowKey>, CancellationToken, CaptureExportChunk> _readChunk;
@@ -116,6 +117,17 @@ namespace XMAT.Operations.Export
                             descriptor.RowId,
                             0,
                             CaptureRawValues.Read(descriptor, deviceFields)));
+                }
+                else if (device.Shaping != null)
+                {
+                    devices.Add(deviceId, new RawExportRow(default, deviceIndex + 1, 0,
+                        new Dictionary<string, object>
+                        {
+                            ["DeviceType"] = (long)DeviceType.Unknown,
+                            ["DeviceName"] = device.Name,
+                            ["CaptureType"] = (long)CaptureType.WebProxy,
+                            [NetworkShapingMetadata.DeviceField] = NetworkShapingMetadata.Serialize(device.Shaping),
+                        }));
                 }
                 foreach (IDataRecord record in device.Records)
                 {

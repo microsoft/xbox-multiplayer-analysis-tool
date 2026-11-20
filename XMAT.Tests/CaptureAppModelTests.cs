@@ -833,6 +833,61 @@ namespace XMAT.Tests
             }
         }
 
+        [Fact]
+        public async Task SaveDataCaptures_KeepsNetworkShapingJsonExactAcrossReload()
+        {
+            string directory = Path.Join(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path = Path.Join(directory, "shaped.xmatcap");
+            var shaping = new XMAT.WebServiceCapture.Proxy.NetworkShapingController();
+            shaping.Apply(XMAT.WebServiceCapture.Proxy.NetworkShapingProfile.Preset("min"));
+            string expected = XMAT.Operations.Captures.NetworkShapingMetadata.Serialize(
+                XMAT.Operations.Captures.NetworkShapingMetadata.From(shaping, 60));
+            Assert.Contains("\"", expected, StringComparison.Ordinal);
+            var loaded = new CaptureAppModel();
+            try
+            {
+                using (var active = new SqLtDatabase())
+                {
+                    active.Initialize();
+                    IDataTable devices = active.CreateTable(
+                        "CaptureDevices",
+                        new Field<long>("DeviceType"),
+                        new Field<string>("DeviceName"),
+                        new Field<long>("CaptureType"),
+                        new Field<string>(XMAT.Operations.Captures.NetworkShapingMetadata.DeviceField));
+                    long row = devices.AddRow(
+                        (long)DeviceType.LocalPC,
+                        "Shaped PC",
+                        (long)CaptureType.WebProxy,
+                        string.Empty);
+                    devices.UpdateRow(
+                        row,
+                        new FieldValue<string>(XMAT.Operations.Captures.NetworkShapingMetadata.DeviceField, expected));
+                    new CaptureAppModel { ActiveDatabase = active }.SaveDataCaptures(path);
+                }
+
+                loaded.LoadDataCaptures(path);
+
+                var controller = Assert.IsType<WebServiceDeviceCaptureController>(
+                    Assert.Single(loaded.CaptureDeviceContexts).CaptureController);
+                Assert.Equal(
+                    expected,
+                    XMAT.Operations.Captures.NetworkShapingMetadata.Serialize(controller.ImportedShaping));
+            }
+            finally
+            {
+                while (loaded.CaptureDeviceContexts.Count != 0)
+                {
+                    await loaded.RemoveDeviceContextAsync(loaded.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(directory, true);
+            }
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -2144,6 +2199,48 @@ namespace XMAT.Tests
                     table);
         }
 
+        [Fact]
+        public async Task ImportFromFiddlerAsync_WritableTabRefusesFullShapingHistoryBeforeReplacingRows()
+        {
+            const string deviceName = "writable-console";
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                WriteSaz(path, "replacement.example", "/replacement", "replacement body");
+                var recorded = new XMAT.WebServiceCapture.Proxy.NetworkShapingController();
+                recorded.Apply(XMAT.WebServiceCapture.Proxy.NetworkShapingProfile.Preset("min"));
+                var trace = Assert.Single(XMAT.Operations.Captures.NetworkShapingMetadata.From(recorded, 120).Traces);
+                using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+                {
+                    WriteArchiveEntry(
+                        archive,
+                        XMAT.Operations.Captures.NetworkShapingMetadata.ArchiveEntry,
+                        XMAT.Operations.Captures.NetworkShapingMetadata.Serialize(new(
+                            1,
+                            Enumerable.Repeat(trace, XMAT.Operations.Captures.NetworkShapingMetadata.MaximumTraces)
+                                .ToArray())));
+                }
+                AddCaptureRow(table, deviceName, "original.example", "/original", "original body");
+                var originalRows = SnapshotRows(table);
+                var controller = new WebServiceDeviceCaptureController(deviceName, DeviceType.LocalPC, false);
+
+                var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                    WebServiceCaptureMethod.MethodInstance.ImportFromFiddlerAsync(
+                        path,
+                        new TestCaptureContext(controller, deviceName, false, DeviceType.LocalPC),
+                        table));
+
+                Assert.Equal(Localization.GetLocalizedString("WEBCAP_IMPORT_SHAPING_FULL"), error.Message);
+                Assert.Equal(originalRows, SnapshotRows(table));
+                Assert.Null(controller.RecordedShaping);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
         private static async Task RemoveReadOnlyContextsAsync(CaptureAppModel model)
         {
             foreach (ICaptureDeviceContext context in model.CaptureDeviceContexts
@@ -2195,7 +2292,8 @@ namespace XMAT.Tests
                     Assert.Same(context, model.SelectedDeviceContext);
                     Assert.Equal(
                         new[] { nameof(controller.HostFilterList), nameof(controller.StatusFilterList),
-                            nameof(controller.MethodFilterList), nameof(controller.ProcessFilter), nameof(controller.SelectedConnectionModel),
+                            nameof(controller.MethodFilterList), nameof(controller.ProcessFilter),
+                            nameof(controller.ShapingStatusText), nameof(controller.SelectedConnectionModel),
                             nameof(controller.ProxyConnections) },
                         properties);
                     Assert.Contains("Injected view notification failure", Assert.Single(errors));

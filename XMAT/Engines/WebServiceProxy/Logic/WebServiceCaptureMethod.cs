@@ -146,11 +146,12 @@ namespace XMAT.WebServiceCapture
                         "WEBCAP_IMPORT_ARCHIVE_LIMIT"), exception);
             }
             var connections = result.Records;
+            controller?.EnsureRoomForImportedShaping(result.Shaping);
             return new(connections,
                 controller?.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
                 controller?.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
                 controller?.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()),
-                result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines, result.Source);
+                result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines, result.Source, result.Shaping);
         }
 
         internal static void PersistFiddlerImport(
@@ -200,6 +201,7 @@ namespace XMAT.WebServiceCapture
                 nameof(WebServiceDeviceCaptureController.StatusFilterList),
                 nameof(WebServiceDeviceCaptureController.MethodFilterList),
                 nameof(WebServiceDeviceCaptureController.ProcessFilter),
+                nameof(WebServiceDeviceCaptureController.ShapingStatusText),
                 nameof(WebServiceDeviceCaptureController.SelectedConnectionModel),
                 nameof(WebServiceDeviceCaptureController.ProxyConnections)
             })

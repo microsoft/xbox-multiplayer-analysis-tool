@@ -6,9 +6,11 @@ using System.Text.Json;
 using System.Windows.Controls;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Proxy;
 using XMAT.XboxLiveCaptureAnalysis;
 using XMAT.XboxLiveCaptureAnalysis.Models;
 using static XMAT.Tests.ProcessFilterTestSupport;
@@ -82,6 +84,25 @@ namespace XMAT.Tests.Operations.Analysis
         }
 
         [Fact]
+        public async Task RecordedShapingAppearsInTheHtmlAndExportArtifactManifest()
+        {
+            string capture = ProcessCaptures.WriteXmatcap(_directory, "capture.xmatcap", ProcessCaptures.MixedSessions);
+            var controller = new NetworkShapingController();
+            controller.Apply(NetworkShapingProfile.Preset("avg"));
+            NetworkShapingMetadata history = NetworkShapingMetadata.From(controller, 120);
+            (AnalysisRunModel run, ECaptureAnalyzerResult result, string output) =
+                await RunAsync(capture, ProcessFilterSpec.Empty, history);
+            Assert.Equal(ECaptureAnalyzerResult.Success, result);
+            Assert.Equal(NetworkShapingMetadata.Serialize(history), File.ReadAllText(Path.Join(output, "network-shaping.json")));
+            Assert.Contains("id=\"network-shaping-banner\"", File.ReadAllText(Path.Join(output, "index.html")));
+            _application.Run(window =>
+            {
+                var results = Assert.IsType<AnalysisResultsModel>(run.AnalysisData);
+                Assert.Contains(results.ArtifactManifest, artifact => artifact.RelativePath == "network-shaping.json");
+            });
+        }
+
+        [Fact]
         public void AddAnalysisRun_SnapshotsTheProcessFilterGivenForTheRun()
         {
             _application.Run(window =>
@@ -138,7 +159,8 @@ namespace XMAT.Tests.Operations.Analysis
 
         private async Task<(AnalysisRunModel Run, ECaptureAnalyzerResult Result, string Output)> RunAsync(
             string capture,
-            ProcessFilterSpec spec)
+            ProcessFilterSpec spec,
+            NetworkShapingMetadata shaping = null)
         {
             string outputRoot = Path.Join(_directory, "output-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(outputRoot);
@@ -149,6 +171,7 @@ namespace XMAT.Tests.Operations.Analysis
             _application.Run(window =>
             {
                 var controller = new WebServiceDeviceCaptureController(ProcessCaptures.Device, DeviceType.Unknown, true);
+                controller.ImportedShaping = shaping;
                 controller.LoadCaptureDataset(database.TableByName(WebServiceCaptureMethod.TableName).Dataset);
                 analyzer = new XboxLiveCaptureAnalyzer(AppContext.BaseDirectory, () => outputRoot);
                 analyzer.Initialize(new CaptureAppModel(System.Windows.Application.Current.Dispatcher));

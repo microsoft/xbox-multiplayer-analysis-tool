@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using System.Windows.Threading;
 using XMAT.Models;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Captures;
 using XMAT.NetworkTrace.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -157,7 +158,8 @@ namespace XMAT.ApplicationServices
                     return Task.FromResult(devices.Select(device => new Target(
                         _model.GetDeviceContext(device.Type, device.Name, device.Capture, true) ??
                         new CaptureDeviceContextModel(device.Type, device.Name, device.Capture, true, null,
-                            hostListPolicy: _model.HostListPolicy, attachLiveRows: false))).ToArray());
+                            hostListPolicy: _model.HostListPolicy, attachLiveRows: false),
+                        device.Shaping)).ToArray());
                 });
                 await Task.Run(() =>
                 {
@@ -290,7 +292,15 @@ namespace XMAT.ApplicationServices
                     captureType < int.MinValue || captureType > int.MaxValue || !Enum.IsDefined((CaptureType)captureType) ||
                     string.IsNullOrWhiteSpace(deviceName))
                     throw new CaptureFileException(CaptureFileFailure.InvalidCapture);
-                var device = new Device((DeviceType)deviceType, deviceName, (CaptureType)captureType);
+                NetworkShapingMetadata shaping = null;
+                if (fields.TryGetValue(NetworkShapingMetadata.DeviceField, out IFieldDefinition shapingField))
+                {
+                    if (shapingField.ValueType != FieldValueType.String)
+                        throw new CaptureFileException(CaptureFileFailure.InvalidCapture);
+                    shaping = NetworkShapingMetadata.Parse(
+                        record.Str(NetworkShapingMetadata.DeviceField));
+                }
+                var device = new Device((DeviceType)deviceType, deviceName, (CaptureType)captureType, shaping);
                 if (devices.Add(device))
                     result.Add(device);
             }
@@ -368,9 +378,10 @@ namespace XMAT.ApplicationServices
 
         private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
         private Task InvokeAsync(Func<Task> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
-        private sealed record Device(DeviceType Type, string Name, CaptureType Capture);
+        private sealed record Device(
+            DeviceType Type, string Name, CaptureType Capture, NetworkShapingMetadata Shaping = null);
 
-        private sealed class Target(ICaptureDeviceContext context)
+        private sealed class Target(ICaptureDeviceContext context, NetworkShapingMetadata shaping = null)
         {
             internal ICaptureDeviceContext Context { get; } = context;
             private WebServiceDeviceCaptureController.LoadedCaptures _web;
@@ -392,7 +403,10 @@ namespace XMAT.ApplicationServices
             internal void Apply()
             {
                 if (Context.CaptureController is WebServiceDeviceCaptureController web)
+                {
+                    web.ImportedShaping = shaping;
                     web.ApplyLoadedCaptures(_web);
+                }
                 else
                     ((NetworkTraceCaptureController)Context.CaptureController).ApplyLoadedCaptures(_packets);
             }

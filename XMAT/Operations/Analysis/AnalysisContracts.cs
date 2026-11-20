@@ -89,7 +89,8 @@ namespace XMAT.Operations.Analysis
         StoredTextSummary StoredText,
         IReadOnlyList<DeviceSummary> Devices,
         int TotalCalls,
-        int TotalFindings);
+        int TotalFindings,
+        NetworkShapingMetadata Shaping = null);
 
     internal sealed record AnalysisResult(AnalysisSummary Summary)
     {

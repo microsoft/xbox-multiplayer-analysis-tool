@@ -109,6 +109,22 @@ the local listener is stopped, console service checks and Xbox services calls ca
 Restart capture or use **Disable Xbox Proxy** to restore normal routing; disabling
 reboots the console. See [Stop proxying safely](web-proxy.md#stop-proxying-safely).
 
+## Uploads fail while shaping is enabled
+
+Check the capture's visible shaping mode first. Broken rejects new connections;
+Disconnect also aborts active ones. Turn shaping off to isolate it from forwarding
+or title failures. A slow upload may exceed the default 120-second total deadline:
+stop capture and explicitly raise **Total upload deadline** (maximum 1800 seconds),
+or use the CLI's `--body-timeout-seconds`. This does not change the 30-second
+inactivity guard, body-size limits, or the title/server's own timeouts.
+See [Network shaping](web-proxy.md#network-shaping) for the aggregate bandwidth scope.
+
+CLI HTTPS bodies are intentionally absent without an explicit `--root-pfx`: that
+mode forwards opaque TLS and records only CONNECT. It is not a lost-body defect.
+The supplied CA must be an RSA or ECDSA CA allowed to sign certificates, must
+contain its private key, and the client must already trust the corresponding
+public root. The CLI does not change certificate stores.
+
 ## If XMAT closes unexpectedly
 
 ### Local PC proxy restoration

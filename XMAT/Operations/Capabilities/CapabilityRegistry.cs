@@ -18,6 +18,10 @@ namespace XMAT.Operations.Capabilities
         internal const string MarkCaptureTextOperation = "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
         internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
         internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
+        internal const string CaptureProxyRoute =
+            "capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] " +
+            "[--shape off|min|avg|exc|broken|disconnect] [--down-kbps N] [--up-kbps N] " +
+            "[--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -196,8 +200,10 @@ namespace XMAT.Operations.Capabilities
                     Click(AddDeviceXaml, "OkButton_Click"),
                     EnumValue(CaptureTypeEnum, "WebProxy"),
                 }),
-            Capability.Planned(
-                "capture.generic", "Capture an explicit-proxy (generic) device", "S5", Owner,
+            Capability.Supported(
+                "capture.generic", "Capture an explicit-proxy (generic) device", "S5",
+                cli: CaptureProxyRoute,
+                operation: "XMAT.Operations.Captures.CaptureProxyOperation",
                 gui: new[] { EnumValue(DeviceTypeEnum, "GenericProxyDevice") }),
             Capability.Planned(
                 "capture.local-pc", "Capture this PC", "S6", Owner,
@@ -295,6 +301,16 @@ namespace XMAT.Operations.Capabilities
                     Preference(ProxyPreferences, "AutoStreamMediaAndEvents"),
                     Preference(ProxyPreferences, "StreamAllResponses"),
                     Preference(ProxyPreferences, "CaptureLimitMegabytes"),
+                }),
+            Capability.Supported(
+                "capture.network-shaping", "Shape capture bandwidth and latency", "S8a",
+                cli: CaptureProxyRoute,
+                operation: "XMAT.Operations.Captures.SetNetworkShapingOperation",
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "NetworkShaping"),
+                    Window("XMAT.WebServiceCapture.NetworkShapingWindow"),
+                    Click("Engines/WebServiceProxy/Windows/NetworkShapingWindow.xaml", "Apply_Click"),
                 }),
 
             // Replay sends captured requests again, as captured or edited, from this PC through the shared ReplaySender,

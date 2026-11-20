@@ -21,8 +21,7 @@ namespace XMAT.Tests
         internal CaptureDeviceTestData(Func<Task> save = null, TimeSpan? inspectionTimeout = null)
         {
             Database = CaptureInvestigationTestData.WebDatabase();
-            Database.CreateTable("CaptureDevices",
-                new Field<long>("DeviceType"), new Field<string>("DeviceName"), new Field<long>("CaptureType"));
+            ApplicationServices.CaptureDatabaseSchema.CreateDevices(Database);
             Model = new CaptureAppModel
             {
                 ActiveDatabase = Database,

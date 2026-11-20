@@ -19,6 +19,7 @@ using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTraceCaptureAnalysis;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -146,7 +147,9 @@ namespace XMAT.ApplicationServices
                 }
                 var acquisition = await CreateSnapshotAsync(sourceId, deadline.Token);
                 snapshot = acquisition.Snapshot;
-                await using var preparation = analyze ? await PrepareAnalysisAsync(sourceId, kind, deadline.Token) : null;
+                await using var preparation = analyze
+                    ? await PrepareAnalysisAsync(sourceId, kind, filter, deadline.Token)
+                    : null;
                 var result = await ReadSnapshotAsync(snapshot, acquisition.Source, kind, filter, options, analyze, preparation,
                     null, null, null, null, acquisition.Captures, null, acquisition.TextSource, null, deadline.Token);
                 snapshot = null;
@@ -181,7 +184,10 @@ namespace XMAT.ApplicationServices
             {
                 var result = await ReadSnapshotAsync(source.Snapshot, source.Source, CaptureDataKind.WebProxy, source.Filter,
                     new QueryExecutionOptions(TimeSpan.FromSeconds(60)), true,
-                    new Preparation(null, analyzer, null, _dispatcher), source.CaptureId, source.CaptureEpoch, run.Id, outputDirectory,
+                    new Preparation(
+                        null, analyzer, null, _dispatcher,
+                        (controller as WebServiceDeviceCaptureController)?.RecordedShaping),
+                    source.CaptureId, source.CaptureEpoch, run.Id, outputDirectory,
                     _model.GetInvestigationCaptureReferences(source.Source.Id), null,
                     (controller as WebServiceDeviceCaptureController)?.ExportTextSource ?? CaptureTextSource.Unknown,
                     run.ProcessFilter, cancellationToken);
@@ -314,7 +320,7 @@ namespace XMAT.ApplicationServices
                 {
                     var canonical = await Task.Run(() => preparation.Web.AnalyzeRecords(
                         webRecords, desktopOutputDirectory, desktopRunId ?? 0, processFilter: processFilter,
-                        cancellationToken: cancellationToken), cancellationToken);
+                        cancellationToken: cancellationToken, shaping: preparation.Shaping), cancellationToken);
                     canonicalWeb = canonical;
                     eligible = canonical.ConvertedRecords;
                     if (!ProcessFilter.IsEmpty(processFilter))
@@ -359,7 +365,8 @@ namespace XMAT.ApplicationServices
                 DateTimeOffset.UtcNow, kind, filter, data.RowCount, records.Count, captureId, captureEpoch, desktopRunId, [],
                 selectedRecordIds == null ? CaptureAnalysisScope.ExplicitFilter : CaptureAnalysisScope.DesktopVisibleRecords);
             var recordIds = records.Select(record => record.RecordId).ToArray();
-            var report = canonicalWeb != null ? new CaptureAnalysisReport(descriptor, canonicalWeb.Analysis, _reportWorkspaceRoot, recordIds) :
+            var report = canonicalWeb != null ? new CaptureAnalysisReport(
+                    descriptor, canonicalWeb.Analysis, _reportWorkspaceRoot, recordIds, preparation?.Shaping) :
                 canonicalNetwork != null ? new CaptureAnalysisReport(descriptor, JsonSerializer.Serialize(new
                 {
                     canonicalNetwork.TotalPackets,
@@ -413,7 +420,8 @@ namespace XMAT.ApplicationServices
             catch { await snapshot.DisposeAsync(); throw; }
         }
 
-        private Task<Preparation> PrepareAnalysisAsync(Guid sourceId, CaptureDataKind kind, CancellationToken cancellationToken) =>
+        private Task<Preparation> PrepareAnalysisAsync(
+            Guid sourceId, CaptureDataKind kind, CaptureDataFilter filter, CancellationToken cancellationToken) =>
             InvokeAsync(async () =>
             {
                 if (!(await _queries.GetSourcesAsync(cancellationToken)).Any(source => source.Id == sourceId))
@@ -424,7 +432,14 @@ namespace XMAT.ApplicationServices
                     throw new CaptureDataException(CaptureDataError.UnsupportedData);
                 if (!_model.TryBeginSourceAnalysis(out var lease))
                     throw new CaptureDataException(CaptureDataError.SourceBusy);
-                return new Preparation(lease, web, NetworkTraceCaptureAnalyzer.GetOptions(), _dispatcher);
+                return new Preparation(
+                    lease,
+                    web,
+                    NetworkTraceCaptureAnalyzer.GetOptions(),
+                    _dispatcher,
+                    kind == CaptureDataKind.WebProxy
+                        ? _model.GetInvestigationShaping(sourceId, filter?.DeviceName)
+                        : null);
             });
 
         private Task<CaptureDataResult> ReadWebSocketsAsync(
@@ -730,7 +745,7 @@ namespace XMAT.ApplicationServices
 
         private sealed record Preparation(
             IDisposable Lease, XboxLiveCaptureAnalyzer Web, NetworkTraceStatisticsOptions NetworkOptions,
-            Dispatcher Dispatcher) : IAsyncDisposable
+            Dispatcher Dispatcher, NetworkShapingMetadata Shaping = null) : IAsyncDisposable
         {
             public async ValueTask DisposeAsync()
             {

@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Captures;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -78,7 +79,9 @@ namespace XMAT.ApplicationServices
                         var database = DataAbstractionLayer.DataAbstractionLayer.CreateWorkingDatabase();
                         try
                         {
-                            CaptureDatabaseSchema.CreateDevices(database).AddRow((long)DeviceType.Unknown, name, (long)type);
+                            CaptureDatabaseSchema.CreateDevices(database).AddRow(
+                                (long)DeviceType.Unknown, name, (long)type,
+                                NetworkShapingMetadata.Serialize(prepared.Shaping));
                             var table = etl ? NetworkTraceCaptureMethod.CreateDataTable(database) : WebServiceCaptureMethod.CreateDataTable(database);
                             prepared.Persist(table, name, maximumBytes, cancellationToken);
                             database.CreateSnapshotToFile(nativePath, maximumBytes, cancellationToken);
