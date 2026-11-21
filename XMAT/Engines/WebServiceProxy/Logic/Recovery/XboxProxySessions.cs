@@ -70,7 +70,7 @@ namespace XMAT.WebServiceCapture
         // Consoles that an XMAT, which ended without shutting down, was capturing. The records stay until
         // Acknowledge is called once the offer to disable those proxies has been answered, so a start that
         // ends before then offers them again.
-        internal static AbandonedXboxSessions FindAbandoned(string directory)
+        internal static AbandonedXboxSessions FindAbandoned(string directory, bool cleanInvalid = true, int maximumRecords = int.MaxValue)
         {
             var consoles = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
             var files = new List<string>();
@@ -78,12 +78,16 @@ namespace XMAT.WebServiceCapture
             {
                 return new AbandonedXboxSessions(consoles.ToArray(), files);
             }
+            var seen = 0;
             foreach (var file in Directory.EnumerateFiles(directory, "xbox-*.json"))
             {
+                if (seen++ >= maximumRecords)
+                    return new(consoles.ToArray(), files, true);
                 XboxProxySession session;
                 try
                 {
-                    session = JsonSerializer.Deserialize<XboxProxySession>(SharedFile.ReadAllText(file));
+                    session = new FileInfo(file).Length <= 65536
+                        ? JsonSerializer.Deserialize<XboxProxySession>(SharedFile.ReadAllText(file)) : null;
                 }
                 catch (JsonException)
                 {
@@ -106,7 +110,8 @@ namespace XMAT.WebServiceCapture
                 else
                 {
                     // Nothing to offer from an unreadable or empty record.
-                    SharedFile.Delete(file);
+                    if (cleanInvalid)
+                        SharedFile.Delete(file);
                 }
             }
             return new AbandonedXboxSessions(consoles.ToArray(), files);
@@ -128,5 +133,5 @@ namespace XMAT.WebServiceCapture
         }
     }
 
-    internal sealed record AbandonedXboxSessions(IReadOnlyList<string> Consoles, IReadOnlyList<string> Files);
+    internal sealed record AbandonedXboxSessions(IReadOnlyList<string> Consoles, IReadOnlyList<string> Files, bool HasMore = false);
 }

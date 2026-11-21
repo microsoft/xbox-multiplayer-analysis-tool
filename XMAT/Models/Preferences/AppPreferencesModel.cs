@@ -2,37 +2,70 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.Models
 {
-    internal class AppPreferencesModel
+    internal class AppPreferencesModel : PreferenceObservable
     {
-        // NOTE: this is an 'object' because the parameters are
-        // serialized/deserialized and the Json serializer
-        // relies on this type to handle the reflection of derived
-        // classes properly as per this document:
-        // https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-polymorphism
-        public /*CaptureMethodParameters*/object WebProxyCapturePreferences { get; set; }
+        private object _webProxyCapturePreferences;
+        private object _networkCapturePreferences;
+        private object _networkAnalysisPreferences;
+        private string _language = "en-us";
+        private string _theme = "Light";
 
         // NOTE: this is an 'object' because the parameters are
         // serialized/deserialized and the Json serializer
         // relies on this type to handle the reflection of derived
         // classes properly as per this document:
         // https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-polymorphism
-        public /*CaptureMethodParameters*/object NetworkCapturePreferences { get; set; }
+        public /*CaptureMethodParameters*/object WebProxyCapturePreferences
+        {
+            get => _webProxyCapturePreferences;
+            set => SetPreferences(ref _webProxyCapturePreferences, value, nameof(WebProxyCapturePreferences));
+        }
 
         // NOTE: this is an 'object' because the parameters are
         // serialized/deserialized and the Json serializer
         // relies on this type to handle the reflection of derived
         // classes properly as per this document:
         // https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-polymorphism
-        public /*CaptureMethodParameters*/object NetworkAnalysisPreferences { get; set; }
+        public /*CaptureMethodParameters*/object NetworkCapturePreferences
+        {
+            get => _networkCapturePreferences;
+            set => SetPreferences(ref _networkCapturePreferences, value, nameof(NetworkCapturePreferences));
+        }
 
-        public string Language { get; set; } = "en-us"; // Default to en-us to support config files prior to loc support
+        // NOTE: this is an 'object' because the parameters are
+        // serialized/deserialized and the Json serializer
+        // relies on this type to handle the reflection of derived
+        // classes properly as per this document:
+        // https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-polymorphism
+        public /*CaptureMethodParameters*/object NetworkAnalysisPreferences
+        {
+            get => _networkAnalysisPreferences;
+            set => SetPreferences(ref _networkAnalysisPreferences, value, nameof(NetworkAnalysisPreferences));
+        }
 
-        public string Theme { get; set; } = "Light"; // "Light" or "Dark"
+        public string Language { get => _language; set => SetValue(ref _language, value); }
+
+        public string Theme { get => _theme; set => SetValue(ref _theme, value); }
+
+        private void SetPreferences(ref object field, object value, string property)
+        {
+            if (ReferenceEquals(field, value))
+                return;
+            if (field is PreferenceObservable previous)
+                previous.Changed -= ChildChanged;
+            field = value;
+            if (value is PreferenceObservable current)
+                current.Changed += ChildChanged;
+            ValueChanged(property);
+        }
+
+        private void ChildChanged(object sender, EventArgs args) => ValueChanged(string.Empty);
 
         public void Serialized()
         {

@@ -11,7 +11,9 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
@@ -40,6 +42,8 @@ namespace XMAT.WebServiceCapture
 
     // The outcome of settling a lease, with the settings read last, if any, and what made it fail.
     internal readonly record struct Settlement(RecoveryResult Result, ProxySettings Found, Exception Failure);
+    internal sealed record PcProxyStartupState(
+        string Revision, ProxySettings Settings, ProxyLease Lease, ProcessState? OwnerState, bool AbandonedLoopback);
 
     // Makes the Local PC proxy crash-safe. A lease is journaled and a guard process is running before
     // the proxy is enabled; the guard, the fatal-error handlers, normal shutdown or the next start then
@@ -279,6 +283,49 @@ namespace XMAT.WebServiceCapture
                 SharedFile.Delete(JournalPath);
                 var current = _store.Read();
                 return LooksAbandoned(current) ? current : null;
+            }
+        }
+
+        internal PcProxyStartupState InspectStartup()
+        {
+            using (AcquireLock(LockTimeout))
+                return InspectStartupCore();
+        }
+
+        private PcProxyStartupState InspectStartupCore()
+        {
+            var lease = LeaseJournal.TryRead(JournalPath);
+            var settings = _store.Read();
+            var owner = lease?.Owner.GetState();
+            var abandoned = LooksAbandoned(settings);
+            var revision = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+                new { lease, settings, owner, abandoned })));
+            return new(revision, settings, lease, owner, abandoned);
+        }
+
+        internal RecoveryResult RecoverStartup(
+            string expectedRevision, bool disableAbandonedLoopback, CancellationToken cancellationToken = default)
+        {
+            using (AcquireLock(LockTimeout))
+            {
+                var current = InspectStartupCore();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (current.Revision != expectedRevision ||
+                    current.OwnerState is ProcessState.Alive or ProcessState.Unknown)
+                    return RecoveryResult.Superseded;
+                if (disableAbandonedLoopback)
+                {
+                    if (!current.AbandonedLoopback ||
+                        current.Lease != null && !current.Lease.ProxiesToItsEndpoint(current.Settings))
+                        return RecoveryResult.Superseded;
+                    if (current.Lease != null)
+                        return Settle(_store, JournalPath, current.Lease, SettleMode.Disable).Result;
+                    var target = current.Settings.WithoutProxy();
+                    _store.Write(target);
+                    return _store.Read().IsEquivalentTo(target) ? RecoveryResult.Restored : RecoveryResult.Failed;
+                }
+                return current.Lease == null ? RecoveryResult.NotNeeded :
+                    Settle(_store, JournalPath, current.Lease, SettleMode.Recover).Result;
             }
         }
 

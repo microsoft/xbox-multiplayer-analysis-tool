@@ -130,6 +130,9 @@ namespace XMAT.WebServiceCapture
             }
         }
         public UInt16 PendingPort => _parameters.PendingPort;
+        internal string ProxyHost => _parameters.ProxyHost;
+        internal bool HasPortReservation => _portReservation != null;
+        internal bool HasPendingPortReservation => _pendingPortReservation != null;
         public bool HasPendingPort => PendingPort != 0;
         public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
         public string ImportNotice { get; private set; }
@@ -154,7 +157,7 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> StatusFilterList { get; set; }
         public ObservableCollection<CheckedListItem> HostFilterList { get; set; }
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
-        public WebSocketMessagesCollection WebSocketMessages { get; }
+        public WebSocketMessagesCollection WebSocketMessages { get; private set; }
         public string DeviceName { get; }
         public NetworkShapingController Shaping { get; } = new();
         public int BodyTimeoutSeconds { get; private set; } = 120;
@@ -756,6 +759,8 @@ namespace XMAT.WebServiceCapture
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;
         private readonly Func<IWebServiceProxy> _proxyFactory;
+        private readonly bool _usesDefaultProxyFactory;
+        private bool _deferProxyCreation;
         private ProxyPortPool.Reservation _portReservation;
         private ProxyPortPool.Reservation _pendingPortReservation;
         private string _portStatus;
@@ -822,6 +827,7 @@ namespace XMAT.WebServiceCapture
             _getClassifierIp4Addresses =
                 getClassifierIp4Addresses ?? GetAssignedUnicastIp4Addresses;
             _proxyFactory = proxyFactory ?? (() => WebServiceProxy.CreateProxy());
+            _usesDefaultProxyFactory = proxyFactory == null;
             HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
             Shaping.Changed += (_, _) =>
@@ -856,13 +862,17 @@ namespace XMAT.WebServiceCapture
 
         public void Initialize() => Initialize(false);
 
-        internal void Initialize(bool deferPortAllocation)
+        internal bool ProxyTrustSetupRequired => _deferProxyCreation && _usesDefaultProxyFactory &&
+            !WebServiceProxy.IsInitialized && !CertificateManager.HasUsableRoot();
+
+        internal void Initialize(bool deferPortAllocation, bool deferProxyCreation = false)
         {
             if (_initialized)
             {
                 throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
             }
             _initialized = true;
+            _deferProxyCreation = deferProxyCreation;
             CaptureMethod = WebServiceCaptureMethod.Method;
             _dataTable = (CaptureMethod as WebServiceCaptureMethod).WebProxyConnectionsTable;
 
@@ -872,7 +882,8 @@ namespace XMAT.WebServiceCapture
 
                 try
                 {
-                    _webProxy = _proxyFactory();
+                    if (!deferProxyCreation)
+                        InitializeProxy();
                 }
                 catch
                 {
@@ -880,23 +891,34 @@ namespace XMAT.WebServiceCapture
                     _portReservation = null;
                     throw;
                 }
-                _webProxy.BypassList = BypassList;
-                _webProxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
-                _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
-                _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
-                _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
-                if (_webProxy is WebServiceProxy streamingProxy)
-                {
-                    streamingProxy.WebResponseProgressAsync = WebProxy_WebResponseProgressAsync;
-                }
-                _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
-                _webProxy.WebSocketClosed += WebProxy_WebSocketClosed;
-                _webProxy.ConnectionClosed += WebProxy_ConnectionClosed;
                 if (!deferPortAllocation)
                 {
                     RestorePendingPort();
                 }
             }
+        }
+
+        private void InitializeProxy()
+        {
+            if (_webProxy != null)
+                return;
+            if (_deferProxyCreation && _usesDefaultProxyFactory &&
+                !WebServiceProxy.InitializeExisting(PublicUtilities.StorageDirectoryPath))
+                throw new CapturePrerequisiteException(CaptureOperationFailure.ProxyTrustRequired);
+            var proxy = _proxyFactory();
+            proxy.BypassList = BypassList;
+            proxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
+            proxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
+            proxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
+            proxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
+            if (proxy is WebServiceProxy streamingProxy)
+            {
+                streamingProxy.WebResponseProgressAsync = WebProxy_WebResponseProgressAsync;
+            }
+            proxy.WebSocketMessage += WebProxy_WebSocketMessage;
+            proxy.WebSocketClosed += WebProxy_WebSocketClosed;
+            proxy.ConnectionClosed += WebProxy_ConnectionClosed;
+            _webProxy = proxy;
         }
 
         internal void RestoreCurrentPort(bool deferAllocation)
@@ -947,15 +969,25 @@ namespace XMAT.WebServiceCapture
 
         internal void QueuePortChange(UInt16 port, Action save)
         {
+            QueuePortChangeAsync(port, () =>
+            {
+                save();
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+        }
+
+        internal async Task QueuePortChangeAsync(UInt16 port, Func<Task> save)
+        {
             if (_readOnly || !CanBeginTransition)
             {
                 throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_STOP_FIRST"));
             }
             if (port == Port)
             {
-                DiscardPortChange(save);
+                await DiscardPortChangeAsync(save);
                 return;
             }
+            using var transition = BeginTransition();
             var replacement = _pendingPortReservation?.Port == port
                 ? _pendingPortReservation : _portPool.ReservePort(port, DeviceName);
             var previous = _pendingPortReservation;
@@ -963,7 +995,7 @@ namespace XMAT.WebServiceCapture
             _parameters.PendingPort = port;
             try
             {
-                save();
+                await save();
             }
             catch
             {
@@ -985,15 +1017,25 @@ namespace XMAT.WebServiceCapture
 
         internal void DiscardPortChange(Action save)
         {
+            DiscardPortChangeAsync(() =>
+            {
+                save();
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+        }
+
+        internal async Task DiscardPortChangeAsync(Func<Task> save)
+        {
             if (_readOnly || IsRunning || IsTransitioning)
             {
                 throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_STOP_FIRST"));
             }
+            using var transition = BeginTransition();
             var previous = PendingPort;
             _parameters.PendingPort = 0;
             try
             {
-                save();
+                await save();
             }
             catch
             {
@@ -1016,7 +1058,7 @@ namespace XMAT.WebServiceCapture
             CommandManager.InvalidateRequerySuggested();
         }
 
-        private bool OwnsEndpoint(ProxyEndpoint endpoint) =>
+        internal bool OwnsEndpoint(ProxyEndpoint endpoint) =>
             endpoint != null &&
             endpoint.Port == Port &&
             (string.Equals(ProxyEndpoint.NormalizeHost(endpoint.Host),
@@ -1034,10 +1076,10 @@ namespace XMAT.WebServiceCapture
                     System.Net.Sockets.AddressFamily.InterNetwork)
                 .ToArray();
 
-        internal IProxyDeviceConfiguration CreateDeviceConfiguration() =>
+        internal IProxyDeviceConfiguration CreateDeviceConfiguration(string targetAddress = null) =>
             _deviceConfiguration ?? (_deviceType switch
             {
-                DeviceType.XboxConsole => new XboxProxyDeviceConfiguration(DeviceName),
+                DeviceType.XboxConsole => new XboxProxyDeviceConfiguration(targetAddress ?? DeviceName),
                 DeviceType.LocalPC => new PcProxyDeviceConfiguration(),
                 _ => throw new NotSupportedException(Localization.GetLocalizedString("PROXY_PORT_MANUAL"))
             });
@@ -1060,7 +1102,17 @@ namespace XMAT.WebServiceCapture
             NotifyPortState();
             try
             {
-                _portChangeTask = ApplyPortChangeCoreAsync(host, save, manualUpdateConfirmed, cancellation.Token);
+                _portChangeTask = ApplyPortChangeCoreAsync(host, () =>
+                {
+                    save();
+                    return Task.CompletedTask;
+                }, manualUpdateConfirmed, () =>
+                {
+                    if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var lease))
+                        throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
+                    return lease;
+                }, _deviceType == DeviceType.GenericProxyDevice ? null : CreateDeviceConfiguration(),
+                    token: cancellation.Token);
                 await _portChangeTask;
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
@@ -1082,22 +1134,27 @@ namespace XMAT.WebServiceCapture
         internal void CancelPortChange() => _portChangeCancellation?.Cancel();
 
         private async Task ApplyPortChangeCoreAsync(
-            string host, Action save, bool manualUpdateConfirmed, CancellationToken token)
+            string host, Func<Task> save, bool manualUpdateConfirmed,
+            Func<IDisposable> acquireDataLease, IProxyDeviceConfiguration device,
+            Func<ProxyConfiguration, bool> expectedConfiguration = null,
+            Action committed = null, CancellationToken token = default)
         {
             var desired = new ProxyEndpoint(host, PendingPort);
             async Task Start()
             {
-                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var lease))
-                {
-                    throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
-                }
+                var lease = acquireDataLease();
                 using (lease)
                 {
                     await StopProxyAsync();
                     await StartProxyCoreAsync(false, desired.Port);
                 }
             }
-            void Commit()
+            async Task Stop()
+            {
+                using var lease = acquireDataLease();
+                await StopProxyAsync();
+            }
+            async Task Commit()
             {
                 var previous = Port;
                 var previousHost = _parameters.ProxyHost;
@@ -1106,7 +1163,7 @@ namespace XMAT.WebServiceCapture
                 _parameters.ProxyHost = host;
                 try
                 {
-                    save();
+                    await save();
                 }
                 catch
                 {
@@ -1118,6 +1175,7 @@ namespace XMAT.WebServiceCapture
                 _portReservation?.Dispose();
                 _portReservation = _pendingPortReservation;
                 _pendingPortReservation = null;
+                committed?.Invoke();
                 NotifyPortState();
             }
             if (_deviceType == DeviceType.GenericProxyDevice)
@@ -1130,21 +1188,53 @@ namespace XMAT.WebServiceCapture
                 try
                 {
                     token.ThrowIfCancellationRequested();
-                    Commit();
+                    await Commit();
                     PortStatus = Localization.GetLocalizedString("PROXY_PORT_MANUAL");
                 }
                 catch
                 {
-                    await TryStopProxyAfterFailedDeviceSetupAsync();
+                    await Stop();
                     throw;
                 }
                 return;
             }
             var operation = new ProxyPortChangeOperation(
-                CreateDeviceConfiguration(), Start, () => StopProxyAsync(), Commit,
+                device, Start, Stop, Commit,
                 key => PortStatus = Localization.GetLocalizedString(key));
-            await operation.ApplyAsync(OwnsEndpoint, desired, token);
+            await operation.ApplyAsync(OwnsEndpoint, desired, token, expectedConfiguration);
         }
+
+        internal async Task ApplyPreparedPortChangeAsync(
+            string host, Func<Task> save, Func<IDisposable> acquireDataLease,
+            IProxyDeviceConfiguration device, Func<ProxyConfiguration, bool> expectedConfiguration,
+            Action committed, CancellationToken cancellationToken)
+        {
+            if (_readOnly || _pendingPortReservation == null || PendingPort != _pendingPortReservation.Port)
+                throw new CaptureProxyException(CaptureProxyFailure.NoPendingPort);
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _portChangeCancellation = cancellation;
+            NotifyPortState();
+            try
+            {
+                _portChangeTask = ApplyPortChangeCoreAsync(host, save, true,
+                    acquireDataLease, device, expectedConfiguration, committed, cancellation.Token);
+                await _portChangeTask;
+            }
+            finally
+            {
+                _portChangeTask = null;
+                _portChangeCancellation = null;
+                NotifyPortState();
+            }
+        }
+
+        internal void SetConfiguredProxyHost(string host)
+        {
+            _parameters.ProxyHost = host;
+            RaisePropertyChange(nameof(ProxyHost));
+        }
+
+        internal void SetProxyOperationStatus(string key) => PortStatus = Localization.GetLocalizedString(key);
 
         public async Task<bool> CanCloseAsync()
         {
@@ -1212,6 +1302,9 @@ namespace XMAT.WebServiceCapture
             ClearAllCaptures();
         }
 
+        internal bool DeletesStoredRowsOnClose => _captureDataSource == CaptureDataSource.ActiveTable &&
+            _dataTable?.Dataset.HasRecords(new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName)) == true;
+
         public void LoadCaptures(IEnumerable<IDataset> tables)
         {
             using (var bo = PublicUtilities.BlockingOperation())
@@ -1222,40 +1315,105 @@ namespace XMAT.WebServiceCapture
 
         internal void LoadCaptureDataset(IDataset dataset)
         {
-            _captureRows.AdvanceGeneration();
-            AdvanceSourceStamp();
-            ClearCaptureViewModels();
-            _captureDataSource = CaptureDataSource.LoadedDataset;
-            _loadedCaptureDataset = dataset;
-            if (_loadedCaptureDataset != null)
+            ApplyLoadedCaptures(PrepareLoadedCaptures(
+                dataset,
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(dataset),
+                CancellationToken.None));
+            NotifyLoadedCaptures();
+        }
+
+        internal LoadedCaptures PrepareLoadedCaptures(
+            IDataset dataset,
+            CaptureTextSource textSource,
+            CancellationToken cancellationToken)
+        {
+            textSource ??= global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(dataset);
+            var connections = new ProxyConnectionsCollection();
+            if (dataset != null)
             {
-                foreach (IDataRecord record in GetCaptureRecords())
+                foreach (var record in dataset.DataRecordsWhen(
+                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName)))
                 {
-                    ProxyConnections.AddFromDataRecord(
+                    cancellationToken.ThrowIfCancellationRequested();
+                    connections.AddFromDataRecord(
                         record,
                         true,
-                        new CaptureRowKey(_sourceId, -1, record.RowId, checked(++_loadedIncarnation)));
+                        new CaptureRowKey(_sourceId, -1, record.RowId, checked(++_loadedIncarnation)),
+                        textSource);
                 }
             }
-            StatusFilterList = UpdateFilter(
-                ProxyConnections
-                    .Select(connection => connection.Status)
-                    .Distinct()
-                    .ToList());
-            HostFilterList = UpdateFilter(
-                ProxyConnections
-                    .Select(connection => connection.Host)
-                    .Distinct()
-                    .ToList());
-            MethodFilterList = UpdateFilter(
-                ProxyConnections
-                    .Select(connection => connection.Method)
-                    .Distinct()
-                    .ToList());
-            NotifyPropertyChangesSafely(
-                nameof(StatusFilterList),
-                nameof(HostFilterList),
-                nameof(MethodFilterList));
+            return new(dataset, connections, new WebSocketMessagesCollection(),
+                UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
+                UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
+                UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()));
+        }
+
+        internal LoadedCaptures PrepareLoadedCaptures(IDataset dataset, CancellationToken cancellationToken) =>
+            PrepareLoadedCaptures(
+                dataset,
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(dataset),
+                cancellationToken);
+
+        internal void ApplyLoadedCaptures(LoadedCaptures captures)
+        {
+            _captureRows.AdvanceGeneration();
+            AdvanceSourceStamp();
+            _captureDataSource = CaptureDataSource.LoadedDataset;
+            _loadedCaptureDataset = captures.Dataset;
+            ProxyConnections = captures.Connections;
+            WebSocketMessages = captures.Messages;
+            StatusFilterList = captures.StatusFilters;
+            HostFilterList = captures.HostFilters;
+            MethodFilterList = captures.MethodFilters;
+            ProcessFilter = ProcessFilterSpec.Empty;
+            _selectedConnectionModel = null;
+            _selectedWebSocketMessage = null;
+        }
+
+        internal void NotifyLoadedCaptures()
+        {
+            RaisePropertyChange(nameof(ProxyConnections));
+            RaisePropertyChange(nameof(WebSocketMessages));
+            RaisePropertyChange(nameof(StatusFilterList));
+            RaisePropertyChange(nameof(HostFilterList));
+            RaisePropertyChange(nameof(MethodFilterList));
+            RaisePropertyChange(nameof(ProcessFilter));
+            RaisePropertyChange(nameof(SelectedConnectionModel));
+            RaisePropertyChange(nameof(SelectedWebSocketMessage));
+        }
+
+        internal sealed record LoadedCaptures(
+            IDataset Dataset, ProxyConnectionsCollection Connections, WebSocketMessagesCollection Messages,
+            ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> HostFilters,
+            ObservableCollection<CheckedListItem> MethodFilters);
+
+        internal sealed record ImportedCaptures(
+            ProxyConnectionsCollection Connections, ObservableCollection<CheckedListItem> HostFilters,
+            ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> MethodFilters,
+            int SkippedIncompleteFrames = 0, int SkippedMalformedHeaderLines = 0,
+            ImportedCaptureSource? Source = null, NetworkShapingMetadata Shaping = null);
+
+        internal bool LastImportSkippedData { get; private set; }
+
+        internal void ApplyImportedCaptures(ImportedCaptures captures, IDataTable table, bool clearMessages = false)
+        {
+            LastImportSkippedData = captures.SkippedIncompleteFrames > 0 || captures.SkippedMalformedHeaderLines > 0;
+            PrepareForActiveCaptureData();
+            _dataTable = table;
+            ProxyConnections = captures.Connections;
+            HostFilterList = captures.HostFilters;
+            StatusFilterList = captures.StatusFilters;
+            MethodFilterList = captures.MethodFilters;
+            ProcessFilter = ProcessFilterSpec.Empty;
+            _selectedConnectionModel = null;
+            if (captures.Source is { } source)
+                LoadedCaptureDatabaseRegistry.AssignImported(this, source);
+            ReplaceShapingHistory(captures.Shaping);
+            if (clearMessages)
+            {
+                WebSocketMessages = new WebSocketMessagesCollection();
+                _selectedWebSocketMessage = null;
+            }
         }
 
         internal void ReplaceLoadedCapturesFrom(
@@ -1267,6 +1425,7 @@ namespace XMAT.WebServiceCapture
             _captureDataSource = source._captureDataSource;
             _loadedCaptureDataset = source._loadedCaptureDataset;
             ProxyConnections = source.ProxyConnections;
+            WebSocketMessages = source.WebSocketMessages;
             StatusFilterList = source.StatusFilterList;
             HostFilterList = source.HostFilterList;
             MethodFilterList = source.MethodFilterList;
@@ -1276,6 +1435,7 @@ namespace XMAT.WebServiceCapture
             _selectedWebSocketMessage = null;
             NotifyPropertyChangesSafely(
                 nameof(ProxyConnections),
+                nameof(WebSocketMessages),
                 nameof(StatusFilterList),
                 nameof(HostFilterList),
                 nameof(MethodFilterList),
@@ -1510,6 +1670,7 @@ namespace XMAT.WebServiceCapture
                 await StopProxyAsync();
             }
 
+            InitializeProxy();
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
@@ -1792,6 +1953,12 @@ namespace XMAT.WebServiceCapture
         internal async Task StopProxyAsync(
             IProgress<WebProxyStopProgress> progress = null)
         {
+            if (_webProxy == null)
+            {
+                IsRunning = false;
+                return;
+            }
+
             var stopStopwatch = Stopwatch.StartNew();
             WebServiceProxy concreteProxy = _webProxy as WebServiceProxy;
             ClientProcessResolver resolver = concreteProxy?.ProcessResolver ?? ProcessResolverOverride;
@@ -1913,7 +2080,8 @@ namespace XMAT.WebServiceCapture
         {
             var callbackStopwatch = Stopwatch.StartNew();
             TimeSpan timeout = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            var timeoutTask = Task.Delay(timeout);
+            using var timerCancellation = new CancellationTokenSource();
+            Task timeoutTask = Task.Delay(timeout, timerCancellation.Token);
             try
             {
                 while (!callbacksDrained.IsCompleted)
@@ -1927,7 +2095,7 @@ namespace XMAT.WebServiceCapture
                     var completed = await Task.WhenAny(
                         callbacksDrained,
                         timeoutTask,
-                        Task.Delay(ProgressUpdateInterval));
+                        Task.Delay(ProgressUpdateInterval, timerCancellation.Token));
                     if (completed == timeoutTask)
                     {
                         throw new TimeoutException();
@@ -1953,6 +2121,10 @@ namespace XMAT.WebServiceCapture
                         timeoutSeconds),
                     ex);
             }
+            finally
+            {
+                await timerCancellation.CancelAsync();
+            }
         }
 
         // Waits for a proxy stop, which ends only after the proxy has completed the capture of every stream it forwarded.
@@ -1961,19 +2133,31 @@ namespace XMAT.WebServiceCapture
         private async Task<bool> WaitForProxyStopAsync(Task proxyStopped)
         {
             TimeSpan budget = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+            using var timerCancellation = new CancellationTokenSource();
+            try
             {
-                if (_captureCallbackCancellationTokenSource != null)
+                if (await Task.WhenAny(
+                    proxyStopped,
+                    Task.Delay(budget, timerCancellation.Token)) != proxyStopped)
                 {
-                    await _captureCallbackCancellationTokenSource.CancelAsync();
+                    if (_captureCallbackCancellationTokenSource != null)
+                    {
+                        await _captureCallbackCancellationTokenSource.CancelAsync();
+                    }
+                    if (await Task.WhenAny(
+                        proxyStopped,
+                        Task.Delay(budget, timerCancellation.Token)) != proxyStopped)
+                    {
+                        return false;
+                    }
                 }
-                if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
-                {
-                    return false;
-                }
+                await proxyStopped;
+                return true;
             }
-            await proxyStopped;
-            return true;
+            finally
+            {
+                await timerCancellation.CancelAsync();
+            }
         }
 
         private TimeoutException CaptureBudgetExceeded() =>
@@ -1986,17 +2170,25 @@ namespace XMAT.WebServiceCapture
             IProgress<WebProxyStopProgress> progress,
             Stopwatch stopStopwatch)
         {
-            while (!uiUpdatesDrained.IsCompleted)
+            using var timerCancellation = new CancellationTokenSource();
+            try
             {
-                progress?.Report(new WebProxyStopProgress(
-                    WebProxyStopPhase.DrainingUiUpdates,
-                    stopStopwatch.Elapsed,
-                    0,
-                    _uiUpdateQueue.PendingCount));
+                while (!uiUpdatesDrained.IsCompleted)
+                {
+                    progress?.Report(new WebProxyStopProgress(
+                        WebProxyStopPhase.DrainingUiUpdates,
+                        stopStopwatch.Elapsed,
+                        0,
+                        _uiUpdateQueue.PendingCount));
 
-                await Task.WhenAny(
-                    uiUpdatesDrained,
-                    Task.Delay(ProgressUpdateInterval));
+                    await Task.WhenAny(
+                        uiUpdatesDrained,
+                        Task.Delay(ProgressUpdateInterval, timerCancellation.Token));
+                }
+            }
+            finally
+            {
+                await timerCancellation.CancelAsync();
             }
 
             await uiUpdatesDrained;

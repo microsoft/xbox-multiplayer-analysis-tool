@@ -77,7 +77,32 @@ namespace XMAT.DataAbstractionLayer
 
             internal SqLtReadonlyDatabase Database { get; }
 
+            internal string OriginalPath { get; set; }
+
+            internal SqLtFileIdentity? OriginalIdentity { get; set; }
+
             internal int References { get; set; }
+        }
+
+        private sealed class SourceLease(Entry entry) : IDisposable
+        {
+            private Entry _entry = entry;
+            public void Dispose()
+            {
+                var owned = Interlocked.Exchange(ref _entry, null);
+                if (owned == null)
+                    return;
+                SqLtReadonlyDatabase dispose = null;
+                lock (Sync)
+                {
+                    if (--owned.References == 0)
+                    {
+                        Databases.Remove(owned.Database);
+                        dispose = owned.Database;
+                    }
+                }
+                DisposeReleased(dispose);
+            }
         }
 
         private static readonly object Sync = new();
@@ -93,6 +118,31 @@ namespace XMAT.DataAbstractionLayer
             IDeviceCaptureController,
             ImportedCaptureSource> ImportedSources =
             new(ReferenceEqualityComparer.Instance);
+
+        internal static IDisposable AcquireSource(SqLtReadonlyDatabase database, string originalPath = null)
+        {
+            ArgumentNullException.ThrowIfNull(database);
+            originalPath = originalPath == null ? null : Path.GetFullPath(originalPath);
+            SqLtFileIdentity? originalIdentity = null;
+            try
+            {
+                if (originalPath != null && File.Exists(originalPath))
+                    originalIdentity = SqLtFileIdentity.FromPath(originalPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            lock (Sync)
+            {
+                if (!Databases.TryGetValue(database, out var entry))
+                {
+                    entry = new Entry(database);
+                    Databases.Add(database, entry);
+                }
+                entry.OriginalPath ??= originalPath;
+                entry.OriginalIdentity ??= originalIdentity;
+                entry.References++;
+                return new SourceLease(entry);
+            }
+        }
 
         internal static void Assign(
             IDeviceCaptureController controller,
@@ -248,6 +298,10 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
+        private static bool IsProtected(Entry entry, string path, SqLtFileIdentity? identity) =>
+            identity.HasValue && (entry.Database.Identity == identity.Value || entry.OriginalIdentity == identity) ||
+            entry.OriginalPath != null && entry.OriginalPath.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase);
+
         internal static int ReferenceCount(
             SqLtReadonlyDatabase database)
         {
@@ -266,6 +320,10 @@ namespace XMAT.DataAbstractionLayer
             string normalized,
             SqLtFileIdentity? identity)
         {
+            if (Databases.Values.Any(entry => IsProtected(entry, normalized, identity)))
+            {
+                return true;
+            }
             if (ImportedSources.Values.Any(source =>
                     string.Equals(source.SourcePath, normalized, StringComparison.OrdinalIgnoreCase)))
             {

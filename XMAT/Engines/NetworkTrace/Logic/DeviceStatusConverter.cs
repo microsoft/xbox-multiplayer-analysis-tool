@@ -42,6 +42,9 @@ namespace XMAT.NetworkTrace
                 case DeviceStatusEnum.Tracing:
                     converted += Localization.GetLocalizedString("NETCAP_STATE_TRACING");
                     break;
+                case DeviceStatusEnum.RecoveryRequired:
+                    converted += Localization.GetLocalizedString("NETCAP_STATE_RECOVERY");
+                    break;
             }
 
             return converted;

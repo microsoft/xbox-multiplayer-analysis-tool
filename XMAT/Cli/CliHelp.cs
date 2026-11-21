@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using XMAT.AgentAccess;
 using XMAT.Operations.Capabilities;
 
 namespace XMAT.Cli
@@ -36,6 +38,21 @@ namespace XMAT.Cli
                 CliCommandHelp command = Describe(topic);
                 report.Commands = new[] { command };
                 report.HumanLines.AddRange(Details(command));
+                if (topic == CliCommands.Agent)
+                {
+                    report.Agent = AgentJson.Encode(new
+                    {
+                        guide = Path.Combine(AppContext.BaseDirectory, "AGENTS.md"),
+                        supportedModes = new[] { "headless", "desktop" },
+                        autoLaunchDefault = "headless",
+                        disclosure = CliAgentCommand.Disclosure
+                    });
+                    report.HumanLines.Add("Point the agent to <install-folder>\\AGENTS.md; agents do not automatically scan installed applications.");
+                    report.HumanLines.Add("Run doctor --for agent to check installed files. setup requires explicit --accept; connect/start never enables access.");
+                    report.HumanLines.Add("Setup options: --enable true|false --data redacted|complete --actions inspect|full --backups true|false --accept.");
+                    report.HumanLines.Add("Config: --client copilot|claude|codex|gemini --launch headless|desktop|none [--instance ID].");
+                    report.HumanLines.Add("Stop: --instance ID --accept [--save-capture ABS.xmatcap --overwrite | --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies].");
+                }
             }
 
             return report;
@@ -58,7 +75,7 @@ namespace XMAT.Cli
 
         private static IEnumerable<string> Overview(IReadOnlyList<CliCommandHelp> commands)
         {
-            yield return $"xmat {CliReport.ToolVersion}: Xbox Multiplayer Analysis Tool without the GUI.";
+            yield return $"xmat {CliReport.ToolVersion}: Xbox Multiplayer Analysis Tool command line.";
             yield return string.Empty;
             yield return "Usage:";
             foreach (string usage in commands.SelectMany(command => command.Usage))

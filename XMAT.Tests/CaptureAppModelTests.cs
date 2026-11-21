@@ -2292,7 +2292,8 @@ namespace XMAT.Tests
                     Assert.Same(context, model.SelectedDeviceContext);
                     Assert.Equal(
                         new[] { nameof(controller.HostFilterList), nameof(controller.StatusFilterList),
-                            nameof(controller.MethodFilterList), nameof(controller.SelectedConnectionModel),
+                            nameof(controller.MethodFilterList), nameof(controller.ProcessFilter),
+                            nameof(controller.ShapingStatusText), nameof(controller.SelectedConnectionModel),
                             nameof(controller.ProxyConnections) },
                         properties);
                     Assert.Contains("Injected view notification failure", Assert.Single(errors));
@@ -2758,13 +2759,15 @@ namespace XMAT.Tests
             public IReadOnlyList<long> ReplaceImportedRows(
                 CaptureTextSource source,
                 IFieldValue capture,
-                IEnumerable<object[]> rows)
+                IEnumerable<object[]> rows,
+                CancellationToken cancellationToken = default)
             {
                 ImportThreadId = Environment.CurrentManagedThreadId;
                 return ((IImportedCaptureTable)_inner).ReplaceImportedRows(
                     source,
                     capture,
-                    rows);
+                    rows,
+                    cancellationToken);
             }
 
             public IDataset Subset(params string[] fieldNames)

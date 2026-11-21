@@ -360,6 +360,49 @@ namespace XMAT.Tests.Operations.Analysis
         }
 
         [Fact]
+        public async Task RecordsInput_RetainsAllCanonicalReportsAndProvenanceWithoutWritingOrExposingThemInSummary()
+        {
+            using var directory = new TestDirectory();
+            var path = SyntheticCaptures.WriteXmatcap(directory.Path, "canonical.xmatcap",
+                new SyntheticXmatcapOptions(RequestsPerDevice: 6, IncludeCanaries: true));
+            UpdateCapture(path, "UPDATE WebProxyConnections SET ClientIP = '10.0.0.2' WHERE id % 2 = 0");
+            List<IDataRecord> rows;
+            using (var database = new SqLtReadonlyDatabase(path))
+                rows = database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToList();
+            var source = new EphemeralRecordSource(rows);
+
+            var result = await new AnalyzeCaptureOperation().ExecuteAsync(
+                new AnalyzeCaptureRequest(AnalysisInput.FromRecords(source, "Synthetic device 1"),
+                    new AnalysisOptions(RetainCanonicalResults: true)),
+                OperationContext.None, CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(1, source.EnumerationCount);
+            var canonical = Assert.IsType<CanonicalAnalysisResult>(result.Value.Canonical);
+            Assert.Equal(2, canonical.Analysis.Consoles.Count);
+            Assert.All(canonical.Analysis.Consoles, console => Assert.NotEmpty(console.Reports));
+            Assert.Equal(6, canonical.ConvertedRecords);
+            Assert.Equal(rows.Select(row => (long)row.RowId).Order(),
+                canonical.RecordByBreadcrumb.Values.Distinct().Order());
+            Assert.Null(result.Value.Legacy);
+            Assert.DoesNotContain(SyntheticCaptures.Canary, JsonSerializer.Serialize(result.Value), StringComparison.Ordinal);
+            Assert.Equal(new[] { path }, Directory.GetFiles(directory.Path));
+        }
+
+        [Fact]
+        public async Task EmptyRecordsInput_RetainsAnEmptyCanonicalResultForDesktopAndAgentAdapters()
+        {
+            var result = await new AnalyzeCaptureOperation().ExecuteAsync(
+                new AnalyzeCaptureRequest(AnalysisInput.FromRecords(Array.Empty<IDataRecord>(), string.Empty),
+                    new AnalysisOptions(RetainCanonicalResults: true)),
+                OperationContext.None, CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.NoAnalyzableData, result.Outcome);
+            Assert.Empty(result.Value.Canonical.Analysis.Consoles);
+            Assert.Equal(0, result.Value.Canonical.ConvertedRecords);
+        }
+
+        [Fact]
         public async Task BodyIdentityIsSharedAcrossDevicesAndReleasedAfterConversion()
         {
             using var directory = new TestDirectory();
@@ -1177,8 +1220,10 @@ namespace XMAT.Tests.Operations.Analysis
                     cancellation.Token);
         }
 
-        [Fact]
-        public async Task RuleWorkLimit_ReturnsDataFreeInvalidInput()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task RuleWorkLimit_ReturnsDataFreeInvalidInput(bool retainCanonical)
         {
             using var directory = new TestDirectory();
             string path = SyntheticCaptures.WriteXmatcap(
@@ -1198,11 +1243,19 @@ namespace XMAT.Tests.Operations.Analysis
                     observedExceptions.Add(type),
             };
 
+            var input = AnalysisInput.FromFile(path);
+            if (retainCanonical)
+            {
+                using var database = new SqLtReadonlyDatabase(path);
+                input = AnalysisInput.FromRecords(
+                    database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToList(),
+                    "Synthetic device 1");
+            }
             OperationResult<AnalysisResult> result =
                 await operation.ExecuteAsync(
                     new AnalyzeCaptureRequest(
-                        AnalysisInput.FromFile(path),
-                        new AnalysisOptions()),
+                        input,
+                        new AnalysisOptions(RetainCanonicalResults: retainCanonical)),
                     OperationContext.None,
                     CancellationToken.None);
 

@@ -37,6 +37,10 @@ namespace XMAT.Operations.Capabilities
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
         private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
+        private const string AgentAccessXaml = "Windows/AgentAccessWindow.xaml";
+        private const string SqlDocumentXaml = "Controls/SqlQueryDocumentView.xaml";
+        private const string SqlResultsXaml = "Controls/SqlQueryResultsView.xaml";
+        private const string SqlWorkspaceXaml = "Controls/SqlQueryWorkspaceView.xaml";
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
@@ -89,6 +93,47 @@ namespace XMAT.Operations.Capabilities
                 gui: new[] { Command(AppCommandsPrefix + "ExportAnalysisReport") }),
             Capability.Planned(
                 "analysis.compatibility", "Analyze with the LTA rule set, custom rules or other thresholds", "S1b", Owner),
+            Capability.Planned(
+                "query.execute", "Run protected read-only SQL and discover capture schemas", "S9", Owner,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "NewSqlQuery"),
+                    Click(SqlDocumentXaml, "Run_Click"),
+                    Click(SqlDocumentXaml, "Cancel_Click"),
+                    Click(SqlDocumentXaml, "RefreshSchema_Click"),
+                    Click(SqlDocumentXaml, "PreviewTable_Click"),
+                    Click(SqlWorkspaceXaml, "RefreshSources_Click"),
+                }),
+            Capability.Planned(
+                "query.export", "Export complete or selected SQL results", "S9", Owner,
+                gui: new[]
+                {
+                    Click(SqlResultsXaml, "ExportAll_Click"),
+                    Click(SqlResultsXaml, "ExportSelected_Click"),
+                }),
+            Capability.Supported(
+                "agent-access.manage", "Configure global local-agent policy and client setup", "S9",
+                cli: "agent setup [--enable true|false] [--data redacted|complete] [--actions inspect|full] [--backups true|false] [--accept]",
+                operation: "XMAT.AgentAccess.AgentAccessPolicyService",
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "ManageAgentAccess"),
+                    Window("XMAT.AgentAccessWindow"),
+                   Click(AgentAccessXaml, "PolicyChanged_Click"),
+                   Click(AgentAccessXaml, "CopyCommand_Click"),
+                    Click(AgentAccessXaml, "CopyConfiguration_Click"),
+                }),
+            Capability.Planned("agent-access.take-over", "Take operator ownership of the selected capture/scripts without stopping them", "S9", Owner,
+                gui: new[] { Click(MainWindowXaml, "TakeOverAgentResources_Click") }),
+
+            Capability.Supported("agent.start", "Launch or reuse a persistent identity-checked local host without enabling access", "S9",
+                cli: "agent start [--mode headless|desktop]"),
+            Capability.Supported("agent.status", "Inspect bounded local instance presence and saved policy", "S9",
+                cli: "agent status [--instance ID]"),
+            Capability.Supported("agent.config", "Generate client setup; never edit third-party client configuration", "S9",
+                cli: "agent config --client copilot|claude|codex|gemini [--launch headless|desktop|none] [--instance ID]"),
+            Capability.Supported("agent.stop", "Request guarded shutdown through the same MCP application workflow", "S9",
+                cli: "agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite | --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]"),
 
             // Capture files
             Capability.Supported(
@@ -191,6 +236,7 @@ namespace XMAT.Operations.Capabilities
                 gui: new[]
                 {
                     Command("XMAT.NetworkTrace.NetworkTraceCommands.StartStopCapture"),
+                    Command("XMAT.NetworkTrace.NetworkTraceCommands.AcknowledgeRecovery"),
                     EnumValue(CaptureTypeEnum, "NetworkTrace"),
                 }),
             // Hides sessions from view and selects the sessions to analyze or export; it never changes what the proxy
@@ -427,6 +473,9 @@ namespace XMAT.Operations.Capabilities
 
             // Certificates, diagnostics and environment
             Capability.Planned(
+                "certificate.setup", "Explicit desktop HTTPS certificate/trust setup; Windows consent cannot be automated", "S5", Owner,
+                gui: new[] { Click(MainWindowXaml, "SetupProxyTrust_Click") }),
+            Capability.Planned(
                 "certificate.export", "Show or export the existing root certificate; never creates one", "S5", Owner,
                 gui: new[] { Command(AppCommandsPrefix + "ExportRootCert") }),
             Capability.Planned(
@@ -437,7 +486,7 @@ namespace XMAT.Operations.Capabilities
                 gui: new[] { Command(AppCommandsPrefix + "ViewGDKXInfo") }),
             Capability.Supported(
                 "cli.doctor", "Check what a command needs before running it", "S1",
-                cli: "doctor --for analyze"),
+                cli: "doctor --for analyze|agent"),
 
             // Presentation only
             Capability.GuiOnly(
@@ -478,6 +527,28 @@ namespace XMAT.Operations.Capabilities
                     Command(NavigationCommandsPrefix + "GoToEndpointSbdr"),
                     Command(NavigationCommandsPrefix + "GoToEndpointTcr"),
                     WpfCommand("Close", AnalysisTabsXaml),
+                    Window("XMAT.CaptureInvestigationReportWindow"),
+                }),
+            Capability.GuiOnly(
+                "view.sql-workspace", "SQL editor and immutable result views",
+                "Presentation: document buffers, completion, history, paging and typed value inspection",
+                gui: new[]
+                {
+                    Click(SqlDocumentXaml, "Examples_Click"),
+                    Click(SqlDocumentXaml, "GenerateSelect_Click"),
+                    Click(SqlDocumentXaml, "InsertSchema_Click"),
+                    Click(SqlDocumentXaml, "Open_Click"),
+                    Click(SqlDocumentXaml, "SaveAs_Click"),
+                    Click(SqlDocumentXaml, "Save_Click"),
+                    Click(SqlResultsXaml, "ClearSelection_Click"),
+                    Click(SqlResultsXaml, "InspectNext_Click"),
+                    Click(SqlResultsXaml, "InspectRead_Click"),
+                    Click(SqlResultsXaml, "NextPage_Click"),
+                    Click(SqlResultsXaml, "PreviousPage_Click"),
+                    Click(SqlWorkspaceXaml, "CloseDocument_Click"),
+                    Click(SqlWorkspaceXaml, "History_Click"),
+                    Click(SqlWorkspaceXaml, "NewQuery_Click"),
+                    Click(SqlWorkspaceXaml, "OpenQuery_Click"),
                 }),
             Capability.GuiOnly(
                 "view.script-editor", "Script editor",

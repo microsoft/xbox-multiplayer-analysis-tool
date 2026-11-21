@@ -39,7 +39,7 @@ namespace XMAT.Cli
                 .OrderBy(command => command, StringComparer.Ordinal)
                 .ToList();
 
-        // xmat doctor --for TARGET checks what a command needs from its installation; only analyze needs anything.
-        internal static bool IsDoctorTarget(string target) => target == CliCommands.Analyze;
+        // xmat doctor --for TARGET checks the installation prerequisites for analysis or Agent Access.
+        internal static bool IsDoctorTarget(string target) => target is CliCommands.Analyze or CliCommands.Agent;
     }
 }

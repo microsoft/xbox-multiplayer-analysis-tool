@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.Threading;
 using XMAT.DataAbstractionLayer;
 
 namespace XMAT.SharedInterfaces
@@ -13,6 +14,7 @@ namespace XMAT.SharedInterfaces
         IReadOnlyList<long> ReplaceImportedRows(
             CaptureTextSource source,
             IFieldValue capture,
-            IEnumerable<object[]> rows);
+            IEnumerable<object[]> rows,
+            CancellationToken cancellationToken = default);
     }
 }

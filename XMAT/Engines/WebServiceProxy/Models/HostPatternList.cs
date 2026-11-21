@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -12,21 +11,32 @@ namespace XMAT.WebServiceCapture.Models
 {
     internal sealed class HostPatternList
     {
-        private readonly object _lockObj = new();
-        private readonly Dictionary<string, Regex> _regexCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _gate;
+        private readonly System.Collections.Generic.Dictionary<string, Regex> _regexCache =
+            new(StringComparer.OrdinalIgnoreCase);
 
-        internal ObservableCollection<string> Entries { get; } = new();
+        internal HostPatternList() : this(new object())
+        {
+        }
+
+        internal HostPatternList(object gate)
+        {
+            _gate = gate ?? throw new ArgumentNullException(nameof(gate));
+            Entries = new HostListCollection(_gate);
+            Entries.CollectionChanged += HandleCollectionChanged;
+        }
+
+        internal HostListCollection Entries { get; }
 
         internal bool Add(string pattern)
         {
             if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
                 return false;
 
-            lock (_lockObj)
+            lock (_gate)
             {
                 if (Entries.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
                     return false;
-
                 Entries.Add(entry);
                 return true;
             }
@@ -37,7 +47,7 @@ namespace XMAT.WebServiceCapture.Models
             if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
                 return false;
 
-            lock (_lockObj)
+            lock (_gate)
             {
                 return Entries.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase));
             }
@@ -48,42 +58,30 @@ namespace XMAT.WebServiceCapture.Models
             if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
                 return false;
 
-            var removed = false;
-            lock (_lockObj)
+            lock (_gate)
             {
-                for (int index = Entries.Count - 1; index >= 0; index--)
-                {
-                    if (string.Equals(Entries[index], entry, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Entries.RemoveAt(index);
-                        removed = true;
-                    }
-                }
-                _regexCache.Remove(entry);
+                string existing = Entries.FirstOrDefault(value =>
+                    string.Equals(value, entry, StringComparison.OrdinalIgnoreCase));
+                if (existing == null)
+                    return false;
+                Entries.Remove(existing);
+                return true;
             }
-            return removed;
         }
 
-        internal void Clear()
-        {
-            lock (_lockObj)
-            {
-                Entries.Clear();
-                _regexCache.Clear();
-            }
-        }
+        internal void Clear() => Entries.Clear();
 
         internal bool Matches(HostMatchCandidates candidates) =>
             Snapshot().Select(GetRegex)
                 .Any(regex => HostListEntry.Matches(regex, candidates));
 
-        internal IReadOnlyList<string> MatchingPatterns(HostMatchCandidates candidates) =>
+        internal System.Collections.Generic.IReadOnlyList<string> MatchingPatterns(HostMatchCandidates candidates) =>
             Snapshot().Where(pattern => HostListEntry.Matches(GetRegex(pattern), candidates))
                 .ToList();
 
         private string[] Snapshot()
         {
-            lock (_lockObj)
+            lock (_gate)
             {
                 return Entries.ToArray();
             }
@@ -91,7 +89,7 @@ namespace XMAT.WebServiceCapture.Models
 
         private Regex GetRegex(string pattern)
         {
-            lock (_lockObj)
+            lock (_gate)
             {
                 if (_regexCache.TryGetValue(pattern, out Regex cached))
                     return cached;
@@ -99,6 +97,17 @@ namespace XMAT.WebServiceCapture.Models
                 Regex regex = HostListEntry.CreatePattern(pattern);
                 _regexCache[pattern] = regex;
                 return regex;
+            }
+        }
+
+        private void HandleCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
+        {
+            if (args.Action is NotifyCollectionChangedAction.Remove or
+                NotifyCollectionChangedAction.Replace or
+                NotifyCollectionChangedAction.Reset)
+            {
+                lock (_gate)
+                    _regexCache.Clear();
             }
         }
     }

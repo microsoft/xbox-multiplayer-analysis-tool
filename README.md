@@ -10,6 +10,9 @@ PlayFab, and other network traffic from PCs and Xbox development consoles.
 - Proxy HTTP/1.1 and HTTP/2 over TLS, with ALPN negotiation and automatic HTTP/1.1 fallback.
 - Modify traffic on the fly with C# scripts.
 - Capture packet-level traffic and analyze service-call patterns and network issues.
+- Query an active or loaded capture with the read-only [SQL workspace](docs/sql-workspace.md).
+- Connect trusted local agents through opt-in [Agent Access (MCP)](docs/agent-access.md), with
+  explicit data sharing, action and backup policies.
 
 ![XMAT displaying captured web requests and response details](./ReadmeImages/8.png)
 
@@ -104,8 +107,27 @@ proxy can lose access to Xbox services.
 | Save, load, import, or safely share capture files, or export selected or filtered sessions | [Capture files and sanitized export](docs/capture-files.md) |
 | Analyze Xbox service calls and export reports | [Live trace analysis](docs/live-trace-analysis.md) |
 | Analyze or export captures from scripts or CI without the GUI | [Command line](docs/cli.md) |
+| Query the active or loaded database with schema help, paging and exact CSV/JSON export | [SQL workspace](docs/sql-workspace.md) |
+| Use a trusted agent with desktop or persistent headless XMAT | [Local Agent Access (MCP)](docs/agent-access.md) |
 | Capture and analyze packets from a console or PC | [Network capture](docs/network-capture.md) |
 | Recover from proxy problems or collect diagnostic logs | [Troubleshooting](docs/troubleshooting.md) |
+
+Agent Access is a global, per-user feature that is disabled initially. Run `xmat help agent`, or open
+**Actions > Agent Access**, to review the trust disclosure and choose redacted/complete data,
+Inspect/Full control, and optional local backups. The installation includes `AGENTS.md` for runtime
+usage. Local MCP transport does not stop a cloud-backed client or model provider from receiving and
+retaining returned data; see the [complete policy and recovery guide](docs/agent-access.md).
+
+## Recent additions
+
+- **SQL workspace:** read-only SQLite documents for active or loaded captures, with schema-assisted
+  editing, typed results, session history and exact CSV/JSON export. See the
+  [SQL workspace guide and examples](docs/sql-workspace.md).
+- **Local Agent Access (MCP):** persistent Headless or Desktop hosts, generated setup for supported
+  agent CLIs, global opt-in data/action policy, confirmations, bounded results, optional backups and
+  guarded shutdown. See [Agent Access](docs/agent-access.md).
+
+This section highlights current additions; detailed behavior and compatibility notes stay in the guides.
 
 ## Support and contributing
 

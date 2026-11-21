@@ -515,12 +515,12 @@ namespace XMAT.WebServiceCapture.Models
                 out object value) ? value : field.ValueType == FieldValueType.String ? string.Empty : 0L).ToArray();
         }
 
-        internal void UpdateFromDataRecord(IDataRecord dataRecord)
+        internal void UpdateFromDataRecord(IDataRecord dataRecord, CaptureTextSource textSource = null)
         {
             ArgumentNullException.ThrowIfNull(dataRecord);
             CaptureTextSource =
-                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(
-                    dataRecord);
+                textSource ??
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(dataRecord);
             RecordRowId = dataRecord.RowId;
 
             var requestNumber = dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);

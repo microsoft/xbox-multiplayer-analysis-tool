@@ -84,8 +84,8 @@ namespace XMAT.Tests.Proxy
             {
                 using var request = NewRequest(HttpMethod.Get, origin.Url("/buffered"), version);
                 Task<HttpResponseMessage> send = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                Task first = await Task.WhenAny(send, Task.Delay(TimeSpan.FromMilliseconds(750)));
-                Assert.NotSame(send, first);
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => send.WaitAsync(TimeSpan.FromMilliseconds(750)));
 
                 release.TrySetResult();
                 using HttpResponseMessage response = await send.WaitAsync(FirstBytesTimeout);
@@ -145,13 +145,18 @@ namespace XMAT.Tests.Proxy
                 response.Dispose();
             }
 
-            Task done = await Task.WhenAny(aborted.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-            Assert.True(ReferenceEquals(done, aborted.Task),
-                $"{route}: the upstream request was not cancelled after the client disconnected");
+            try
+            {
+                await aborted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail($"{route}: the upstream request was not cancelled after the client disconnected");
+            }
 
             // The stream ended when the device closed it: its capture completes with what arrived.
             Task<(bool Forwarded, string Body)> policy = policyRan.Task;
-            Assert.Same(policy, await Task.WhenAny(policy, Task.Delay(TimeSpan.FromSeconds(10))));
+            await policy.WaitAsync(TimeSpan.FromSeconds(10));
             (bool forwarded, string capturedBody) = await policy;
             Assert.True(forwarded);
             Assert.StartsWith("data: first\n\n", capturedBody, StringComparison.Ordinal);
@@ -612,17 +617,15 @@ namespace XMAT.Tests.Proxy
             Task<string> response = ReadRawToEndAsync(stream, TimeSpan.FromSeconds(15));
             await completionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-            Task completed;
             try
             {
-                completed = await Task.WhenAny(response, Task.Delay(TimeSpan.FromSeconds(5)));
+                await response.WaitAsync(TimeSpan.FromSeconds(5));
             }
             finally
             {
                 releaseCompletion.TrySetResult();
             }
             Assert.Contains("payload", await response, StringComparison.Ordinal);
-            Assert.Same(response, completed);
         }
 
         private static async Task VerifyHttps11ConnectionReusePrecedesCompletionAsync()
@@ -663,10 +666,9 @@ namespace XMAT.Tests.Proxy
             using var secondRequest = NewRequest(HttpMethod.Get, origin.Url("/second"), HttpVersion.Version11);
             Task<HttpResponseMessage> secondResponse = client.SendAsync(secondRequest);
 
-            Task completed;
             try
             {
-                completed = await Task.WhenAny(secondResponse, Task.Delay(TimeSpan.FromSeconds(5)));
+                await secondResponse.WaitAsync(TimeSpan.FromSeconds(5));
             }
             finally
             {
@@ -674,7 +676,6 @@ namespace XMAT.Tests.Proxy
             }
 
             using HttpResponseMessage second = await secondResponse;
-            Assert.Same(secondResponse, completed);
             Assert.Equal("/second", await second.Content.ReadAsStringAsync());
             int[] observedConnections = connectionIds.ToArray();
             Assert.Equal(2, observedConnections.Length);

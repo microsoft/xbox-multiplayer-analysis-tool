@@ -185,29 +185,18 @@ namespace XMAT.Tests
             Assert.Equal("No newline here", line);
         }
 
-        [Fact]
-        public void ReadLine_PreservesTerminalCrLfAsContent()
+        [Theory]
+        [InlineData(8)]
+        [InlineData(4094)]
+        [InlineData(4095)]
+        [InlineData(16384)]
+        public void ReadLine_PreservesTerminalCrlfAtChunkBoundariesAndEndOfStream(int length)
         {
-            byte[] data = Encoding.ASCII.GetBytes("terminal\r\n");
-            using var stream = new MemoryStream(data);
+            var expected = new string('x', length);
+            using var stream = new MemoryStream(Encoding.ASCII.GetBytes(expected + "\r\n"));
             using var reader = new BinaryReader(stream);
-
-            Assert.Equal("terminal\r\n", reader.ReadLine());
-            Assert.Equal(stream.Length, stream.Position);
-        }
-
-        [Fact]
-        public void ReadLine_CrLfAcrossBufferBoundary_WithNoTrailingByteIsContent()
-        {
-            byte[] data = Encoding.ASCII.GetBytes(
-                new string('a', 4095) + "\r\n");
-            using var stream = new MemoryStream(data);
-            using var reader = new BinaryReader(stream);
-
-            Assert.Equal(
-                new string('a', 4095) + "\r\n",
-                reader.ReadLine());
-            Assert.Equal(stream.Length, stream.Position);
+            Assert.Equal(expected + "\r\n", reader.ReadLine());
+            Assert.True(reader.IsEndOfStream());
         }
 
         [Fact]

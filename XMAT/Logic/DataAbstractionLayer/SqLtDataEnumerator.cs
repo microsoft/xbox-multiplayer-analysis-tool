@@ -17,78 +17,87 @@ namespace XMAT.DataAbstractionLayer
         {
             get
             {
-                ObjectDisposedException.ThrowIf(
-                    _ownerDisposed,
-                    this);
-                if (_cachedDataRecord == null)
+                lock (_gate)
                 {
-                    _cachedDataRecord = new SqLtDataRecord(
-                        _dataReader,
-                        _fieldDefs,
-                        _untypedColumns,
-                        CaptureTextSource);
-                }
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    if (_cachedDataRecord == null)
+                    {
+                        _cachedDataRecord = new SqLtDataRecord(
+                            _dataReader,
+                            _fieldDefs,
+                            _untypedColumns,
+                            CaptureTextSource);
+                    }
 
-                return _cachedDataRecord;
+                    return _cachedDataRecord;
+                }
             }
         }
 
         public bool MoveNext()
         {
-            ObjectDisposedException.ThrowIf(
-                _ownerDisposed,
-                this);
-            _cachedDataRecord = null;
-            SqliteDataReader reader =
-                _dataReader;
-            if (reader == null)
+            lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(
                     _ownerDisposed,
                     this);
-                Dispose();
+                _cachedDataRecord = null;
+                SqliteDataReader reader =
+                    _dataReader;
+                if (reader == null)
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    Dispose();
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    return false;
+                }
+                bool moved;
+                try
+                {
+                    moved = reader.Read();
+                }
+                catch
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    throw;
+                }
+                if (!moved)
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    Dispose();
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    return false;
+                }
                 ObjectDisposedException.ThrowIf(
                     _ownerDisposed,
                     this);
-                return false;
+                return true;
             }
-            bool moved;
-            try
-            {
-                moved = reader.Read();
-            }
-            catch
-            {
-                ObjectDisposedException.ThrowIf(
-                    _ownerDisposed,
-                    this);
-                throw;
-            }
-            if (!moved)
-            {
-                ObjectDisposedException.ThrowIf(
-                    _ownerDisposed,
-                    this);
-                Dispose();
-                ObjectDisposedException.ThrowIf(
-                    _ownerDisposed,
-                    this);
-                return false;
-            }
-            ObjectDisposedException.ThrowIf(
-                _ownerDisposed,
-                this);
-            return true;
         }
 
         public void Reset()
         {
-            ObjectDisposedException.ThrowIf(
-                _ownerDisposed,
-                this);
-            _cachedDataRecord = null;
-            if (_dataReader != null)
-                _dataReader.GetEnumerator().Reset();
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(
+                    _ownerDisposed,
+                    this);
+                _cachedDataRecord = null;
+                if (_dataReader != null)
+                    _dataReader.GetEnumerator().Reset();
+            }
         }
 
         object IEnumerator.Current
@@ -98,26 +107,29 @@ namespace XMAT.DataAbstractionLayer
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(
-                    ref _isDisposed,
-                    1) != 0)
+            lock (_gate)
             {
-                return;
-            }
-            SqliteDataReader reader =
-                _dataReader;
-            _dataReader = null;
-            _cachedDataRecord = null;
-            try
-            {
-                reader?.Dispose();
-            }
-            finally
-            {
-                Action<SqLtDataEnumerable> disposed =
-                    _onDisposed;
-                _onDisposed = null;
-                disposed?.Invoke(this);
+                if (Interlocked.Exchange(
+                        ref _isDisposed,
+                        1) != 0)
+                {
+                    return;
+                }
+                SqliteDataReader reader =
+                    _dataReader;
+                _dataReader = null;
+                _cachedDataRecord = null;
+                try
+                {
+                    reader?.Dispose();
+                }
+                finally
+                {
+                    Action<SqLtDataEnumerable> disposed =
+                        _onDisposed;
+                    _onDisposed = null;
+                    disposed?.Invoke(this);
+                }
             }
         }
 

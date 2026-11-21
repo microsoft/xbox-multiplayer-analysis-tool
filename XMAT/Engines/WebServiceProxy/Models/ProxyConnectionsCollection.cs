@@ -54,7 +54,8 @@ namespace XMAT.WebServiceCapture.Models
         internal ProxyConnectionModel AddFromDataRecord(
             IDataRecord dataRecord,
             bool isReadonly,
-            CaptureRowKey rowKey = default)
+            CaptureRowKey rowKey = default,
+            global::XMAT.DataAbstractionLayer.CaptureTextSource textSource = null)
         {
             lock (_lockObj)
             {
@@ -69,13 +70,13 @@ namespace XMAT.WebServiceCapture.Models
                 if (rowKey.SourceId != Guid.Empty &&
                     _keyToConnection.TryGetValue(rowKey, out ProxyConnectionModel existing))
                 {
-                    existing.UpdateFromDataRecord(dataRecord);
+                    existing.UpdateFromDataRecord(dataRecord, textSource);
                     MarkImported(existing, isReadonly);
                     return existing;
                 }
                 var newConnectionModel = new ProxyConnectionModel(dataRecord.RowId, requestNumber, connectionId);
                 newConnectionModel.RowKey = rowKey;
-                newConnectionModel.UpdateFromDataRecord(dataRecord);
+                newConnectionModel.UpdateFromDataRecord(dataRecord, textSource);
                 MarkImported(newConnectionModel, isReadonly);
 
                 Add(newConnectionModel);

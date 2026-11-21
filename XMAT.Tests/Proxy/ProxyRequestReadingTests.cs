@@ -3091,10 +3091,13 @@ namespace XMAT.Tests.Proxy
                     break;
                 }
                 written += next;
-                _ = await Task.WhenAny(
-                    response,
-                    Task.Delay(
-                        TimeSpan.FromMilliseconds(2)));
+                try
+                {
+                    await response.WaitAsync(TimeSpan.FromMilliseconds(2));
+                }
+                catch (TimeoutException)
+                {
+                }
             }
             return await response;
         }

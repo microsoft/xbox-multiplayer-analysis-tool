@@ -38,6 +38,20 @@
     <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\XMAT\bin\x64\$(Configuration)\net10.0-windows10.0.17763.0\win-x64\XboxMultiplayerAnalysisTool.exe"
+             Link="XboxMultiplayerAnalysisTool.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <Target Name="CopyConsoleHostToDesktopOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_ConsoleHostArtifacts Include="$(TargetDir)xmat.exe;$(TargetDir)xmat.dll;$(TargetDir)xmat.deps.json;$(TargetDir)xmat.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ConsoleHostArtifacts)"
+          DestinationFolder="$(MSBuildProjectDirectory)\..\XMAT\bin\x64\$(Configuration)\net10.0-windows10.0.17763.0\win-x64"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- xmat.exe asks the GC to conserve memory as much as it can (System.GC.ConserveMemory = 9, the highest level, in
        xmat.runtimeconfig.json), trading CPU time for a smaller heap when it holds large captures. In testing at the
        default limits, peak memory stayed at or below 1,361 MiB (1,547 MiB at level 7) and runs of 100,000 frames took
@@ -47,4 +61,5 @@
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
   </ItemGroup>
 
+  <Import Project="..\XMAT.AgentBridge\AgentBridge.targets" />
 </Project>

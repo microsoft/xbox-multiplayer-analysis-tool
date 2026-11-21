@@ -32,7 +32,8 @@ namespace XMAT.DataAbstractionLayer
             SqliteDataReader dataReader,
             Predicate<IDataRecord> predicate,
             CaptureTextSource captureTextSource,
-            Action<SqLtDataEnumerable> disposed)
+            Action<SqLtDataEnumerable> disposed,
+            object gate = null)
         {
             ArgumentNullException.ThrowIfNull(captureTextSource);
             _fieldDefs = fieldDefs;
@@ -42,6 +43,7 @@ namespace XMAT.DataAbstractionLayer
             CaptureTextSource = captureTextSource;
             _onDisposed = disposed;
             _cachedDataRecord = null;
+            _gate = gate ?? new object();
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
@@ -51,5 +53,6 @@ namespace XMAT.DataAbstractionLayer
         private Action<SqLtDataEnumerable> _onDisposed;
         private int _isDisposed;
         private volatile bool _ownerDisposed;
+        private readonly object _gate;
     }
 }

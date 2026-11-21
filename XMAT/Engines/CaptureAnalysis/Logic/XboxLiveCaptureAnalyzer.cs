@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -11,6 +12,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
+using XMAT.ApplicationServices;
+using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
@@ -31,198 +34,162 @@ namespace XMAT.XboxLiveCaptureAnalysis
         private ICaptureAppModel _captureAppModel;
         private AnalyzeCaptureOperation _operation;
 
-        public XboxLiveCaptureAnalyzer()
-            : this(
-                AppContext.BaseDirectory,
-                () => PublicUtilities.StorageDirectoryPath,
-                null,
-                null)
-        {
-        }
+        public XboxLiveCaptureAnalyzer() : this(AppContext.BaseDirectory, () => PublicUtilities.StorageDirectoryPath) { }
 
         internal XboxLiveCaptureAnalyzer(
-            string installDirectory,
-            Func<string> outputRootProvider,
-            Action<Type, string> exceptionObserver = null,
-            Func<AnalysisWorkBudget> workBudgetFactory = null)
+            string installDirectory, Func<string> outputRootProvider,
+            Action<Type, string> exceptionObserver = null, Func<AnalysisWorkBudget> workBudgetFactory = null)
         {
             _installDirectory = installDirectory;
-            _outputRootProvider = outputRootProvider ??
-                throw new ArgumentNullException(nameof(outputRootProvider));
+            _outputRootProvider = outputRootProvider ?? throw new ArgumentNullException(nameof(outputRootProvider));
             _exceptionObserver = exceptionObserver;
             _workBudgetFactory = workBudgetFactory;
         }
 
-        public static ICaptureAnalyzer Analyzer { get { return AnalyzerInstance; } }
+        internal XboxLiveCaptureAnalyzer(TraceAnalyzer analyzer, ICaptureAppModel appModel = null, string outputRoot = null)
+            : this(AppContext.BaseDirectory, () => outputRoot ?? PublicUtilities.StorageDirectoryPath)
+        {
+            _captureAppModel = appModel;
+            _operation = AnalyzeCaptureOperation.FromAnalyzer(analyzer);
+            _operation.ExceptionObserver = ObserveOperationException;
+        }
 
+        public static ICaptureAnalyzer Analyzer => AnalyzerInstance;
         internal static readonly XboxLiveCaptureAnalyzer AnalyzerInstance = new();
-
-        public override string ToString()
-        {
-            return Description;
-        }
-
-        public ICaptureMethod SupportedCaptureMethod
-        {
-            get
-            {
-                return WebServiceCaptureMethod.Method;
-            }
-        }
-
-        public string Description { get { return Localization.GetLocalizedString("WEBCAP_ANALYZER_TITLE"); } }
-
+        internal bool IsInitialized => _operation != null;
+        public override string ToString() => Description;
+        public ICaptureMethod SupportedCaptureMethod => WebServiceCaptureMethod.Method;
+        public string Description => Localization.GetLocalizedString("WEBCAP_ANALYZER_TITLE");
         public bool IsSelected { get; set; }
-
-        // TODO: implement me!
-        public ICaptureAnalyzerPreferences PreferencesModel { get { return null; } }
+        public ICaptureAnalyzerPreferences PreferencesModel => null;
 
         public void Initialize(ICaptureAppModel appModel)
         {
             _captureAppModel = appModel;
             _operation = null;
-            var assets = AnalysisAssets.Load(
-                _installDirectory,
-                AnalysisAssetLoadPolicy.GuiCompatible);
-            _operation = new AnalyzeCaptureOperation(assets)
-            {
-                ExceptionObserver = ObserveOperationException,
-            };
+            var assets = AnalysisAssets.Load(_installDirectory, AnalysisAssetLoadPolicy.GuiCompatible);
+            _operation = new AnalyzeCaptureOperation(assets) { ExceptionObserver = ObserveOperationException };
             if (_workBudgetFactory != null)
-            {
-                _operation.WorkBudgetFactory =
-                    _workBudgetFactory;
-            }
+                _operation.WorkBudgetFactory = _workBudgetFactory;
         }
 
-        public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
+        public async Task<ECaptureAnalyzerResult> RunAsync(
+            ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
         {
-            var analysisResultsModel = new AnalysisResultsModel();
-            analysisRun.AnalysisData = analysisResultsModel;
-
-            WebServiceDeviceCaptureController controller =
-                captureController as WebServiceDeviceCaptureController;
-            if (controller == null || _operation == null)
-            {
+            var model = new AnalysisResultsModel();
+            analysisRun.AnalysisData = model;
+            if (captureController is not WebServiceDeviceCaptureController controller || _operation == null)
                 return ECaptureAnalyzerResult.UnknownError;
-            }
-
-            string analysisRunStorageDirectory = Path.Combine(
-                _outputRootProvider(),
-                $"xlca_{analysisRun.Id}");
-            analysisResultsModel.OutputDirectory =
-                analysisRunStorageDirectory;
-            analysisResultsModel.SourceCaptureName = controller.DeviceName;
-            analysisResultsModel.SourceStamp = controller.SourceStamp;
-            var progress = new Progress<OperationProgress>(update =>
+            var directory = Path.Combine(_outputRootProvider(), $"xlca_{analysisRun.Id}");
+            model.OutputDirectory = directory;
+            model.SourceCaptureName = controller.DeviceName;
+            model.SourceStamp = controller.SourceStamp;
+            XboxLiveAnalysisResult canonical;
+            try
             {
-                if (TryGetProcessStep(update.Phase, out var processStep))
+                if (_captureAppModel is CaptureAppModel application && application.HasInvestigationTarget(controller))
                 {
-                    SetProcessStatus(analysisResultsModel, processStep);
+                    var result = await ((CaptureInvestigation)application.CaptureInvestigation).AnalyzeDesktopAsync(
+                        analysisRun, controller, this, directory);
+                    model.InvestigationData = result;
+                    var details = (CaptureDataDetails)result.Details;
+                    canonical = details.CanonicalWebAnalysis;
+                    await details.WriteDesktopArtifactsAsync(directory);
                 }
-            });
-            var result = await _operation.ExecuteAsync(
-                new AnalyzeCaptureRequest(
-                    AnalysisInput.FromRecords(
-                        controller.GetCaptureRecords(),
-                        controller.DeviceName,
-                        controller.RecordedShaping),
-                    new AnalysisOptions(
-                        ProduceLegacyReports: true,
-                        ProcessFilter: analysisRun.ProcessFilter)),
-                new OperationContext(
-                    workingDirectory: analysisRunStorageDirectory,
-                    progress: progress),
-                CancellationToken.None);
-            if (result.Diagnostics.Any(diagnostic =>
-                    diagnostic.Code ==
-                    AnalyzeCaptureOperation.WorkLimitCode))
-            {
-                return ECaptureAnalyzerResult.WorkLimit;
-            }
-            if (result.Outcome is OperationOutcome.InvalidInput or
-                OperationOutcome.NoAnalyzableData)
-            {
-                return ECaptureAnalyzerResult.NoSuitableData;
-            }
-            if (!result.Succeeded ||
-                result.Value?.Legacy?.PerConsoleReports == null)
-            {
-                return ECaptureAnalyzerResult.UnknownError;
-            }
-
-            // at this point we should show any report views
-            // NOTE: for now we are just showing the reports for the first
-            // console that we found in the data
-
-            if (result.Value.Legacy.PerConsoleReports.Count == 0)
-            {
-                return ECaptureAnalyzerResult.NoSuitableData;
-            }
-
-            var firstReports = result.Value.Legacy.PerConsoleReports.First();
-            foreach (var report in firstReports.Value)
-            {
-                ReportViewModel model = ReportViewModelFactory.CreateForDocument(
-                    _captureAppModel,
-                    controller.DeviceName,
-                    analysisRunStorageDirectory,
-                    report);
-                if (model != null && model.Show)
+                else
                 {
-                    model.SourceStamp = analysisResultsModel.SourceStamp;
-                    analysisResultsModel.Reports.Add(model);
+                    var result = await ExecuteRecordsAsync(controller.GetCaptureRecords(), controller.DeviceName,
+                        directory, step => SetProcessStatus(model, step), analysisRun.ProcessFilter,
+                        CancellationToken.None, controller.RecordedShaping);
+                    if (result.Diagnostics.Any(diagnostic => diagnostic.Code == AnalyzeCaptureOperation.WorkLimitCode))
+                        return ECaptureAnalyzerResult.WorkLimit;
+                    if (result.Outcome is OperationOutcome.InvalidInput or OperationOutcome.NoAnalyzableData)
+                        return ECaptureAnalyzerResult.NoSuitableData;
+                    if (!result.Succeeded || result.Value?.Canonical == null)
+                        return ECaptureAnalyzerResult.UnknownError;
+                    canonical = Canonical(result.Value);
                 }
             }
-
-            if (result.Value.Summary.Shaping != null)
+            catch (AnalysisWorkLimitException) { return ECaptureAnalyzerResult.WorkLimit; }
+            model.CanonicalAnalysis = canonical;
+            if (canonical.Analysis.Consoles.Count == 0)
+                return ECaptureAnalyzerResult.NoSuitableData;
+            foreach (var report in canonical.Analysis.Consoles[0].Reports)
+            {
+                var view = ReportViewModelFactory.CreateForDocument(
+                    _captureAppModel, controller.DeviceName, directory, report);
+                if (view != null && view.Show)
+                {
+                    view.SourceStamp = model.SourceStamp;
+                    model.Reports.Add(view);
+                }
+            }
+            if (controller.RecordedShaping is { } shaping && NetworkShapingMetadata.FitsLimits(shaping))
             {
                 NetworkShapingReport.WriteBanner(
-                    analysisRunStorageDirectory,
+                    directory,
                     Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_BANNER"),
                     Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_LINK"));
             }
-
-            // Written before completion lists the artifacts, so report export keeps the scope with the report.
             if (!ProcessFilter.IsEmpty(analysisRun.ProcessFilter))
-            {
-                WriteProcessScope(
-                    analysisRunStorageDirectory,
-                    analysisRun.ProcessFilter,
-                    result.Value.ProcessScope);
-            }
-
-            SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
+                WriteProcessScope(directory, analysisRun.ProcessFilter, canonical.ProcessScope);
+            if (model.InvestigationData?.Details is CaptureDataDetails completed)
+                await completed.AdoptDesktopFilesAsync(directory);
+            SetProcessStatus(model, AnalysisResultsModel.ProcessStep.Complete);
             return ECaptureAnalyzerResult.Success;
         }
 
-        // A filtered analysis states its scope twice: scope.json in the shape of xmat's processFilter, and a banner at the
-        // top of the HTML report.
+        public void Shutdown() => _operation = null;
+
+        internal XboxLiveAnalysisResult AnalyzeRecords(
+            IEnumerable<IDataRecord> records, string outputDirectory = null, long runId = 0,
+            Action<AnalysisResultsModel.ProcessStep> progress = null, ProcessFilterSpec processFilter = null,
+            NetworkShapingMetadata shaping = null, CancellationToken cancellationToken = default)
+        {
+            if (_operation == null)
+                throw new InvalidOperationException("The Xbox Live analyzer is not initialized.");
+            var result = ExecuteRecordsAsync(
+                    records, string.Empty, outputDirectory, progress, processFilter, cancellationToken, shaping)
+                .GetAwaiter().GetResult();
+            if (result.Outcome == OperationOutcome.Cancelled)
+                throw new OperationCanceledException(cancellationToken);
+            if (result.Diagnostics.Any(diagnostic => diagnostic.Code == AnalyzeCaptureOperation.WorkLimitCode))
+                throw new AnalysisWorkLimitException();
+            if (result.Value?.Canonical != null)
+                return Canonical(result.Value);
+            throw new InvalidOperationException("The shared capture analysis operation could not complete.");
+        }
+
+        private Task<OperationResult<AnalysisResult>> ExecuteRecordsAsync(
+            IEnumerable<IDataRecord> records, string deviceName, string outputDirectory,
+            Action<AnalysisResultsModel.ProcessStep> progress, ProcessFilterSpec processFilter,
+            CancellationToken cancellationToken, NetworkShapingMetadata shaping = null) =>
+            _operation.ExecuteAsync(new AnalyzeCaptureRequest(AnalysisInput.FromRecords(records, deviceName, shaping),
+                new AnalysisOptions(ProduceLegacyReports: outputDirectory != null, RetainCanonicalResults: true,
+                    ProcessFilter: processFilter)),
+                new OperationContext(outputDirectory, progress == null ? null : new ProcessProgress(progress)), cancellationToken);
+
+        private static XboxLiveAnalysisResult Canonical(AnalysisResult value) =>
+            new(value.Canonical.Analysis, value.Canonical.RecordByBreadcrumb,
+                value.Canonical.ConvertedRecords, value.Canonical.SkippedRecords)
+            {
+                ProcessScope = value.ProcessScope,
+                IncludedKeys = value.IncludedKeys,
+            };
+
         private static void WriteProcessScope(string directory, ProcessFilterSpec filter, ProcessFilterScope scope)
         {
-            File.WriteAllBytes(
-                Path.Join(directory, ProcessScopeJson.ScopeFileName),
-                ProcessScopeJson.Serialize(filter, scope));
-
+            File.WriteAllBytes(Path.Join(directory, ProcessScopeJson.ScopeFileName), ProcessScopeJson.Serialize(filter, scope));
             string index = Path.Join(directory, "index.html");
             if (!File.Exists(index))
-            {
                 return;
-            }
-
             ProcessFilterCounts counts = scope?.Counts ?? new ProcessFilterCounts(0, 0, 0, 0);
             string text = Localization.GetLocalizedString(
-                "ANALYSIS_PROCESS_FILTER_BANNER",
-                counts.Included,
-                counts.Total,
-                counts.Hidden,
-                counts.Unknown,
+                "ANALYSIS_PROCESS_FILTER_BANNER", counts.Included, counts.Total, counts.Hidden, counts.Unknown,
                 Selectors(filter.Include, "ANALYSIS_PROCESS_FILTER_ALL"),
                 Selectors(filter.Exclude, "ANALYSIS_PROCESS_FILTER_NONE"));
-            string banner =
-                "<div id=\"process-filter-banner\" class=\"process-filter-banner\" role=\"note\">" +
-                WebUtility.HtmlEncode(text) +
-                "</div>";
+            string banner = "<div id=\"process-filter-banner\" class=\"process-filter-banner\" role=\"note\">" +
+                WebUtility.HtmlEncode(text) + "</div>";
             const string container = "<div class=\"atg-container\">";
             string html = File.ReadAllText(index);
             int position = html.IndexOf(container, StringComparison.Ordinal);
@@ -233,71 +200,49 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         private static string Selectors(ImmutableArray<string> selectors, string emptyKey) =>
-            selectors.IsDefaultOrEmpty
-                ? Localization.GetLocalizedString(emptyKey)
-                : string.Join(", ", selectors);
+            selectors.IsDefaultOrEmpty ? Localization.GetLocalizedString(emptyKey) : string.Join(", ", selectors);
 
-        public void Shutdown()
-        {
-            _operation = null;
-        }
+        private static void SetProcessStatus(AnalysisResultsModel model, AnalysisResultsModel.ProcessStep step) =>
+            PublicUtilities.SafeInvoke(() => model.ActiveProcessStep = step);
 
-        private void SetProcessStatus(AnalysisResultsModel model, AnalysisResultsModel.ProcessStep processStep)
-        {
-            PublicUtilities.SafeInvoke(() => model.ActiveProcessStep = processStep);
-        }
-
-        private void ObserveOperationException(
-            Type type,
-            string stack)
+        private void ObserveOperationException(Type type, string stack)
         {
             if (_exceptionObserver != null)
             {
                 try
-                {
-                    _exceptionObserver(type, stack);
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    // GUI diagnostics are best effort.
-                }
+                { _exceptionObserver(type, stack); }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception)) { }
                 return;
             }
-
-            PublicUtilities.AppLog(
-                LogLevel.ERROR,
-                $"Capture analysis failed ({type.FullName}).{Environment.NewLine}{stack}");
+            PublicUtilities.AppLog(LogLevel.ERROR, $"Capture analysis failed ({type.FullName}).{Environment.NewLine}{stack}");
         }
 
-        private static bool TryGetProcessStep(
-            string phase,
-            out AnalysisResultsModel.ProcessStep processStep)
+        private static bool TryGetProcessStep(string phase, out AnalysisResultsModel.ProcessStep step)
         {
-            processStep = phase switch
+            step = phase switch
             {
-                "analysis.convert" =>
-                    AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems,
-                "analysis.group" =>
-                    AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems,
-                "analysis.convert-uris" =>
-                    AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData,
-                "analysis.rules" =>
-                    AnalysisResultsModel.ProcessStep.RunningValidationRules,
-                "analysis.dump-data" =>
-                    AnalysisResultsModel.ProcessStep.DumpingServiceCallData,
-                "analysis.dump-items" =>
-                    AnalysisResultsModel.ProcessStep.DumpingServiceCallItems,
-                "analysis.dump-results" =>
-                    AnalysisResultsModel.ProcessStep.DumpingRuleResults,
-                _ => AnalysisResultsModel.ProcessStep.NotStarted,
+                "analysis.convert" => AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems,
+                "analysis.group" => AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems,
+                "analysis.convert-uris" => AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData,
+                "analysis.rules" => AnalysisResultsModel.ProcessStep.RunningValidationRules,
+                "analysis.dump-data" => AnalysisResultsModel.ProcessStep.DumpingServiceCallData,
+                "analysis.dump-items" => AnalysisResultsModel.ProcessStep.DumpingServiceCallItems,
+                "analysis.dump-results" => AnalysisResultsModel.ProcessStep.DumpingRuleResults,
+                _ => AnalysisResultsModel.ProcessStep.NotStarted
             };
-            return processStep != AnalysisResultsModel.ProcessStep.NotStarted;
+            return step != AnalysisResultsModel.ProcessStep.NotStarted;
         }
 
-        // The command line shares this conversion (WebServiceCaptureRecordConverter); the GUI analyzer keeps its
-        // entry point for existing callers.
-        internal static ServiceCallItem ProxyConnectionModelToServiceCallItem(
-            IDataRecord dataRecord) =>
-            WebServiceCaptureRecordConverter.Convert(dataRecord);
+        private sealed class ProcessProgress(Action<AnalysisResultsModel.ProcessStep> action) : IProgress<OperationProgress>
+        {
+            public void Report(OperationProgress value)
+            {
+                if (TryGetProcessStep(value.Phase, out var step))
+                    action(step);
+            }
+        }
+
+        internal static ServiceCallItem ProxyConnectionModelToServiceCallItem(IDataRecord record) =>
+            WebServiceCaptureRecordConverter.Convert(record);
     }
 }

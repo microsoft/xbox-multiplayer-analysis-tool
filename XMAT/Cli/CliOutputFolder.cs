@@ -30,7 +30,8 @@ namespace XMAT.Cli
     internal sealed class CliOutputFolder : IDisposable
     {
         internal const string StagingPrefix = ".xmat-staging-";
-        private const int Attempts = 10;
+        private const int RetryAttempts = 10;
+        private const int CommitAttempts = 50;
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
         private readonly string _name;
@@ -267,9 +268,10 @@ namespace XMAT.Cli
         }
 
         // The commit: renames the staging folder to --out in one step, through the handle that holds it and relative to the
-        // held parent, retrying for about a second. Cancellation is checked before each attempt (OperationCanceledException);
-        // returns false when --out appeared meanwhile, a dangling link included, which is never replaced. A rename that
-        // succeeded is the publication: from then on nothing removes the folder, whatever follows.
+        // held parent, retrying for about five seconds. Cancellation is checked before each attempt (OperationCanceledException);
+        // the wider window lets a console signal queued while a large synchronous producer finishes stop the commit. Returns
+        // false when --out appeared meanwhile, a dangling link included, which is never replaced. A rename that succeeded is
+        // the publication: from then on nothing removes the folder, whatever follows.
         internal bool TryCommit(ICliCommitObserver observer, CancellationToken cancellationToken)
         {
             for (int attempt = 1; ; attempt++)
@@ -287,7 +289,7 @@ namespace XMAT.Cli
                     Release();
                     return true;
                 }
-                catch (Exception ex) when (attempt < Attempts && IsFileSystemFailure(ex))
+                catch (Exception ex) when (attempt < CommitAttempts && IsFileSystemFailure(ex))
                 {
                     observer?.CommitAttemptFailed(attempt);
                     cancellationToken.WaitHandle.WaitOne(RetryDelay);
@@ -434,7 +436,7 @@ namespace XMAT.Cli
                     action();
                     return;
                 }
-                catch (Exception ex) when (attempt < Attempts && IsFileSystemFailure(ex))
+                catch (Exception ex) when (attempt < RetryAttempts && IsFileSystemFailure(ex))
                 {
                     cancellationToken.WaitHandle.WaitOne(RetryDelay);
                 }

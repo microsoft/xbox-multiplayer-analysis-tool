@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Net;
 using System.Windows;
 using System.Windows.Controls;
+using XMAT.ApplicationServices;
 using XMAT.SharedInterfaces;
 
 namespace XMAT
@@ -25,6 +25,10 @@ namespace XMAT
         public DeviceType SelectedDeviceType { get; private set; }
         public CaptureType SelectedCaptureType { get; private set; }
         public string SelectedDeviceName { get; private set; }
+        internal CaptureDeviceKind SelectedDeviceKind { get; private set; }
+        internal CaptureDeviceRequest Request => new(
+            SelectedDeviceKind, SelectedCaptureType,
+            SelectedDeviceKind == CaptureDeviceKind.XboxConsole ? SelectedDeviceName : null);
 
         public AddDeviceWindow()
         {
@@ -51,43 +55,31 @@ namespace XMAT
             if (LocalPC.IsChecked.GetValueOrDefault())
             {
                 SelectedDeviceType = DeviceType.LocalPC;
+                SelectedDeviceKind = CaptureDeviceKind.LocalPC;
                 SelectedDeviceName = Localization.GetLocalizedString("LOCAL_PC");
             }
             else if (CustomIpHostnameConsole.IsChecked.GetValueOrDefault())
             {
-                if (!GDKXHelper.IsGDKXInstalled(false))
-                {
-                    Result = AddDeviceResult.Failed_NeedGDKX;
-                }
-
                 SelectedDeviceType = DeviceType.XboxConsole;
+                SelectedDeviceKind = CaptureDeviceKind.XboxConsole;
                 SelectedDeviceName = ConsoleIpOrHostname.Text;
             }
             else if (DefaultConsole.IsChecked.GetValueOrDefault())
             {
-                if (!GDKXHelper.IsGDKXInstalled(false))
-                {
-                    Result = AddDeviceResult.Failed_NeedGDKX;
-                }
-
                 SelectedDeviceType = DeviceType.XboxConsole;
-                SelectedDeviceName = XboxClient.XboxClientConnection.GetDefaultConsoleAddress();
-
-                // User may not have a default console
-                if (SelectedDeviceName == null)
-                {
-                    Result = AddDeviceResult.Failed_NoDefaultConsole;
-                }
+                SelectedDeviceKind = CaptureDeviceKind.DefaultXboxConsole;
             }
             else if (GenericDevice.IsChecked.GetValueOrDefault())
             {
                 SelectedDeviceType = DeviceType.GenericProxyDevice;
+                SelectedDeviceKind = CaptureDeviceKind.GenericProxyDevice;
                 SelectedDeviceName = Localization.GetLocalizedString("GENERIC_DEVICE");
             }
             else if (WindowsHandheldOrRemoteDevice.IsChecked.GetValueOrDefault())
             {
                 // Treat the same as a generic device internally
                 SelectedDeviceType = DeviceType.GenericProxyDevice;
+                SelectedDeviceKind = CaptureDeviceKind.WindowsHandheldOrRemoteDevice;
                 SelectedDeviceName = Localization.GetLocalizedString("WINDOWS_HANDHELD_REMOTE_DEVICE");
             }
 
@@ -100,7 +92,7 @@ namespace XMAT
                 SelectedCaptureType = CaptureType.NetworkTrace;
             }
 
-            DialogResult = Result == AddDeviceResult.Success;
+            DialogResult = true;
             Close();
         }
 
@@ -112,19 +104,7 @@ namespace XMAT
 
         private bool IsConsoleIPOrHostnameValid(string text)
         {
-            return IsConsoleIpAddressValid(text) || IsConsoleHostnameValid(text);
-        }
-
-        private bool IsConsoleIpAddressValid(string ip)
-        {
-            // IPAddress accepts int64 IP addresses in string format as network order byte representations of IP's... so we have to validate the string first (e.g. "123" is a valid IP according to C#)
-            return ip.Split('.').Length == 4 && IPAddress.TryParse(ip, out IPAddress ipx);
-        }
-
-        private bool IsConsoleHostnameValid(string hostname)
-        {
-            // Basic validation for hostname format
-            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255 && !hostname.Contains(" ");
+            return CaptureDevices.IsValidConsoleAddress(text);
         }
 
         private void ResetOKButtonState(object sender, RoutedEventArgs e)

@@ -18,9 +18,19 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BypassListModel
     {
-        private readonly HostPatternList _patterns = new();
+        private readonly HostPatternList _patterns;
 
-        public ObservableCollection<string> BypassedUrls => _patterns.Entries;
+        public ObservableCollection<string> BypassedUrls => Entries;
+        internal HostListCollection Entries => _patterns.Entries;
+
+        public BypassListModel() : this(new object())
+        {
+        }
+
+        internal BypassListModel(object gate)
+        {
+            _patterns = new HostPatternList(gate);
+        }
 
         public bool Add(string pattern) => _patterns.Add(pattern);
 

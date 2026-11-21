@@ -88,9 +88,19 @@ Add or update capabilities in `XMAT/Operations/Capabilities/CapabilityRegistry.c
 commands or other entry points are unclassified. `Supported` currently describes command-line availability. A
 different surface records its own availability instead of treating command-line support as that surface's contract.
 
+The connected desktop's MCP host is one such surface. Use the existing `CaptureInvestigation` snapshot and
+`AnalysisInput.FromRecords` seam for analysis; do not reopen an agent-supplied capture path or introduce another
+converter/rules loop. Source grants, exact approvals, ownership, deadlines and bounded results belong to the MCP
+adapter and do not become fields that callers can self-approve on an operation request. Desktop dispatch/dialog
+effects stay in the WPF `App` adapter; `HeadlessBans` explicitly forbids operations/CLI from calling that adapter,
+including indirectly named dispatch helpers. Newly classified SQL/session
+entry points are planned **standalone CLI** coverage (S9), not missing desktop/MCP implementations.
+
 For a companion console executable, follow the existing `xmat.exe` pattern: keep the host project small, reference the
 shared XMAT assembly, add the project to the solution, copy its executable and runtime files beside the GUI during
 packaging, and run a smoke command from the assembled artifact in `.github/workflows/dotnet-desktop.yml`.
+`XMAT.AgentBridge` is deliberately different: it only forwards MCP streams and must not reference the desktop
+assembly, perform analysis, grant permissions or implement file/database access.
 
 ## Compatibility of xmat.exe
 

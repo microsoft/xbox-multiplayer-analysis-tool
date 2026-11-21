@@ -57,6 +57,7 @@ namespace XMAT.Operations.Analysis
         string DeviceId = null,
         AnalysisLimits Limits = null,
         bool ProduceLegacyReports = false,
+        bool RetainCanonicalResults = false,
         ProcessFilterSpec ProcessFilter = null);
 
     internal sealed record AnalyzeCaptureRequest(
@@ -94,6 +95,7 @@ namespace XMAT.Operations.Analysis
     internal sealed record AnalysisResult(AnalysisSummary Summary)
     {
         internal LegacyAnalysisReports Legacy { get; init; }
+        internal CanonicalAnalysisResult Canonical { get; init; }
 
         // The client-process scope of the selected devices, counted before service conversion, and the keys of the
         // sessions that were analyzed. A run with no analyzable data still returns them.
@@ -101,6 +103,12 @@ namespace XMAT.Operations.Analysis
 
         internal IReadOnlyList<CaptureRowKey> IncludedKeys { get; init; }
     }
+
+    internal sealed record CanonicalAnalysisResult(
+        TraceAnalysisResult Analysis,
+        IReadOnlyDictionary<string, long> RecordByBreadcrumb,
+        int ConvertedRecords,
+        int SkippedRecords);
 
     internal sealed class LegacyAnalysisReports
     {

@@ -9,11 +9,12 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Input;
-using XMAT.Models;
+using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTrace.NTDE;
 using XMAT.SharedInterfaces;
@@ -21,7 +22,7 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTrace
 {
-    public enum DeviceStatusEnum { Idle, Disconnecting, Connecting, Tracing, Starting, Stopping, Downloading };
+    public enum DeviceStatusEnum { Idle, Disconnecting, Connecting, Tracing, Starting, Stopping, Downloading, RecoveryRequired };
 
     public class NetworkTraceCaptureController : INotifyPropertyChanged, IDeviceCaptureController, IDisposable
     {
@@ -74,15 +75,36 @@ namespace XMAT.NetworkTrace
         public ObservableCollection<CheckedListItem> SourceIpFilterList { get; set; }
         public ObservableCollection<CheckedListItem> DestIpFilterList { get; set; }
         public ItemCollection FilteredItems { get; set; }
+        private NetworkTracePacketDataModel _selectedPacket;
+        public NetworkTracePacketDataModel SelectedPacket
+        {
+            get => _selectedPacket;
+            set { _selectedPacket = value; RaisePropertyChange(); }
+        }
 
         private readonly string _deviceName;
-        private readonly Func<INetworkTraceEngine, Task> _disconnectEngine;
-        private DeviceType _deviceType;
+        private readonly DeviceType _deviceType;
+        private readonly INetworkTraceEngineFactory _engineFactory;
+        private readonly Dispatcher _dispatcher;
         private IDataTable _dataTable;
         private bool _liveRowsAttached;
-        private bool _disposed;
         internal INetworkTraceEngine _networkTraceEngine;
         private bool _isRunning;
+        private bool _operationInProgress;
+        private bool _recoveryRequired;
+        private bool _mayBeTracing;
+        private CaptureTraceRecoveryPhase _nextPhase;
+        private long _viewGeneration;
+        private bool _disposed;
+
+        public bool IsTransitioning => _operationInProgress;
+        public bool RecoveryRequired => _recoveryRequired;
+        public bool MayBeTracing => _mayBeTracing;
+        public CaptureTraceRecoveryPhase RecoveryPhase => _recoveryRequired ? _nextPhase : CaptureTraceRecoveryPhase.None;
+        public bool CanClearCaptures => !IsCapturing && !IsTransitioning;
+        public string RecoveryStatusText => RecoveryRequired
+            ? Localization.GetLocalizedString("NETCAP_RECOVERY_STATUS", RecoveryPhase, MayBeTracing, LocalTraceSession ?? "-") : string.Empty;
+        public string LocalTraceSession => (_networkTraceEngine as LocalNetworkTraceEngineImpl)?.OwnedSessionName;
 
         public event PropertyChangedEventHandler PropertyChanged;
         public void RaisePropertyChange([CallerMemberName] string name = null)
@@ -103,20 +125,21 @@ namespace XMAT.NetworkTrace
             }
         }
 
-        public bool HaveTraces { get { return (NetworkTracePackets.Count > 0) && _status == DeviceStatusEnum.Idle; } }
+        public bool HaveTraces { get { return (NetworkTracePackets?.Count > 0) && _status == DeviceStatusEnum.Idle; } }
         public bool HaveNoTraces { get { return !HaveTraces; } }
 
         public NetworkTraceCaptureController(string deviceName, DeviceType deviceType)
-            : this(deviceName, deviceType, NetworkTraceEngine.Disconnect)
+            : this(deviceName, deviceType, new NetworkTraceEngineFactory())
         {
         }
 
         internal NetworkTraceCaptureController(
-            string deviceName, DeviceType deviceType, Func<INetworkTraceEngine, Task> disconnectEngine)
+            string deviceName, DeviceType deviceType, INetworkTraceEngineFactory engineFactory)
         {
             _deviceName = deviceName;
             _deviceType = deviceType;
-            _disconnectEngine = disconnectEngine ?? throw new ArgumentNullException(nameof(disconnectEngine));
+            _engineFactory = engineFactory ?? throw new ArgumentNullException(nameof(engineFactory));
+            _dispatcher = App.CaptureUiDispatcher();
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             PidFilterList = new ObservableCollection<CheckedListItem>();
@@ -126,39 +149,66 @@ namespace XMAT.NetworkTrace
             DestIpFilterList = new ObservableCollection<CheckedListItem>();
         }
 
-        public void Initialize() => Initialize(attachLiveRows: true);
-
-        // A capture loaded from a file attaches to live rows only once it becomes a tab.
-        internal void Initialize(bool attachLiveRows)
+        public void Initialize()
         {
+            Initialize(attachLiveRows: true);
+        }
+
+        internal void Initialize(bool attachLiveRows) =>
+            Initialize(NetworkTraceCaptureMethod.MethodInstance.NetworkTracePacketsTable, attachLiveRows);
+
+        internal void Initialize(IDataTable table, bool attachLiveRows = true)
+        {
+            if (IsCapturing || IsTransitioning)
+                throw new InvalidOperationException("The trace capture is busy.");
+            ArgumentNullException.ThrowIfNull(table);
+            if (ReferenceEquals(_dataTable, table))
+                return;
+            if (_dataTable != null)
+                _dataTable.RowAdded -= HandleRowAdded;
+            _liveRowsAttached = false;
+            _disposed = false;
+            Interlocked.Increment(ref _viewGeneration);
             NetworkTracePackets = new NetworkTracePacketsCollection();
             CaptureMethod = NetworkTraceCaptureMethod.Method;
-            _dataTable = (CaptureMethod as NetworkTraceCaptureMethod).NetworkTracePacketsTable;
+            _dataTable = table;
             if (attachLiveRows)
-            {
                 AttachLiveRows();
-            }
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             RaisePropertyChange(nameof(HaveTraces));
             RaisePropertyChange(nameof(HaveNoTraces));
         }
 
-        // Shows rows added to the live table from now on; does nothing once attached or disposed.
+        internal void InitializeReadOnly()
+        {
+            _disposed = false;
+            NetworkTracePackets = new NetworkTracePacketsCollection();
+            CaptureMethod = NetworkTraceCaptureMethod.Method;
+        }
+
         internal void AttachLiveRows()
         {
             if (_liveRowsAttached || _disposed)
-            {
                 return;
-            }
-
+            _dataTable ??= NetworkTraceCaptureMethod.MethodInstance.NetworkTracePacketsTable;
+            if (_dataTable == null)
+                return;
             _dataTable.RowAdded += HandleRowAdded;
             _liveRowsAttached = true;
         }
 
         public void ClearAllCaptures()
         {
-            _dataTable.RemoveRowsWhere(new FieldValue<string>(@"DeviceName", _deviceName));
+            if (!CanClearCaptures)
+                throw new InvalidOperationException(Localization.GetLocalizedString("NETCAP_RECOVERY_CLEAR_BLOCKED"));
+            ClearRows();
+        }
+
+        private void ClearRows()
+        {
+            Interlocked.Increment(ref _viewGeneration);
+            _dataTable?.RemoveRowsWhere(new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName));
             NetworkTracePackets.Clear();
             RaisePropertyChange(nameof(HaveTraces));
             RaisePropertyChange(nameof(HaveNoTraces));
@@ -166,367 +216,338 @@ namespace XMAT.NetworkTrace
 
         public Task<bool> CanCloseAsync()
         {
-            return Task.FromResult(!IsRunning);
+            return Task.FromResult(!IsRunning && !IsTransitioning);
         }
 
-        // CaptureAppModel disposes the controller once its tab is actually removed.
         public Task CloseAsync()
         {
+            if (IsRunning || IsTransitioning)
+                throw new InvalidOperationException(Localization.GetLocalizedString("NETCAP_RECOVERY_CLOSE_BLOCKED"));
             return Task.CompletedTask;
         }
 
         public void Dispose()
         {
-            // NetworkTracePackets is kept because a reused tab may now display it.
             _disposed = true;
-            if (_liveRowsAttached)
-            {
+            Interlocked.Increment(ref _viewGeneration);
+            if (_dataTable != null)
                 _dataTable.RowAdded -= HandleRowAdded;
-                _liveRowsAttached = false;
-            }
+            _liveRowsAttached = false;
         }
 
         private void HandleRowAdded(IDataTable table, Int64 rowId)
         {
+            var generation = Volatile.Read(ref _viewGeneration);
             var record = _dataTable.Dataset.DataRecordsFrom(rowId, 1).First();
             if (record.Str(@"DeviceName").Equals(_deviceName))
             {
-                NetworkTracePackets.AddFromDataRecord(record);
+                void Publish()
+                {
+                    if (!_disposed && generation == Volatile.Read(ref _viewGeneration))
+                        NetworkTracePackets.AddFromDataRecord(record);
+                }
+                if (ApplicationDispatch.HasUiAccess(_dispatcher))
+                    Publish();
+                else
+                    ApplicationDispatch.PostToUi(_dispatcher, Publish);
             }
+        }
+
+        internal CaptureOperationFailure GetAvailability(bool running)
+        {
+            if (IsTransitioning)
+                return CaptureOperationFailure.CaptureBusy;
+            if (running)
+            {
+                if (RecoveryRequired)
+                    return CaptureOperationFailure.RecoveryRequired;
+                if (IsRunning)
+                    return DeviceStatus == DeviceStatusEnum.Tracing ? CaptureOperationFailure.None : CaptureOperationFailure.CaptureBusy;
+                if (DeviceStatus != DeviceStatusEnum.Idle)
+                    return CaptureOperationFailure.CaptureBusy;
+                var prerequisite = _engineFactory.GetPrerequisite(_deviceType);
+                if (prerequisite != CaptureOperationFailure.None)
+                    return prerequisite;
+                return _dataTable == null ? CaptureOperationFailure.NotInitialized : CaptureOperationFailure.None;
+            }
+            if (!IsRunning)
+                return DeviceStatus == DeviceStatusEnum.Idle ? CaptureOperationFailure.None : CaptureOperationFailure.CaptureBusy;
+            return DeviceStatus is DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired
+                ? CaptureOperationFailure.None : CaptureOperationFailure.CaptureBusy;
+        }
+
+        internal IDisposable BeginOperation()
+        {
+            if (_operationInProgress)
+                throw new InvalidOperationException("A trace operation is already in progress.");
+            _operationInProgress = true;
+            RaisePropertyChange(nameof(IsTransitioning));
+            return new OperationLease(this);
         }
 
         internal async Task StartCapture(ICaptureDeviceContext device, IDisposable operationLease = null)
         {
             if (IsCapturing || DeviceStatus != DeviceStatusEnum.Idle)
-            {
                 throw new InvalidOperationException("A capture operation is already in progress.");
-            }
 
-            IsCapturing = true;
+            var prerequisite = _engineFactory.GetPrerequisite(_deviceType);
+            if (prerequisite == CaptureOperationFailure.ElevationRequired)
+                throw new UnauthorizedAccessException();
+            if (prerequisite != CaptureOperationFailure.None)
+                throw new InvalidOperationException("Unsupported trace target.");
+            var startAttempted = false;
             try
             {
-                CaptureAppModel.AppModel.StatusBarText1 = Localization.GetLocalizedString("NETCAP_STATUS_RUNNING");
-
-                if (_deviceType == DeviceType.XboxConsole)
+                DeviceStatus = DeviceStatusEnum.Connecting;
+                _networkTraceEngine = await _engineFactory.CreateAsync(_deviceName, _deviceType);
+                if (_networkTraceEngine == null)
+                    throw new InvalidOperationException("The trace engine was not created.");
+                ClearRows();
+                DeviceStatus = DeviceStatusEnum.Starting;
+                _nextPhase = CaptureTraceRecoveryPhase.Stop;
+                IsCapturing = true;
+                SetMayBeTracing(true);
+                startAttempted = true;
+                await _networkTraceEngine.StartPacketTraceAsync();
+                DeviceStatus = DeviceStatusEnum.Tracing;
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                operationLease?.Dispose();
+                var rejected = exception is UnauthorizedAccessException ||
+                    exception is NetworkTraceEngineException { MayHaveCommitted: false };
+                if (startAttempted && !rejected)
                 {
-                    DeviceStatus = DeviceStatusEnum.Connecting;
-                    await ConnectToDevice(device);
-                }
-                else if (_deviceType == DeviceType.LocalPC)
-                {
-                    _networkTraceEngine ??= NetworkTraceEngine.CreateLocal();
+                    SetRecovery(CaptureTraceRecoveryPhase.Stop);
                 }
                 else
                 {
-                    throw new ApplicationException("Unsupported DeviceType");
+                    SetMayBeTracing(false);
+                    _nextPhase = CaptureTraceRecoveryPhase.Disconnect;
+                    try
+                    {
+                        if (_networkTraceEngine != null)
+                            await _engineFactory.DisconnectAsync(_networkTraceEngine, _deviceType);
+                        ResetStopped();
+                    }
+                    catch (Exception cleanupException) when (!ExceptionUtilities.IsFatal(cleanupException))
+                    {
+                        IsCapturing = true;
+                        SetRecovery(CaptureTraceRecoveryPhase.Disconnect);
+                    }
                 }
-
-                // Reused engines need one subscription per capture, including after a failed attempt.
-                _networkTraceEngine.EventRecordAvailable -= OnEventRecordAvailable;
-                _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
-                DeviceStatus = DeviceStatusEnum.Starting;
-
-                await _networkTraceEngine.StartPacketTraceAsync();
-
-                DeviceStatus = DeviceStatusEnum.Tracing;
-
-                CommandManager.InvalidateRequerySuggested();
-            }
-            catch
-            {
-                // The application's close check also observes the view's capture-data lease.
-                operationLease?.Dispose();
-                await CompleteCaptureAsync(preserveCaptureError: true);
                 throw;
             }
+            finally { CommandManager.InvalidateRequerySuggested(); }
         }
 
         internal async Task StopCapture(ICaptureDeviceContext device)
         {
-            if (!IsCapturing || DeviceStatus != DeviceStatusEnum.Tracing)
-            {
+            if (!IsCapturing ||
+                DeviceStatus is not (DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired))
                 throw new InvalidOperationException("No trace is ready to stop.");
-            }
 
-            bool captureFailed = true;
             try
             {
-                DeviceStatus = DeviceStatusEnum.Stopping;
-                await _networkTraceEngine.StopPacketTraceAsync();
-
-                DeviceStatus = DeviceStatusEnum.Downloading;
-                await _networkTraceEngine.GetAllEventsAsync();
-                captureFailed = false;
-            }
-            finally
-            {
-                try
+                if (_nextPhase == CaptureTraceRecoveryPhase.Stop)
                 {
-                    await CompleteCaptureAsync(preserveCaptureError: captureFailed);
+                    DeviceStatus = DeviceStatusEnum.Stopping;
+                    await _networkTraceEngine.StopPacketTraceAsync();
+                    SetMayBeTracing(false);
+                    _nextPhase = CaptureTraceRecoveryPhase.Download;
                 }
-                finally
+                if (_nextPhase == CaptureTraceRecoveryPhase.Download)
                 {
-                    CommandManager.InvalidateRequerySuggested();
+                    DeviceStatus = DeviceStatusEnum.Downloading;
+                    await DownloadAndCommitAsync(_networkTraceEngine, _networkTraceEngine.GetAllEventsAsync);
+                    _nextPhase = CaptureTraceRecoveryPhase.Publish;
                 }
-            }
-        }
-
-        private async Task CompleteCaptureAsync(bool preserveCaptureError)
-        {
-            var engine = _networkTraceEngine;
-            if (engine != null)
-            {
-                engine.EventRecordAvailable -= OnEventRecordAvailable;
-            }
-
-            bool needsDisconnect = engine != null && _deviceType == DeviceType.XboxConsole;
-            if (needsDisconnect)
-            {
-                _networkTraceEngine = null;
+                if (_nextPhase == CaptureTraceRecoveryPhase.Publish)
+                {
+                    await PublishPacketsAsync();
+                    _nextPhase = CaptureTraceRecoveryPhase.Disconnect;
+                }
                 DeviceStatus = DeviceStatusEnum.Disconnecting;
+                await _engineFactory.DisconnectAsync(_networkTraceEngine, _deviceType);
+                ResetStopped();
             }
-
-            // Publish the retained packets and allow close, but keep Start disabled until cleanup finishes.
-            IsCapturing = false;
-            CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
-            try
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
-                if (needsDisconnect)
-                {
-                    await _disconnectEngine(engine);
-                }
+                SetRecovery(_nextPhase);
+                throw;
             }
-            catch (Exception ex) when (preserveCaptureError && !ExceptionUtilities.IsFatal(ex))
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Network trace recovery disconnect failed: {ex}");
-            }
-            finally
-            {
-                DeviceStatus = DeviceStatusEnum.Idle;
-            }
+            finally { CommandManager.InvalidateRequerySuggested(); }
         }
 
         internal async Task<int> ImportFromEtlFileAsync(string etlPath)
         {
+            if (IsCapturing || IsTransitioning)
+                throw new InvalidOperationException("The trace capture is busy.");
+            using var operation = BeginOperation();
             var fileEngine = new LocalNetworkTraceEngineImpl();
-            fileEngine.EventRecordAvailable += OnEventRecordAvailable;
-
             DeviceStatus = DeviceStatusEnum.Downloading;
             try
             {
-                return await fileEngine.ReadEventsFromFileAsync(etlPath);
+                var count = 0;
+                await DownloadAndCommitAsync(fileEngine, async () => count = await fileEngine.ReadEventsFromFileAsync(etlPath));
+                await PublishPacketsAsync();
+                return count;
             }
             finally
             {
-                fileEngine.EventRecordAvailable -= OnEventRecordAvailable;
                 DeviceStatus = DeviceStatusEnum.Idle;
                 CommandManager.InvalidateRequerySuggested();
             }
         }
 
-        internal async Task ConnectToDevice(ICaptureDeviceContext device)
+        private async Task DownloadAndCommitAsync(INetworkTraceEngine engine, Func<Task> read)
         {
-            if (_networkTraceEngine == null)
-            {
-                NetworkTraceEngineOptions options = new NetworkTraceEngineOptions();
-
-                options.HostName = _deviceName;
-
-                _networkTraceEngine = await NetworkTraceEngine.Connect(options);
-            }
+            if (_dataTable is not IImportedCaptureTable imports)
+                throw new InvalidOperationException("The trace table does not support atomic capture publication.");
+            using var stage = new NetworkTraceEventStage();
+            EventHandler<string> handler = (_, record) => stage.Append(record);
+            engine.EventRecordAvailable += handler;
+            try
+            { await read(); }
+            finally { engine.EventRecordAvailable -= handler; }
+            stage.Complete();
+            await Task.Run(() => imports.ReplaceImportedRows(
+                CaptureTextSource.Literal,
+                new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName),
+                stage.Rows(_deviceName),
+                CancellationToken.None));
+            if (IsCapturing)
+                _nextPhase = CaptureTraceRecoveryPhase.Publish;
         }
 
-        private void OnEventRecordAvailable(object sender, string eventRecord)
+        private async Task PublishPacketsAsync()
         {
-            var doc = JsonDocument.Parse(eventRecord);
-            var eventNode = doc.RootElement.GetProperty("event");
-            var packetNode = doc.RootElement.GetProperty("packet");
-
-            int startFlag = 0,
-                endFlag = 0,
-                fragFlag = 0,
-                sendFlag = 0,
-                recvFlag = 0;
-
-            foreach (var element in packetNode.GetProperty("flags").EnumerateArray())
+            var packets = await Task.Run(() =>
             {
-                switch (element.GetString())
-                {
-                    case "start":
-                        startFlag = 1;
-                        break;
-                    case "end":
-                        endFlag = 1;
-                        break;
-                    case "fragment":
-                        fragFlag = 1;
-                        break;
-                    case "send":
-                        sendFlag = 1;
-                        break;
-                    case "receive":
-                        recvFlag = 1;
-                        break;
-                }
-            }
+                var result = new NetworkTracePacketsCollection();
+                foreach (var record in _dataTable.Dataset.DataRecordsWhen(
+                    new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName)))
+                    result.AddFromDataRecord(record);
+                return result;
+            });
+            Interlocked.Increment(ref _viewGeneration);
+            NetworkTracePackets = packets;
+            RaisePropertyChange(nameof(NetworkTracePackets));
+        }
 
-            _dataTable.AddRow(
-                _deviceName,
-                eventNode.GetProperty("processId").GetInt32(),
-                eventNode.GetProperty("threadId").GetInt32(),
-                eventNode.GetProperty("timestamp").GetDateTime().ToLocalTime().ToString("HH:mm:ss.fffffff"),
-                packetNode.GetProperty("mediaType").GetString(),
-                startFlag,
-                endFlag,
-                fragFlag,
-                sendFlag,
-                recvFlag,
-                packetNode.GetProperty("data").GetString()
-                );
+        private void SetMayBeTracing(bool value)
+        {
+            _mayBeTracing = value;
+            RaisePropertyChange(nameof(MayBeTracing));
+        }
+
+        private void SetRecovery(CaptureTraceRecoveryPhase phase)
+        {
+            _nextPhase = phase;
+            _recoveryRequired = true;
+            DeviceStatus = DeviceStatusEnum.RecoveryRequired;
+            RaisePropertyChange(nameof(RecoveryRequired));
+            RaisePropertyChange(nameof(RecoveryPhase));
+            RaisePropertyChange(nameof(RecoveryStatusText));
+        }
+
+        private void ResetStopped()
+        {
+            _networkTraceEngine = null;
+            _nextPhase = CaptureTraceRecoveryPhase.None;
+            _recoveryRequired = false;
+            SetMayBeTracing(false);
+            DeviceStatus = DeviceStatusEnum.Idle;
+            IsCapturing = false;
+            RaisePropertyChange(nameof(RecoveryRequired));
+            RaisePropertyChange(nameof(RecoveryPhase));
+            RaisePropertyChange(nameof(RecoveryStatusText));
+        }
+
+        internal async Task AcknowledgeExternalRecoveryAsync()
+        {
+            if (!RecoveryRequired)
+                throw new InvalidOperationException("No trace recovery is pending.");
+            if (_networkTraceEngine != null)
+                await _engineFactory.DisconnectAsync(_networkTraceEngine, _deviceType);
+            ResetStopped();
+        }
+
+        private sealed class OperationLease(NetworkTraceCaptureController owner) : IDisposable
+        {
+            private NetworkTraceCaptureController _owner = owner;
+            public void Dispose()
+            {
+                var current = Interlocked.Exchange(ref _owner, null);
+                if (current == null)
+                    return;
+                current._operationInProgress = false;
+                current.RaisePropertyChange(nameof(IsTransitioning));
+                App.RefreshCommands();
+            }
         }
 
         public void LoadCaptures(IEnumerable<IDataset> datasets)
         {
-            if (datasets != null && datasets.FirstOrDefault() != null)
-            {
-                var records = datasets.First().DataRecordsWhen(
-                    new FieldValue<string>(@"DeviceName", _deviceName)
-                    );
-
-                foreach (var record in records)
-                {
-                    NetworkTracePackets.AddFromDataRecord(record);
-                }
-
-                PidFilterList = CreateFilterList(
-                    NetworkTracePackets
-                        .OrderBy(packet => packet.ProcessId)
-                        .Select(packet =>
-                            packet.ProcessId.ToString(
-                                CultureInfo.InvariantCulture))
-                        .Distinct());
-                TidFilterList = CreateFilterList(
-                    NetworkTracePackets
-                        .OrderBy(packet => packet.ThreadId)
-                        .Select(packet =>
-                            packet.ThreadId.ToString(
-                                CultureInfo.InvariantCulture))
-                        .Distinct());
-                ProtocolFilterList = CreateFilterList(
-                    NetworkTracePackets
-                        .OrderBy(packet => packet.Protocol)
-                        .Select(packet =>
-                            ProtocolFilterName(
-                                packet.Protocol))
-                        .Distinct());
-                SourceIpFilterList = CreateFilterList(
-                    NetworkTracePackets
-                        .OrderBy(packet =>
-                            packet.SourceIpv4Address)
-                        .Select(packet =>
-                            packet.SourceIpv4Address)
-                        .Distinct());
-                DestIpFilterList = CreateFilterList(
-                    NetworkTracePackets
-                        .OrderBy(packet =>
-                            packet.DestinationIpv4Address)
-                        .Select(packet =>
-                            packet.DestinationIpv4Address)
-                        .Distinct());
-                NotifyPropertyChangesSafely(
-                    nameof(PidFilterList),
-                    nameof(TidFilterList),
-                    nameof(ProtocolFilterList),
-                    nameof(SourceIpFilterList),
-                    nameof(DestIpFilterList),
-                    nameof(NetworkTracePackets),
-                    nameof(HaveTraces),
-                    nameof(HaveNoTraces));
-            }
+            ApplyLoadedCaptures(PrepareLoadedCaptures(datasets?.FirstOrDefault(), CancellationToken.None));
+            NotifyLoadedCaptures();
         }
 
-        internal void ReplaceLoadedCapturesFrom(
-            NetworkTraceCaptureController source)
+        internal NetworkTracePacketsCollection PrepareLoadedCaptures(IDataset dataset, CancellationToken cancellationToken)
+        {
+            var packets = new NetworkTracePacketsCollection();
+            if (dataset != null)
+            {
+                foreach (var record in dataset.DataRecordsWhen(
+                    new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName)))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    packets.AddFromDataRecord(record);
+                }
+            }
+            return packets;
+        }
+
+        internal void ApplyLoadedCaptures(NetworkTracePacketsCollection packets)
+        {
+            if (!_liveRowsAttached)
+                Interlocked.Increment(ref _viewGeneration);
+            NetworkTracePackets = packets;
+            _selectedPacket = null;
+            FilteredItems = null;
+            PidFilterList = CreateFilterList(packets.OrderBy(packet => packet.ProcessId)
+                .Select(packet => packet.ProcessId.ToString(CultureInfo.InvariantCulture)).Distinct());
+            TidFilterList = CreateFilterList(packets.OrderBy(packet => packet.ThreadId)
+                .Select(packet => packet.ThreadId.ToString(CultureInfo.InvariantCulture)).Distinct());
+            ProtocolFilterList = CreateFilterList(packets.OrderBy(packet => packet.Protocol)
+                .Select(packet => Enum.IsDefined(typeof(NetworkProtocol), packet.Protocol)
+                    ? $"{packet.Protocol} ({(NetworkProtocol)packet.Protocol})"
+                    : packet.Protocol.ToString(CultureInfo.InvariantCulture)).Distinct());
+            SourceIpFilterList = CreateFilterList(packets.Select(packet => packet.SourceIpv4Address).Distinct().OrderBy(value => value));
+            DestIpFilterList = CreateFilterList(packets.Select(packet => packet.DestinationIpv4Address).Distinct().OrderBy(value => value));
+        }
+
+        internal void NotifyLoadedCaptures()
+        {
+            RaisePropertyChange(nameof(NetworkTracePackets));
+            RaisePropertyChange(nameof(SelectedPacket));
+            RaisePropertyChange(nameof(PidFilterList));
+            RaisePropertyChange(nameof(TidFilterList));
+            RaisePropertyChange(nameof(ProtocolFilterList));
+            RaisePropertyChange(nameof(SourceIpFilterList));
+            RaisePropertyChange(nameof(DestIpFilterList));
+            RaisePropertyChange(nameof(HaveTraces));
+            RaisePropertyChange(nameof(HaveNoTraces));
+        }
+
+        internal void ReplaceLoadedCapturesFrom(NetworkTraceCaptureController source)
         {
             ArgumentNullException.ThrowIfNull(source);
-            NetworkTracePackets =
-                source.NetworkTracePackets;
-            PidFilterList = source.PidFilterList;
-            TidFilterList = source.TidFilterList;
-            ProtocolFilterList =
-                source.ProtocolFilterList;
-            SourceIpFilterList =
-                source.SourceIpFilterList;
-            DestIpFilterList =
-                source.DestIpFilterList;
-            FilteredItems = null;
-            NotifyPropertyChangesSafely(
-                nameof(PidFilterList),
-                nameof(TidFilterList),
-                nameof(ProtocolFilterList),
-                nameof(SourceIpFilterList),
-                nameof(DestIpFilterList),
-                nameof(NetworkTracePackets),
-                nameof(HaveTraces),
-                nameof(HaveNoTraces));
+            ApplyLoadedCaptures(source.NetworkTracePackets);
+            NotifyLoadedCaptures();
         }
 
-        private static ObservableCollection<CheckedListItem>
-            CreateFilterList(
-                IEnumerable<string> values) =>
-            new(
-                values.Select(value =>
-                    new CheckedListItem
-                    {
-                        IsChecked = true,
-                        Text = value,
-                    }));
-
-        private static string ProtocolFilterName(
-            int protocol) =>
-            Enum.IsDefined(
-                typeof(NetworkProtocol),
-                protocol)
-                ? protocol.ToString(
-                    CultureInfo.InvariantCulture) +
-                    " (" +
-                    (NetworkProtocol)protocol +
-                    ")"
-                : protocol.ToString(
-                    CultureInfo.InvariantCulture);
-
-        private void NotifyPropertyChangesSafely(
-            params string[] propertyNames)
-        {
-            Delegate[] subscribers =
-                PropertyChanged?.GetInvocationList();
-            if (subscribers == null)
-            {
-                return;
-            }
-            foreach (string propertyName in propertyNames)
-            {
-                var args =
-                    new PropertyChangedEventArgs(
-                        propertyName);
-                foreach (Delegate subscriber in subscribers)
-                {
-                    try
-                    {
-                        ((PropertyChangedEventHandler)subscriber)(
-                            this,
-                            args);
-                    }
-                    catch (Exception exception) when (
-                        !ExceptionUtilities.IsFatal(
-                            exception))
-                    {
-                        PublicUtilities.AppLog(
-                            LogLevel.ERROR,
-                            $"Capture reload notification failed: {exception}");
-                    }
-                }
-            }
-        }
+        private static ObservableCollection<CheckedListItem> CreateFilterList(IEnumerable<string> values) =>
+            new(values.Select(value => new CheckedListItem { IsChecked = true, Text = value }));
     }
 }

@@ -19,6 +19,7 @@ using XMAT.Operations;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -343,7 +344,7 @@ namespace XMAT.WebServiceCapture
             if (metadataText != null)
             {
                 // Metadata that couldn't be read as XML above fails the frame here.
-                xmldata ??= XDocument.Parse(metadataText);
+                xmldata ??= ParseXml(metadataText);
 
                 XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
 
@@ -663,12 +664,23 @@ namespace XMAT.WebServiceCapture
         {
             try
             {
-                return XDocument.Parse(text);
+                return ParseXml(text);
             }
             catch (XmlException)
             {
                 return null;
             }
+        }
+
+        private static XDocument ParseXml(string text)
+        {
+            using var reader = new StringReader(text);
+            using var xml = XmlReader.Create(reader, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+            });
+            return XDocument.Load(xml);
         }
 
         // How the export wrote one message's start line and headers: Latin-1 without the flag, and UTF-8 when every such
@@ -719,6 +731,41 @@ namespace XMAT.WebServiceCapture
             return ImportSazFileWithDiagnostics(
                 filename,
                 cancelToken).Records;
+        }
+
+        public static ProxyConnectionsCollection ImportSazFile(
+            string filename, long maximumExpandedBytes, CancellationToken cancellationToken = default) =>
+            ImportSazFileWithDiagnostics(filename, maximumExpandedBytes, cancellationToken).Records;
+
+        internal static FiddlerSazImportResult ImportSazFileWithDiagnostics(
+            string filename, long maximumBytes, CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+            if (maximumBytes == long.MaxValue)
+                return ImportSazFileWithDiagnostics(filename, cancellationToken);
+            try
+            {
+                var sourcePath = Path.GetFullPath(filename);
+                using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var sourceIdentity = SqLtFileIdentity.FromHandle(input.SafeFileHandle);
+                var records = (int)Math.Clamp(maximumBytes / 256, 1, 250000);
+                var result = BoundedSazReader.Read(input, new BoundedSazLimits(
+                    maximumBytes, maximumBytes, maximumBytes, records,
+                    Math.Min(Math.Max(1, maximumBytes / 256), BoundedSazReader.MaxArchiveEntriesCeiling),
+                    Math.Min(maximumBytes, BoundedSazReader.DefaultMaxCentralDirectoryBytes)), cancellationToken);
+                var connections = new ProxyConnectionsCollection();
+                foreach (var record in result.Records)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    connections.Add(record);
+                }
+                return new(connections, result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines,
+                    new ImportedCaptureSource(sourcePath, sourceIdentity), result.Shaping);
+            }
+            catch (BoundedSazException exception) when (exception.Failure != BoundedSazFailure.Malformed)
+            { throw new QueryException(QueryError.ResultLimit, "The SAZ input exceeds an approved safety limit."); }
+            catch (BoundedSazException exception)
+            { throw new InvalidDataException("The SAZ input is malformed.", exception); }
         }
 
         internal static FiddlerSazImportResult ImportSazFileWithDiagnostics(
@@ -1109,6 +1156,68 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
             value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
+
+        public static void CreateSazFile(
+            string filename,
+            IEnumerable<ProxyConnectionModel> records,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(filename);
+            ArgumentNullException.ThrowIfNull(records);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Create);
+            long ordinal = 0;
+            foreach (ProxyConnectionModel record in records)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string frame = (++ordinal).ToString(CultureInfo.InvariantCulture);
+                byte[] requestHeaderBytes = HeaderBytes(record.RequestLineAndHeaders, out bool requestUtf8);
+                byte[] responseHeaderBytes = null;
+                bool responseUtf8 = false;
+                if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
+                {
+                    responseHeaderBytes = HeaderBytes(record.ResponseLineAndHeaders, out responseUtf8);
+                }
+
+                AddEntry(
+                    archive,
+                    EntryType.Request,
+                    frame,
+                    requestHeaderBytes,
+                    record.RequestBody,
+                    cancellationToken);
+
+                var metadata = new FiddlerMetaData(record.RecordRowId)
+                {
+                    ClientBeginRequest = record.RequestTime,
+                    ClientDoneResponse = record.RequestTime + record.Duration,
+                };
+                metadata.SetClientIP(record.ClientIP);
+                metadata.SetPositive(RequestNumberFlag, record.RequestNumber);
+                metadata.SetPositive(ConnectionIdFlag, record.Id);
+                if (requestUtf8)
+                {
+                    metadata.SessionFlags[RequestHeaderEncodingFlag] = Utf8HeaderEncoding;
+                }
+                if (responseUtf8)
+                {
+                    metadata.SessionFlags[ResponseHeaderEncodingFlag] = Utf8HeaderEncoding;
+                }
+                AddMetaEntry(archive, frame, metadata, cancellationToken);
+
+                if (responseHeaderBytes != null)
+                {
+                    AddEntry(
+                        archive,
+                        EntryType.Response,
+                        frame,
+                        responseHeaderBytes,
+                        record.ResponseBody,
+                        cancellationToken);
+                }
+            }
+        }
 
         // The SAZ writer of the shared export operation, sanitizing when asked. Frames are numbered in export order and
         // zero-padded to the digits of expectedRows, so repeated request numbers never collide; SID stays the row id.

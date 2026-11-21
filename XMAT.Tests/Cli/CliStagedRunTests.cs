@@ -95,9 +95,12 @@ namespace XMAT.Tests.Cli
         }
 
         // A file that is open in the staging folder blocks the rename, as antivirus scanners briefly do, and xmat retries.
-        // Cancellation during the retries wins at once: no further attempt and nothing published.
-        [Fact]
-        public async Task CancellationWhileTheCommitIsRetried_StopsAndPublishesNothing()
+        // Cancellation during the retries wins at once, even after the original one-second retry window: no further attempt
+        // and nothing published.
+        [Theory]
+        [InlineData(1)]
+        [InlineData(12)]
+        public async Task CancellationWhileTheCommitIsRetried_StopsAndPublishesNothing(int cancelAfterAttempt)
         {
             using var directory = new CliTestDirectory();
             using var cancellation = new CancellationTokenSource();
@@ -106,10 +109,13 @@ namespace XMAT.Tests.Cli
             FileStream blocker = null;
             var observer = new CommitObserver
             {
-                AttemptFailed = _ =>
+                AttemptFailed = attempt =>
                 {
-                    cancellation.Cancel();
-                    blocker.Dispose();
+                    if (attempt == cancelAfterAttempt)
+                    {
+                        cancellation.Cancel();
+                        blocker.Dispose();
+                    }
                 },
             };
 
@@ -131,7 +137,7 @@ namespace XMAT.Tests.Cli
                 blocker?.Dispose();
             }
 
-            Assert.Equal(1, observer.FailedAttempts);
+            Assert.Equal(cancelAfterAttempt, observer.FailedAttempts);
             Assert.False(observer.Committed);
             Assert.Equal(CliExitCodes.Cancelled, report.ExitCode);
             Assert.Equal(new[] { "cli.cancelled" }, Codes(report));

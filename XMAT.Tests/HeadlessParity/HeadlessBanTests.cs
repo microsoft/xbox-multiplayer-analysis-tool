@@ -54,6 +54,8 @@ namespace XMAT.Tests.HeadlessParity
             var expected = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [Fixture + "AppModelSingleton|XMAT.Models.CaptureAppModel::AppModel"] = "app-model",
+                [Fixture + "DesktopDispatch|XMAT.App::CaptureUiDispatcher"] = "desktop-adapter",
+                [Fixture + "StatefulRuntimeDispatch|XMAT.ApplicationDispatch::get_RuntimeDispatcher"] = "desktop-adapter",
                 [Fixture + "ActiveDatabase|XMAT.SharedInterfaces.ICaptureAppModel::get_ActiveDatabase"] = "app-model",
                 [Fixture + "SavedSettings|XMAT.Models.CaptureAppSettings::Serialize"] = "app-settings",
                 [Fixture + "Preferences|XMAT.Models.AppPreferencesModel::.ctor"] = "app-settings",

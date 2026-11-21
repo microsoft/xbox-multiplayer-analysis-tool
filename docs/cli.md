@@ -10,6 +10,11 @@ none of the exit codes below. Where the GUI and `xmat.exe` share a capability, s
 implemented once as a UI-free operation under `XMAT/Operations` and both are thin adapters over it, so a fix applies to
 both. Other capabilities move over time; the [capability table](#what-runs-headless) shows which ones run headless.
 
+Agents can use `analyze` for isolated offline file analysis, or `agent` commands to configure, launch and stop
+persistent desktop/headless [Agent Access (MCP)](agent-access.md). SQL, live capture, scripts, imports and detailed
+reports use MCP's shared application services, not another implementation inside the CLI. Its stdio companion is
+`AgentBridge\XMAT.AgentBridge.exe`, not `xmat.exe`. Direct CLI command coverage and MCP action availability are separate.
+
 ## Using xmat.exe
 
 ```
@@ -51,6 +56,12 @@ xmat capture --port N --duration-seconds N --out FILE.xmatcap [--listen IP] [--r
              [--shape off|min|avg|exc|broken|disconnect] [--down-kbps N] [--up-kbps N]
              [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]
 xmat doctor --for analyze
+xmat doctor --for agent
+xmat agent setup [--enable true|false] [--data redacted|complete] [--actions inspect|full] [--backups true|false] [--accept]
+xmat agent start [--mode headless|desktop]
+xmat agent status [--instance ID]
+xmat agent config --client copilot|claude|codex|gemini [--launch headless|desktop|none] [--instance ID]
+xmat agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite | --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]
 xmat help [COMMAND]
 xmat --version
 ```
@@ -321,7 +332,7 @@ Capture failures use stable codes and never echo paths or values:
   with `analysis.rules.work-limit`. These two limits measure time, so whether a run reaches them depends on the
   machine and its load; the installed patterns never fall back. The budget bounds rule evaluation, not xmat's total
   time or memory use, so in automation run xmat with time and memory limits.
-- Neither the JSON output nor `analyze`'s published files contain captured content (hosts, URLs, headers, bodies, Xbox
+- Neither `analyze`'s JSON output nor its published files contain captured content (hosts, URLs, headers, bodies, Xbox
   user ids, IP addresses, device names or client process names and ids) or local paths such as the input's; the only
   paths in them are artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts,
   service labels, ordinal device and console ids, the SHA-256 of the input and the validated `--process` and
@@ -777,7 +788,8 @@ Capture failures use stable codes and never echo paths or values:
 - Commands, options, values and doctor targets that xmat does not know, including those planned for later releases,
   are usage errors (exit code 2). Error messages name only commands, options and values that xmat knows: an unknown
   word on the command line is never repeated, since it could be a path or a secret.
-- `xmat.exe` never starts the GUI and never reads or writes the GUI's settings and logs under `%APPDATA%`. The options
+- Offline `analyze`, help/version and doctor never construct the GUI or read/write its settings/logs. Explicit `agent`
+  commands have the separate policy/lifetime contract below. The options
   `--proxy-guard` and `--telemetry-sample` are reserved for the GUI and rejected (exit code 2).
 - Ctrl+C or Ctrl+Break cancels a run. xmat checks for cancellation while it works and just before each attempt to
   publish the results, which is the single rename of the staging folder to `DIR`. A run cancelled at one of these
@@ -805,7 +817,8 @@ Capture failures use stable codes and never echo paths or values:
 ## Output
 
 While standard output is open, every run that xmat completes writes exactly one JSON document (schema `xmat-cli/1`)
-to it, and standard error carries diagnostics without captured data. For example, from PowerShell:
+to it. Offline diagnostics contain no captured data; agent confirmations can include policy-projected host metadata
+and explicit local output paths. For example, from PowerShell:
 
 ```powershell
 $result = .\xmat.exe analyze capture.saz --out results | ConvertFrom-Json
@@ -854,6 +867,10 @@ and `counts` is `null`. `summary.json` holds `schema` (`xmat-analysis/1`), `comm
 with its `id`, `status` (`supported`, `planned`, `guiOnly` or `policyException`) and `slice`); `help` reports
 `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids of the capabilities that
 the command provides); and `--version` reports `version`.
+
+Agent commands add an `agent` object with their policy, configuration, instance, confirmation, or lifecycle result.
+These fields may include installation/output paths and host metadata; the offline analysis summary privacy contract
+does not describe interactive MCP data sharing.
 
 `export` reports an `export` block and keeps `artifacts` empty: `format`; `input` (`kind` and `sha256`); `limits`;
 `selection`, which counts instead of repeating the values: `device`, `host` (`mode`, and how many `include` and
@@ -923,9 +940,9 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
 | 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, `export` has no session to write, capture-text marking refuses the input or interpretation, or `export --format sanitized-saz` reads an unmarked XMAT capture (`capture.text.ambiguous-export`; nothing is published); for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `replay`, `save-request` and `curl` an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
-| 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`), `capture`'s `--out` is locked while publishing (`capture.output.locked`), or `capture`'s listening address or port is unavailable (`capture.listen.unavailable`) |
-| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s or `capture`'s `--out` is on storage without Windows permissions (`export.output.unprotected` or `capture.output.unprotected`) |
+| 4 | A prerequisite is missing or damaged (including analysis data), Agent Access is disabled or unavailable, a required acknowledgment or decision is missing, or independent launch is unavailable |
+| 5 | Conflict: `--out` already exists; `export`'s `--out` names the input or is locked (`export.output.locked`); `capture`'s `--out` is locked while publishing (`capture.output.locked`); `capture`'s listening address or port is unavailable (`capture.listen.unavailable`); an agent policy changed concurrently; or agent shutdown is blocked or stale |
+| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or an `export`/`capture` output is on storage without Windows permissions (`export.output.unprotected` or `capture.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |
@@ -955,6 +972,59 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
   admitted input's kind, SHA-256 and read warnings. Initial scoped IPv6 destinations, which earlier versions could
   send, are now refused as `replay.destination.scoped-ipv6`.
 
+## Agent setup and persistent hosts
+
+Initial policy is **disabled, redacted, Inspect and export, backups off**. Run `agent setup` to inspect current/
+proposed settings and the cloud/trust disclosure; it changes nothing without `--accept`. Setup proposes enablement;
+`--enable false` disables. Omitted data/action/backup choices retain saved values. Obtain the user's consent before
+enabling/broadening policy. Settings apply to every eligible current/future client, not one named CLI.
+
+Policy is stored atomically in `%APPDATA%\Microsoft\Xbox Multiplayer Analysis Tool\agent-access.json`, separately
+from ordinary application preferences. CLI setup touches only this neutral store and does not restore devices or
+initialize proxies, certificates, ETW, logs or WPF. Normal MCP Preferences cannot modify that policy.
+
+Local transport is not local inference: returned data can flow through the local client to its configured cloud
+model/provider and histories. Redaction is best effort, not confidentiality or a scripting sandbox. Full control
+includes trusted in-process C#. Client confirmations may be accepted by automation. Optional backups are local,
+unredacted native captures/file preimages, not complete undo. See the [complete disclosure](agent-access.md#trust-and-data-sharing).
+MCP routine controls do not add another XMAT confirmation. Actual data loss/overwrite, new C# activation,
+disruptive external or cross-client effects, broad host-list changes and raw exports under Redacted do.
+Client-native tool approvals are independent; CLI `setup --accept` and guarded `stop` decisions remain explicit.
+
+`agent config` generates actual install-relative bridge paths and client-compatible registration/JSON/TOML. It
+does not edit third-party files, auto-register servers or enable access. The default fallback is headless; `none`
+is connect-only, `desktop` launches a visible desktop when no eligible host exists. `/mcp` is client configuration/
+status, not a universal action confirmation. Installed `AGENTS.md` and the full guides ship beside the binaries;
+agents need an explicit reference or the client's trusted-workspace instruction discovery.
+
+`agent status` only reads bounded same-user process/discovery and saved-policy metadata. `agent start` coordinates
+launches per user/elevation, reuses an eligible host, and confirms exact process/instance readiness with a real MCP
+handshake. Disabled, starting/stopping, ambiguous or different-elevation presence prevents a launch-around.
+It launches only the trusted sibling desktop executable in an explicit internal mode, without shell/PATH lookup
+or silent elevation. `agent.ExternalLaunchRequired` means a job/sandbox prohibits independent lifetime: use an
+external Windows terminal, not containment workarounds. `agent.StartupTimeout` or cancellation can leave a
+starting host; inspect status rather than duplicating it. No existing host is killed.
+
+Persistent hosts survive bridge/client exit. Session-owned live-resource cleanup and private result ownership
+remain separate; a new connection does not inherit results/cursors. Disabled headless hosts retain their data and
+local presence; explicit local setup can re-enable access for recovery/stop. Modes do not share in-memory state.
+`doctor --for agent` checks installed host, bridge, instructions and x64 prerequisites without changing settings.
+
+`agent stop --instance ID` first returns shutdown state/required decisions without stopping. Add explicit
+`--accept`, plus required capture save/discard, SQL/script-draft discard acknowledgments and optional Xbox proxy
+disable choices. Save individual SQL/script drafts through MCP or the desktop before discarding if needed.
+`--overwrite` applies only to explicit `--save-capture`; output defaults to create-only. Stop calls the same MCP
+shutdown coordinator, stops/drains captures, performs enabled final backups, persists preferences and observes
+process exit. It never uses kill as graceful shutdown. Inspect is limited to sole-client idle headless housekeeping;
+broader shutdown needs Full control. Failed recovery/persistence/stale decisions leave the host alive, although
+already stopped captures or published files are not automatically undone.
+
+Agent diagnostic codes grow within `xmat-cli/1`: `agent.confirmation-required`, `agent.shutdown-decisions-required`,
+`agent.AccessDisabled`, `agent.NotReady`, `agent.Ambiguous`, `agent.WrongElevation`, `agent.ExternalLaunchRequired`,
+`agent.StartupFailed`, `agent.StartupTimeout`, `agent.HandshakeFailed`, `agent.shutdown-blocked`,
+`agent.policy.PolicyChanged`/`SaveFailed`, `agent.unavailable` and `agent.cancelled`. Inspect structured state before
+retrying; transport closure is not proof of process exit or rollback.
+
 ## What runs headless
 
 The capability registry (`XMAT/Operations/Capabilities/CapabilityRegistry.cs`) classifies every GUI entry point as
@@ -965,10 +1035,20 @@ command, dialog, device or capture type, analyzer or preference is not classifie
 GUI-only APIs such as message boxes or the dispatcher, or when the table below no longer matches the registry. See
 [Headless Parity](../CONTRIBUTING.md#headless-parity) in CONTRIBUTING.md. The first capture slice (S4) keeps WebSocket
 handshakes and reports the frames it observed without their payloads; archiving the payloads is planned separately.
+This table describes direct `xmat.exe` commands, not MCP availability. SQL/live capture/scripts and other typed
+application actions run through persistent headless or desktop MCP, even where an individual direct CLI command is
+planned. Shared stateful dispatch has a separate exact dependency profile; offline bans remain unchanged. Global
+authorization and advisory client acknowledgment are separate; trusted automation may acknowledge its own requests.
 
 <!-- xmat-capabilities:begin -->
 | Capability | Command line | Headless |
 |---|---|---|
+| Configure global local-agent policy and client setup (`agent-access.manage`) | `xmat agent setup [--enable true\|false] [--data redacted\|complete] [--actions inspect\|full] [--backups true\|false] [--accept]` | Supported (S9) |
+| Take operator ownership of the selected capture/scripts without stopping them (`agent-access.take-over`) | (not available yet) | Planned (S9, XMAT-021) |
+| Generate client setup; never edit third-party client configuration (`agent.config`) | `xmat agent config --client copilot\|claude\|codex\|gemini [--launch headless\|desktop\|none] [--instance ID]` | Supported (S9) |
+| Launch or reuse a persistent identity-checked local host without enabling access (`agent.start`) | `xmat agent start [--mode headless\|desktop]` | Supported (S9) |
+| Inspect bounded local instance presence and saved policy (`agent.status`) | `xmat agent status [--instance ID]` | Supported (S9) |
+| Request guarded shutdown through the same MCP application workflow (`agent.stop`) | `xmat agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite \| --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]` | Supported (S9) |
 | Analyze with the LTA rule set, custom rules or other thresholds (`analysis.compatibility`) | (not available yet) | Planned (S1b, XMAT-021) |
 | Write the analysis HTML report (`analysis.html-report`) | (not available yet) | Planned (S3, XMAT-008) |
 | Analyze network traces (`analysis.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
@@ -997,7 +1077,8 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Archive WebSocket message payloads (`capture.websocket-payloads`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture an Xbox development kit (`capture.xbox`) | (not available yet) | Planned (S7, XMAT-021) |
 | Show or export the existing root certificate; never creates one (`certificate.export`) | (not available yet) | Planned (S5, XMAT-021) |
-| Check what a command needs before running it (`cli.doctor`) | `xmat doctor --for analyze` | Supported (S1) |
+| Explicit desktop HTTPS certificate/trust setup; Windows consent cannot be automated (`certificate.setup`) | (not available yet) | Planned (S5, XMAT-021) |
+| Check what a command needs before running it (`cli.doctor`) | `xmat doctor --for analyze\|agent` | Supported (S1) |
 | Ping an Xbox development kit or read its status (read-only) (`device.status`) | (not available yet) | Planned (S7, XMAT-021) |
 | Collect debug logs (`diagnostics.logs`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Show GDK for Xbox details (`environment.gdk`) | (not available yet) | Planned (S7, XMAT-021) |
@@ -1007,6 +1088,8 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
+| Run protected read-only SQL and discover capture schemas (`query.execute`) | (not available yet) | Planned (S9, XMAT-021) |
+| Export complete or selected SQL results (`query.export`) | (not available yet) | Planned (S9, XMAT-021) |
 | Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE \| --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw] [--fix-content-length] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]` | Supported (S9) |
 | Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
@@ -1021,6 +1104,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Main window (`view.main-window`) | (none) | GUI only. Presentation: hosts the GUI adapters of every capability |
 | Preferences window (`view.preferences-editor`) | (none) | GUI only. Presentation: edits saved GUI preferences; headless runs take per-run options instead |
 | Script editor (`view.script-editor`) | (none) | GUI only. Presentation: editor buffer, save, revert and error navigation; headless scripts are files |
+| SQL editor and immutable result views (`view.sql-workspace`) | (none) | GUI only. Presentation: document buffers, completion, history, paging and typed value inspection |
 | Light and dark theme (`view.theme`) | (none) | GUI only. Presentation: colors only |
 | Choose the PC address a console sends traffic to (`xbox.source-address`) | (not available yet) | Planned (S7, XMAT-021) |
 <!-- xmat-capabilities:end -->

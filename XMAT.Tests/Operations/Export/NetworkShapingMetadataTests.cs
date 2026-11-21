@@ -143,6 +143,29 @@ namespace XMAT.Tests.Operations.Export
                 NetworkShapingMetadata.Serialize(Assert.Single(loaded.Devices).Shaping));
         }
 
+        [Fact]
+        public void BoundedSazImportKeepsArchivedShaping()
+        {
+            using var directory = new ExportTestDirectory();
+            string path = directory.PathOf("capture.saz");
+            CaptureSazImportTests.WriteSaz(path);
+            var controller = new NetworkShapingController();
+            controller.Apply(NetworkShapingProfile.Preset("avg"));
+            NetworkShapingMetadata shaping = NetworkShapingMetadata.From(controller, 1800);
+            using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+            {
+                using Stream stream = archive.CreateEntry(NetworkShapingMetadata.ArchiveEntry).Open();
+                stream.Write(Encoding.UTF8.GetBytes(NetworkShapingMetadata.Serialize(shaping)));
+            }
+
+            FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(
+                path, 1024 * 1024, CancellationToken.None);
+
+            Assert.Equal(
+                NetworkShapingMetadata.Serialize(shaping),
+                NetworkShapingMetadata.Serialize(imported.Shaping));
+        }
+
         [Theory]
         [InlineData("{\"version\":2,\"traces\":[]}")]
         [InlineData("{\"version\":1,\"traces\":null}")]

@@ -1,0 +1,108 @@
+<UserControl x:Class="XMAT.SqlQueryResultsView"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sql="clr-namespace:XMAT.SqlQueries"
+  DataContextChanged="View_DataContextChanged">
+  <Grid Background="{DynamicResource PanelBackgroundBrush}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <DockPanel Margin="4">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="ExportAllButton" Margin="4,0" Padding="6,2"
+          Content="{sql:SqlText SQL_EXPORT_ALL}" IsEnabled="{Binding CanExportAll}" Click="ExportAll_Click"/>
+        <Button x:Name="ExportSelectedButton" Margin="4,0" Padding="6,2"
+          Content="{sql:SqlText SQL_EXPORT_SELECTED}" IsEnabled="{Binding CanExportSelected}" Click="ExportSelected_Click"/>
+      </StackPanel>
+      <TextBlock Text="{Binding ResultSummary}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+    </DockPanel>
+    <Expander Grid.Row="1" Header="{sql:SqlText SQL_RESULT_SQL}" Margin="4,0">
+      <TextBox Text="{Binding ResultRun.Sql, Mode=OneWay}" IsReadOnly="True" MaxHeight="110"
+        FontFamily="Consolas" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+    </Expander>
+    <TabControl Grid.Row="2" x:Name="ResultTabs" Margin="2">
+      <TabItem Header="{sql:SqlText SQL_RESULTS}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="3*" MinWidth="100"/>
+            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="2*" MinWidth="170"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <DataGrid x:Name="ResultGrid" Grid.Row="0" ItemsSource="{Binding PageRows}"
+            AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
+            CanUserSortColumns="False" CanUserResizeColumns="True" CanUserReorderColumns="True"
+            SelectionMode="Extended" SelectionUnit="FullRow" ClipboardCopyMode="IncludeHeader"
+            EnableRowVirtualization="True" EnableColumnVirtualization="True"
+            VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+            ScrollViewer.CanContentScroll="True" RowHeaderWidth="55" RowHeight="24"
+            Background="{DynamicResource PanelBackgroundBrush}" Foreground="{DynamicResource PrimaryForegroundBrush}"
+            AlternatingRowBackground="{DynamicResource AltRowBackgroundBrush}"
+            SelectionChanged="ResultGrid_SelectionChanged" CurrentCellChanged="ResultGrid_CurrentCellChanged"
+            PreviewKeyDown="ResultGrid_PreviewKeyDown"
+            AutomationProperties.Name="{sql:SqlText SQL_RESULT_GRID}">
+            <DataGrid.RowHeaderTemplate>
+              <DataTemplate><TextBlock Text="{Binding DisplayOrdinal}"/></DataTemplate>
+            </DataGrid.RowHeaderTemplate>
+          </DataGrid>
+          <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch" ResizeDirection="Columns"
+            Background="{DynamicResource GridSplitterBrush}"/>
+          <Grid Grid.Column="2" Margin="4,0">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="{sql:SqlText SQL_INSPECTOR}" Margin="2"/>
+            <DataGrid x:Name="FieldsGrid" Grid.Row="1" ItemsSource="{Binding InspectorRow.Cells}"
+              IsReadOnly="True" AutoGenerateColumns="False" CanUserSortColumns="False" CanUserAddRows="False"
+              EnableRowVirtualization="True" EnableColumnVirtualization="True"
+              SelectionMode="Single" SelectionChanged="FieldsGrid_SelectionChanged">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="{sql:SqlText SQL_ORDINAL}" Binding="{Binding DisplayOrdinal}" Width="Auto"/>
+                <DataGridTextColumn Header="{sql:SqlText SQL_FIELD}" Binding="{Binding Name}" Width="*"/>
+                <DataGridTextColumn Header="{sql:SqlText SQL_TYPE}" Binding="{Binding Type}" Width="Auto"/>
+                <DataGridTextColumn Header="{sql:SqlText SQL_BYTES}" Binding="{Binding ByteLength}" Width="Auto"/>
+                <DataGridTextColumn Header="{sql:SqlText SQL_PREVIEW}" Binding="{Binding Preview}" Width="*"/>
+              </DataGrid.Columns>
+            </DataGrid>
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,3">
+              <Button Content="{sql:SqlText SQL_INSPECT_READ}" Click="InspectRead_Click"
+                IsEnabled="{Binding CanReadResult}" Padding="4,2" Margin="0,0,4,0"/>
+              <Button Content="{sql:SqlText SQL_INSPECT_NEXT}" Click="InspectNext_Click"
+                IsEnabled="{Binding InspectorHasMore}" Padding="4,2"/>
+            </StackPanel>
+            <TextBlock Grid.Row="3" Text="{Binding InspectorChunkInfo}" TextWrapping="Wrap"/>
+            <TextBox Grid.Row="4" Text="{Binding InspectorText, Mode=OneWay}" IsReadOnly="True"
+              FontFamily="Consolas" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto"
+              VerticalScrollBarVisibility="Auto" AutomationProperties.Name="{sql:SqlText SQL_INSPECT_VALUE}"/>
+          </Grid>
+          <WrapPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="2">
+            <Button Content="{sql:SqlText SQL_PREVIOUS_PAGE}" Click="PreviousPage_Click"
+              IsEnabled="{Binding CanPreviousPage}" Padding="4,2"/>
+            <Button Content="{sql:SqlText SQL_NEXT_PAGE}" Click="NextPage_Click"
+              IsEnabled="{Binding CanNextPage}" Padding="4,2" Margin="4,0"/>
+            <TextBlock Text="{Binding PageSummary}" VerticalAlignment="Center" Margin="4,0"/>
+            <Button Content="{sql:SqlText SQL_CLEAR_SELECTION}" Click="ClearSelection_Click" Padding="4,2"/>
+            <TextBlock Text="{sql:SqlText SQL_PAGE_ORDER}" VerticalAlignment="Center" Margin="8,0"
+              Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+          </WrapPanel>
+        </Grid>
+      </TabItem>
+      <TabItem Header="{sql:SqlText SQL_MESSAGES}">
+        <TextBox Text="{Binding MessageText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+          VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Margin="4"/>
+      </TabItem>
+    </TabControl>
+    <TextBlock Grid.Row="3" Text="{Binding MessageText}" TextWrapping="Wrap" MaxHeight="64" Margin="4"
+      ToolTip="{Binding MessageText}" Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+  </Grid>
+</UserControl>

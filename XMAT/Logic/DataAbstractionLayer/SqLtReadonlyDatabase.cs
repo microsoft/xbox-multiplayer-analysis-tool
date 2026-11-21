@@ -10,6 +10,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32.SafeHandles;
 using SQLitePCL;
@@ -28,6 +29,23 @@ namespace XMAT.DataAbstractionLayer
         IDisposable,
         ICaptureTextSourceProvider
     {
+        public Task<IReadOnlyList<QueryTable>> GetQuerySchemaAsync(CancellationToken cancellationToken = default) =>
+            Task.Run(() => SqLtQuerySupport.ReadSchema(_connection, cancellationToken), cancellationToken);
+
+        public Task<IQuerySession> CreateQuerySessionAsync(CancellationToken cancellationToken = default) =>
+            SqLtQuerySession.CreateAsync(_connection, cancellationToken);
+
+        public Task<IQuerySession> CreateQuerySessionAsync(
+            IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            SqLtQuerySession.CreateAsync(_connection, cancellationToken, projection);
+
+        public void SaveToFile(string filepath) => SqLtDatabaseBackup.SaveToFile(_connection, filepath, sourceIdentity: Identity);
+        public void SaveToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.SaveToFile(_connection, filepath, sourceIdentity: Identity,
+                maximumBytes: maximumBytes, cancellationToken: cancellationToken);
+        public void CreateSnapshotToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.CreateSnapshot(_connection, filepath, maximumBytes, cancellationToken);
+
         // FILE_NAME_NORMALIZED with VOLUME_NAME_DOS, then with VOLUME_NAME_GUID for volumes without a drive letter. The
         // opened name is never used: it is not normalized, so it could still lead SQLite through a link.
         private static readonly uint[] FinalPathFlags =
@@ -181,6 +199,13 @@ namespace XMAT.DataAbstractionLayer
             command.CommandText =
                 "SELECT sqlite_version()";
             return command.ExecuteScalar() as string;
+        }
+
+        internal async Task CopyInputAsync(Stream destination, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _snapshot.Position = 0;
+            await _snapshot.CopyToAsync(destination, HashBufferBytes, cancellationToken);
         }
 
         // The SHA-256 of the guarded file from its start to its end: the handle that was checked and that keeps writers

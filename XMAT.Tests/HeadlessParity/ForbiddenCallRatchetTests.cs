@@ -32,6 +32,7 @@ namespace XMAT.Tests.HeadlessParity
 
             Dictionary<string, int> baseline = ForbiddenCallBaseline.Load(baselinePath);
             Dictionary<string, int> current = ScanSources(DefaultSources())
+                .Where(call => !RuntimeDispatchProfile.Matches(call))
                 .ToDictionary(call => call.Key, call => call.Count, StringComparer.Ordinal);
 
             List<string> added = current
@@ -61,6 +62,16 @@ namespace XMAT.Tests.HeadlessParity
             }
 
             Assert.True(added.Count == 0 && removed.Count == 0, message.ToString());
+        }
+
+        [Fact]
+        public void StatefulRuntimeAdapter_UsesOnlyItsReviewedThreadingCalls()
+        {
+            var actual = ScanSources(DefaultSources())
+                .Where(call => call.CallerType == "XMAT.ApplicationDispatch")
+                .ToDictionary(call => call.Key, call => call.Count, StringComparer.Ordinal);
+            Assert.Equal(RuntimeDispatchProfile.Calls.OrderBy(entry => entry.Key),
+                actual.OrderBy(entry => entry.Key));
         }
 
         [Fact]
@@ -112,7 +123,7 @@ namespace XMAT.Tests.HeadlessParity
             IReadOnlyList<string> paths = string.IsNullOrWhiteSpace(sources)
                 ? DefaultSources()
                 : sources.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            List<ForbiddenCall> calls = ScanSources(paths);
+            List<ForbiddenCall> calls = ScanSources(paths).Where(call => !RuntimeDispatchProfile.Matches(call)).ToList();
 
             Assert.DoesNotContain(calls, call => ForbiddenCallScanner.IsHeadlessNamespace(call.CallerType));
             ForbiddenCallBaseline.Write(Environment.GetEnvironmentVariable(WriteVariable), calls);

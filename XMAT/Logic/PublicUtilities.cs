@@ -119,16 +119,17 @@ namespace XMAT
 
         public static void SafeInvoke(Action func)
         {
-            if (Application.Current != null && Application.Current.Dispatcher != null)
+            var dispatcher = ApplicationDispatch.RuntimeDispatcher ?? Application.Current?.Dispatcher;
+            if (dispatcher != null && !ApplicationDispatch.IsUiShuttingDown(dispatcher))
             {
                 // if we're on the UI thread, call the function directly
-                if (Application.Current.Dispatcher.CheckAccess())
+                if (dispatcher.CheckAccess())
                 {
                     func();
                 }
                 else // otherwise marshal it to the UI thread...
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(func));
+                    dispatcher.BeginInvoke(new Action(func));
                 }
             }
         }

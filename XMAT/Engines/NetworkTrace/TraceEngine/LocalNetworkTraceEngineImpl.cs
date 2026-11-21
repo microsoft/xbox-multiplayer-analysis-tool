@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Diagnostics.Tracing;
 
@@ -61,12 +65,37 @@ namespace XMAT.NetworkTrace.NTDE
         // Microsoft-Windows-NDIS-PacketCapture
         internal static readonly Guid NdisPacketCaptureProviderId = new Guid("2ED6006E-4729-4609-B423-3EE7BCD678EF");
 
-        private long _startTimeTicks = 0;
         private int _packetCount = 0;
         private string _sessionName;
+        private readonly Func<IReadOnlyList<string>, Task<int>> _runCommand;
+        private readonly Func<bool> _isElevated;
+        private readonly Func<string, bool> _isSessionActive;
+        private Exception _dispatchFailure;
+        private CancellationToken _readCancellation;
+        internal string OwnedSessionName => _sessionName;
+
+        internal LocalNetworkTraceEngineImpl(
+            Func<IReadOnlyList<string>, Task<int>> runCommand = null, Func<bool> isElevated = null,
+            Func<string, bool> isSessionActive = null)
+        {
+            _runCommand = runCommand ?? RunNetshAsync;
+            _isElevated = isElevated ?? NetworkTraceEngineFactory.IsElevated;
+            _isSessionActive = isSessionActive ?? IsSessionActive;
+        }
 
         unsafe private void Dispatch(TraceEventNativeMethods.EVENT_RECORD* record)
         {
+            if (_dispatchFailure != null || _readCancellation.IsCancellationRequested)
+                return;
+            try
+            { DispatchRecord(record); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception)) { _dispatchFailure = exception; }
+        }
+
+        unsafe private void DispatchRecord(TraceEventNativeMethods.EVENT_RECORD* record)
+        {
+            if (record == null)
+                throw new InvalidDataException("A trace callback did not contain an event record.");
             if ((record->EventHeader.ProviderId != NdisPacketCaptureProviderId) ||
                 (record->EventHeader.Id != PacketFragment_value) ||
                 (record->EventHeader.Version != 0) ||
@@ -87,7 +116,7 @@ namespace XMAT.NetworkTrace.NTDE
             json.Append(record->EventHeader.ThreadId);
             json.Append(", \"timestamp\": \"");
 
-            DateTime timestamp = DateTime.FromFileTimeUtc(_startTimeTicks + record->EventHeader.TimeStamp);
+            DateTime timestamp = DateTime.FromFileTimeUtc(record->EventHeader.TimeStamp);
 
             json.Append(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ"));
             json.Append("\" }, \"packet\": { \"mediaType\": \"");
@@ -109,7 +138,11 @@ namespace XMAT.NetworkTrace.NTDE
                 json.Append("wifi");
             }
 
+            if (record->UserData == IntPtr.Zero || record->UserDataLength < sizeof(PacketFragmentHeader))
+                throw new InvalidDataException("The trace fragment header is incomplete.");
             var header = (PacketFragmentHeader*)record->UserData;
+            if (header->FragmentSize > record->UserDataLength - sizeof(PacketFragmentHeader))
+                throw new InvalidDataException("The trace fragment extends past its event buffer.");
 
             json.Append("\", \"miniportIfIndex\": ");
             json.Append(header->MiniportIfIndex);
@@ -151,7 +184,9 @@ namespace XMAT.NetworkTrace.NTDE
             json.Append("\" } }\n");
 
             _packetCount++;
-            EventRecordAvailable?.Invoke(this, json.ToString());
+            try
+            { EventRecordAvailable?.Invoke(this, json.ToString()); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception)) { _dispatchFailure = exception; }
         }
 
         public async Task GetAllEventsAsync()
@@ -170,14 +205,17 @@ namespace XMAT.NetworkTrace.NTDE
         /// "netsh trace start capture=yes" on another PC) and raises EventRecordAvailable
         /// for each packet. Returns the number of packets found.
         /// </summary>
-        public async Task<int> ReadEventsFromFileAsync(string etlPath)
+        public async Task<int> ReadEventsFromFileAsync(string etlPath, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!File.Exists(etlPath))
             {
                 throw new FileNotFoundException(etlPath);
             }
 
             _packetCount = 0;
+            _dispatchFailure = null;
+            _readCancellation = cancellationToken;
 
             await Task.Run(() =>
             {
@@ -187,8 +225,8 @@ namespace XMAT.NetworkTrace.NTDE
                     {
                         LogFileName = etlPath,
                         EventCallback = Dispatch,
-                        LogFileMode = TraceEventNativeMethods.PROCESS_TRACE_MODE_EVENT_RECORD |
-                                      TraceEventNativeMethods.PROCESS_TRACE_MODE_RAW_TIMESTAMP
+                        BufferCallback = _ => !cancellationToken.IsCancellationRequested && _dispatchFailure == null,
+                        LogFileMode = TraceEventNativeMethods.PROCESS_TRACE_MODE_EVENT_RECORD
                     };
 
                     UInt64[] traceHandle = new UInt64[1];
@@ -201,9 +239,10 @@ namespace XMAT.NetworkTrace.NTDE
 
                     try
                     {
-                        _startTimeTicks = logfile.LogfileHeader.StartTime;
-
                         int dwErr = TraceEventNativeMethods.ProcessTrace(traceHandle, 1, (IntPtr)0, (IntPtr)0);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (_dispatchFailure != null)
+                            ExceptionDispatchInfo.Capture(_dispatchFailure).Throw();
                         if (dwErr != 0)
                         {
                             Marshal.ThrowExceptionForHR(TraceEventNativeMethods.GetHRFromWin32(dwErr));
@@ -212,77 +251,103 @@ namespace XMAT.NetworkTrace.NTDE
                     finally
                     {
                         TraceEventNativeMethods.CloseTrace(traceHandle[0]);
+                        GC.KeepAlive(logfile);
                     }
                 }
-            });
+            }, cancellationToken);
 
+            if (_dispatchFailure != null)
+                ExceptionDispatchInfo.Capture(_dispatchFailure).Throw();
             return _packetCount;
         }
 
         private string CreateSessionName()
         {
-            return $"{SessionName}-{DateTime.Now.ToString(SessionDateFormat)}-";
+            return $"{SessionName}-{Guid.NewGuid():N}-";
         }
 
         public async Task StartPacketTraceAsync()
         {
+            if (!_isElevated())
+                throw new UnauthorizedAccessException(Localization.GetLocalizedString("ELEVATION_REQUIRED_MESSAGE"));
+            if (_sessionName != null)
+                throw new NetworkTraceEngineException(Localization.GetLocalizedString("NETCAP_ERROR_START"), true);
             _sessionName = CreateSessionName();
-
-            await Task.Run(() =>
-            {
-                ProcessStartInfo info = new ProcessStartInfo
-                {
-                    FileName = "netsh.exe",
-                    Arguments = $"trace start capture=yes sessionname={_sessionName} provider=Microsoft-Windows-NDIS-PacketCapture level=4",
-                    Verb = "runas",
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                };
-
-                var netsh = Process.Start(info);
-                var sto = netsh.StandardOutput.ReadToEnd();
-
-                netsh.WaitForExit();
-
-                if (netsh.ExitCode != 0)
-                {
-                    if (sto.Contains(RunAsAdminMarker))
-                    {
-                        // The process needs to be run as admin so we throw
-                        // a UAE and will prompt the user to restart as Admin
-                        throw new UnauthorizedAccessException(sto);
-                    }
-                    else
-                    {
-                        throw new ApplicationException(sto);
-                    }
-                }
-            });
+            if (await _runCommand(["trace", "start", "capture=yes", $"sessionname={_sessionName}",
+                "provider=Microsoft-Windows-NDIS-PacketCapture", "level=4"]) != 0)
+                throw new NetworkTraceEngineException(Localization.GetLocalizedString("NETCAP_ERROR_START"), true);
         }
 
         public async Task StopPacketTraceAsync()
         {
-            await Task.Run(() =>
+            if (_sessionName == null)
+                throw new NetworkTraceEngineException(Localization.GetLocalizedString("NETCAP_ERROR_STOP"), false);
+            if (!_isElevated())
+                throw new UnauthorizedAccessException(Localization.GetLocalizedString("ELEVATION_REQUIRED_MESSAGE"));
+            if (!_isSessionActive(_sessionName))
+                return;
+            if (await _runCommand(["trace", "stop", $"sessionname={_sessionName}"]) != 0 && _isSessionActive(_sessionName))
+                throw new NetworkTraceEngineException(Localization.GetLocalizedString("NETCAP_ERROR_STOP"), true);
+        }
+
+        private static unsafe bool IsSessionActive(string name)
+        {
+            var size = sizeof(TraceEventNativeMethods.EVENT_TRACE_PROPERTIES);
+            var bytes = new byte[size + 4096];
+            fixed (byte* buffer = bytes)
             {
-                ProcessStartInfo info = new ProcessStartInfo
-                {
-                    FileName = "netsh.exe",
-                    Arguments = $"trace stop sessionname={_sessionName}",
-                    Verb = "runas",
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                };
+                var properties = (TraceEventNativeMethods.EVENT_TRACE_PROPERTIES*)buffer;
+                properties->Wnode.BufferSize = (uint)bytes.Length;
+                properties->LoggerNameOffset = (uint)size;
+                properties->LogFileNameOffset = (uint)(size + 2048);
+                var result = ControlTrace(0, name, properties, 0);
+                if (result == 4201)
+                    return false;
+                if (result == 234)
+                    return true;
+                if (result != 0)
+                    throw new Win32Exception((int)result);
+                return true;
+            }
+        }
 
-                var netsh = Process.Start(info);
-                var sto = netsh.StandardOutput.ReadToEnd();
+        [DllImport("advapi32.dll", EntryPoint = "ControlTraceW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern unsafe uint ControlTrace(
+            ulong sessionHandle, string sessionName, TraceEventNativeMethods.EVENT_TRACE_PROPERTIES* properties, uint controlCode);
 
-                netsh.WaitForExit();
+        internal static ProcessStartInfo CreateNetshStartInfo(IReadOnlyList<string> arguments)
+        {
+            var result = new ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "netsh.exe"),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            foreach (var argument in arguments)
+                result.ArgumentList.Add(argument);
+            return result;
+        }
 
-                if (netsh.ExitCode != 0)
-                {
-                    throw new ApplicationException(sto);
-                }
-            });
+        private static async Task<int> RunNetshAsync(IReadOnlyList<string> arguments)
+        {
+            using var process = Process.Start(CreateNetshStartInfo(arguments));
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            try
+            { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+                await Task.WhenAll(output, error);
+                throw new NetworkTraceEngineException(Localization.GetLocalizedString("NETCAP_COMMAND_TIMEOUT"), true);
+            }
+            await Task.WhenAll(output, error);
+            return process.ExitCode;
         }
     }
 }

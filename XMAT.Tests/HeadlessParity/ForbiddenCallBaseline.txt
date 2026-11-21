@@ -14,7 +14,6 @@ XboxMultiplayerAnalysisTool|XMAT.BatchedDispatcherQueue::ScheduleDrain|System.Wi
 XboxMultiplayerAnalysisTool|XMAT.BatchedDispatcherQueue::ScheduleDrain|System.Windows.Threading.Dispatcher::get_HasShutdownStarted|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::.ctor|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::.ctor|System.Windows.Threading.Dispatcher::get_CurrentDispatcher|1
-XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::ImportDataCapturesAsync|System.Windows.MessageBox::Show|2
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Input.CommandManager::InvalidateRequerySuggested|2
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Threading.Dispatcher::BeginInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Threading.Dispatcher::CheckAccess|1
@@ -25,16 +24,15 @@ XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::SelectedCaptureControll
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::SelectedCaptureController_PropertyChanged|System.Windows.Threading.Dispatcher::get_HasShutdownFinished|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::SelectedCaptureController_PropertyChanged|System.Windows.Threading.Dispatcher::get_HasShutdownStarted|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppSettings::Serialize|System.Windows.MessageBox::Show|1
-XboxMultiplayerAnalysisTool|XMAT.NetworkTrace.NTDE.NetworkTraceEngineImpl::InternalConnect|System.Windows.MessageBox::Show|1
 XboxMultiplayerAnalysisTool|XMAT.NetworkTrace.NetworkTraceCaptureController::ImportFromEtlFileAsync|System.Windows.Input.CommandManager::InvalidateRequerySuggested|1
 XboxMultiplayerAnalysisTool|XMAT.NetworkTrace.NetworkTraceCaptureController::StartCapture|System.Windows.Input.CommandManager::InvalidateRequerySuggested|1
 XboxMultiplayerAnalysisTool|XMAT.NetworkTrace.NetworkTraceCaptureController::StopCapture|System.Windows.Input.CommandManager::InvalidateRequerySuggested|1
 XboxMultiplayerAnalysisTool|XMAT.NetworkTrace.NetworkTraceCaptureController::set_IsRunning|System.Windows.Input.CommandManager::InvalidateRequerySuggested|1
-XboxMultiplayerAnalysisTool|XMAT.NetworkTraceCaptureAnalysis.NetworkTraceCaptureAnalyzer::RunAsync|XMAT.PublicUtilities::SafeInvoke|10
+XboxMultiplayerAnalysisTool|XMAT.NetworkTraceCaptureAnalysis.NetworkTraceCaptureAnalyzer::RunAsync|XMAT.PublicUtilities::SafeInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities+BlockingOperationDisposable::.ctor|XMAT.PublicUtilities::SafeInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities+BlockingOperationDisposable::Dispose|XMAT.PublicUtilities::SafeInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::RestartAsAdmin|System.Windows.Application::get_Current|1
-XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Application::get_Current|4
+XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::BeginInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::CheckAccess|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::get_AppName|System.Windows.Application::get_Current|1

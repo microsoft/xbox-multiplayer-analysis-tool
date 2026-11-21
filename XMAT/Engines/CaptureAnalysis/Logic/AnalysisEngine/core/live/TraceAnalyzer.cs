@@ -230,6 +230,12 @@ namespace CaptureAnalysisEngine
             return perConsoleResults;
         }
 
+        public TraceAnalysisResult RunDetailed(
+            RulesEngine rulesEngine, ServiceCallData serviceCallData, string reportOutputDirectory = null,
+            CancellationToken cancellationToken = default) =>
+            TraceAnalysisResult.FromConsoleResults(RunDetailed(
+                rulesEngine, serviceCallData, reportOutputDirectory, true, cancellationToken));
+
         public IEnumerable<ReportDocument> RunReports(IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory)
         {
             return RunReports(

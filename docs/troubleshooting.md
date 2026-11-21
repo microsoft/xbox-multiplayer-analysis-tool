@@ -2,8 +2,77 @@
 
 [Back to README](../README.md) | [Support policy](../SUPPORT.md)
 
-Use these recovery steps for proxy and capture problems. For setup instructions,
-see [Web proxy](web-proxy.md) or [Network capture](network-capture.md).
+Use these recovery steps for proxy, capture, SQL and Agent Access problems. For setup instructions,
+see [Web proxy](web-proxy.md), [Network capture](network-capture.md), [SQL workspace](sql-workspace.md)
+or [Local Agent Access](agent-access.md).
+
+## SQL workspace
+
+### Run is disabled or no source is available
+
+1. Use **Refresh sources** and select an available active or loaded source.
+2. Active-source snapshots require stopped captures. Stop the relevant capture, then run again.
+3. A loaded source is immutable for queries and can be used while an unrelated live capture runs.
+4. If a source or schema disappeared, complete the load/import/close operation, refresh again and
+   reselect the source. A row or capture-grid filter is not a SQL source selector.
+
+If a query fails, times out or is cancelled, XMAT retains the preceding successful immutable result.
+Check the result's source and original SQL before exporting it. Schema and SQLite diagnostics are
+reported as supplied; XMAT cannot always map a provider error to an exact editor offset.
+
+## Agent Access and MCP
+
+### Access is disabled or the client cannot connect
+
+1. From the trusted installation folder, run:
+
+   ```powershell
+   .\xmat.exe doctor --for agent
+   .\xmat.exe agent status
+   ```
+
+2. Confirm the complete installation contains `xmat.exe`, `XboxMultiplayerAnalysisTool.exe`,
+   `AgentBridge\XMAT.AgentBridge.exe`, `AGENTS.md` and the documentation guides.
+3. Review the disclosure, then enable access locally with **Actions > Agent Access** or
+   `xmat agent setup ... --accept`. `start`, `config` and connection attempts never enable access.
+4. Run the client and XMAT under the same Windows user and elevation. Status reports
+   `agent.WrongElevation` or `agent.Ambiguous` rather than permitting a launch-around.
+5. Regenerate the client configuration if the installation moved. XMAT generates paths and
+   registration content but does not edit third-party client configuration automatically.
+
+### A host is starting, absent or has a handshake failure
+
+Use `xmat agent status` before retrying. Starting, stopping, ambiguous or different-elevation
+presence is a prerequisite to resolve, not a reason to start another host. `StartupTimeout`,
+`StartupFailed` or `HandshakeFailed` means the launch outcome is unknown or the real MCP handshake
+did not complete. Inspect the same instance and its logs instead of starting duplicates.
+
+If the client sandbox reports `agent.ExternalLaunchRequired`, open an ordinary Windows terminal
+outside that job and run the generated command. XMAT does not install a service/task or bypass the
+client's independent-process restriction.
+
+### A tool asks for confirmation or continuation
+
+Follow the structured response instead of guessing. A request or session-bound continuation must be
+acknowledged on the same MCP connection with the exact token and `accept` value. A token can expire
+or become stale after a source, revision, policy, hash or ownership change. Inspect the operation
+again rather than blindly retrying; publication or external effects can be uncertain.
+
+### A save, path or shutdown is refused
+
+- MCP file tools accept guarded absolute local paths, not relative, UNC, mapped/network/device,
+  alternate-stream or reparse paths. New output is create-only unless an exact guarded overwrite is
+  requested and approved.
+- A raw local capture/script/diagnostic/report output can require confirmation under Redacted sharing.
+- `agent stop` first reports the lifecycle decisions. Provide exact capture save/discard, SQL
+  Save/Discard/Cancel, script-draft and optional console-proxy choices. A closed pipe or stop receipt
+  is not process-exit proof; rerun status and verify the instance.
+- A persistence failure can leave a restriction active only in the current host while another host
+  retains the last saved policy. Resolve the save failure before depending on global persistence.
+
+See [Agent Access](agent-access.md#troubleshooting-agent-access), the
+[agent CLI and exit codes](cli.md#agent-setup-and-persistent-hosts), and
+[SQL workspace troubleshooting](sql-workspace.md#troubleshooting).
 
 ## Xbox proxy recovery
 

@@ -25,22 +25,25 @@ namespace NetworkTraceCaptureControls
     /// </summary>
     public partial class NetworkTraceCaptureView : UserControl
     {
+        private readonly CaptureAppModel _appModel;
         private readonly Action<Exception> _reportError;
 
         // Potential TODO: Move this to the CaptureController to save state between tabs?
         public NetworkTraceCaptureView()
-            : this(ex => MessageBox.Show(ex.Message, XMAT.Localization.GetLocalizedString("NETCAP_ERROR")))
+            : this(CaptureAppModel.AppModel)
         {
         }
 
-        internal NetworkTraceCaptureView(Action<Exception> reportError)
+        internal NetworkTraceCaptureView(CaptureAppModel appModel, Action<Exception> reportError = null)
         {
-            _reportError = reportError ?? throw new ArgumentNullException(nameof(reportError));
+            _appModel = appModel ?? throw new ArgumentNullException(nameof(appModel));
+            _reportError = reportError;
             InitializeComponent();
 
             AnalyzeCaptureButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_ANALYZE");
             AnalyzeCaptureButton.ToolTip = XMAT.Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearCapturesButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_CLEAR");
+            AcknowledgeRecoveryButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_ACK_RECOVERY");
             PacketRawTextTab.Header = XMAT.Localization.GetLocalizedString("NETCAP_PACKET_DATA");
             FiltersText.Text = XMAT.Localization.GetLocalizedString("GENERIC_FILTERS");
 
@@ -79,96 +82,90 @@ namespace NetworkTraceCaptureControls
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (this.DataContext is not ICaptureDeviceContext captureDeviceContext ||
-                captureDeviceContext.CaptureController is not NetworkTraceCaptureController ntdcc)
-            {
-                return;
-            }
-
-            if (ntdcc.DeviceStatus != (ntdcc.IsCapturing ? DeviceStatusEnum.Tracing : DeviceStatusEnum.Idle))
-            {
-                return;
-            }
-
-            IDisposable operationLease = null;
-            if (ntdcc.IsCapturing)
-            {
-                if (!CaptureAppModel.AppModel.CanStopCaptures)
-                {
-                    return;
-                }
-            }
-            else if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
-                out operationLease))
+            if (DataContext is not ICaptureDeviceContext captureDeviceContext ||
+                captureDeviceContext.CaptureController is not NetworkTraceCaptureController ntdcc ||
+                !CanStartStopCapture(captureDeviceContext, ntdcc))
             {
                 return;
             }
 
             try
             {
-                if (ntdcc.IsCapturing)
+                var result = await _appModel.CaptureOperations.SetRunningAsync(
+                    captureDeviceContext, !ntdcc.IsCapturing);
+                if (result.Failure == CaptureOperationFailure.ElevationRequired)
                 {
-                    await ntdcc.StopCapture(captureDeviceContext);
+                    OfferElevation();
                 }
-                else
+                else if (!result.Succeeded)
                 {
-                    using (operationLease)
-                    {
-                        if (ntdcc.IsCapturing)
-                        {
-                            return;
-                        }
-
-                        ntdcc.ClearAllCaptures();
-                        await ntdcc.StartCapture(captureDeviceContext, operationLease);
-                    }
+                    MessageBox.Show(XMAT.Localization.GetLocalizedString("NETCAP_OPERATION_UNAVAILABLE", result.Failure),
+                        XMAT.Localization.GetLocalizedString("NETCAP_ERROR"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
             catch (UnauthorizedAccessException)
             {
-                MessageBoxResult result = MessageBox.Show(
-                    XMAT.Localization.GetLocalizedString("ELEVATION_REQUIRED_MESSAGE"),
-                    XMAT.Localization.GetLocalizedString("ELEVATION_REQUIRED_TITLE"),
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Exclamation,
-                    MessageBoxResult.Yes);
-
-                if (result == MessageBoxResult.Yes)
-                {
-                    PublicUtilities.RestartAsAdmin();
-                }
+                OfferElevation();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                _reportError(ex);
-            }
-        }
-
-        private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-        {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null)
-            {
-                var ntdcc = captureDeviceContext.CaptureController as NetworkTraceCaptureController;
-
-                if (captureDeviceContext.IsReadOnly)
+                if (_reportError != null)
                 {
-                    e.CanExecute = false;
-                }
-                else if (ntdcc.IsCapturing)
-                {
-                    e.CanExecute =
-                        CaptureAppModel.AppModel.CanStopCaptures &&
-                        ntdcc.DeviceStatus == DeviceStatusEnum.Tracing;
+                    _reportError(ex);
                 }
                 else
                 {
-                    e.CanExecute =
-                        CaptureAppModel.AppModel.CanModifyCaptureData &&
-                        ntdcc.DeviceStatus == DeviceStatusEnum.Idle;
+                    MessageBox.Show(ntdcc.RecoveryRequired ? ntdcc.RecoveryStatusText : ex.Message,
+                        XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
                 }
             }
         }
+
+        private static void OfferElevation()
+        {
+            if (MessageBox.Show(XMAT.Localization.GetLocalizedString("ELEVATION_REQUIRED_MESSAGE"),
+                XMAT.Localization.GetLocalizedString("ELEVATION_REQUIRED_TITLE"), MessageBoxButton.YesNo,
+                MessageBoxImage.Exclamation, MessageBoxResult.No) == MessageBoxResult.Yes)
+                PublicUtilities.RestartAsAdmin();
+        }
+
+        private void AcknowledgeRecovery_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
+            e.CanExecute = DataContext is ICaptureDeviceContext
+            {
+                IsReadOnly: false,
+                CaptureController: NetworkTraceCaptureController { RecoveryRequired: true, IsTransitioning: false }
+            } &&
+                _appModel.CanModifyCaptureData;
+
+        private async void AcknowledgeRecovery_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (DataContext is not ICaptureDeviceContext target ||
+                target.CaptureController is not NetworkTraceCaptureController controller ||
+                MessageBox.Show(XMAT.Localization.GetLocalizedString("NETCAP_ACK_RECOVERY_CONFIRM",
+                    target.DeviceName, controller.LocalTraceSession ?? "-"),
+                    XMAT.Localization.GetLocalizedString("NETCAP_ERROR"), MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+            try
+            { await _appModel.CaptureRecoveryOperations.AcknowledgeExternalTraceRecoveryAsync(target); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                MessageBox.Show(XMAT.Localization.GetLocalizedString("NETCAP_RECOVERY_ACK_FAILED"),
+                    XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
+            }
+        }
+
+        private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
+            e.CanExecute = DataContext is ICaptureDeviceContext target &&
+                target.CaptureController is NetworkTraceCaptureController controller &&
+                CanStartStopCapture(target, controller);
+
+        private bool CanStartStopCapture(ICaptureDeviceContext target, NetworkTraceCaptureController controller) =>
+            !target.IsReadOnly && !controller.IsTransitioning &&
+            (controller.IsCapturing
+                ? _appModel.CanStopCaptures &&
+                    controller.DeviceStatus is DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired
+                : _appModel.CanModifyCaptureData && controller.DeviceStatus == DeviceStatusEnum.Idle);
 
         public ObservableCollection<NetworkTracePacketDataModel> NetworkTracePackets { get; set; }
 
@@ -188,7 +185,8 @@ namespace NetworkTraceCaptureControls
 
         private void Ntdcc_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(NetworkTraceCaptureController.DeviceStatus))
+            if (e.PropertyName is nameof(NetworkTraceCaptureController.DeviceStatus)
+                or nameof(NetworkTraceCaptureController.IsTransitioning))
             {
                 CommandManager.InvalidateRequerySuggested();
             }

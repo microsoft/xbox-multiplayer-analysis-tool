@@ -597,7 +597,8 @@ namespace XMAT.Tests.Cli
             {
                 Assert.Contains(
                     CapabilityRegistry.All,
-                    item => item.Status == CapabilityStatus.Supported && CliCatalog.CommandOf(item.CliRoute) == command);
+                    item => item.Status == CapabilityStatus.Supported &&
+                        item.CliRoutes.Any(route => CliCatalog.CommandOf(route) == command));
             }
         }
 
@@ -610,7 +611,8 @@ namespace XMAT.Tests.Cli
             Assert.Equal(
                 new[]
                 {
-                    CliCommands.Analyze, CliCommands.Capture, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.Export,
+                    CliCommands.Agent, CliCommands.Analyze, CliCommands.Capture, CliCommands.Compose,
+                    CliCommands.Curl, CliCommands.Doctor, CliCommands.Export,
                     CliCommands.MarkCaptureText, CliCommands.Replay, CliCommands.SaveRequest,
                 },
                 report.Commands.Select(command => command.Name));

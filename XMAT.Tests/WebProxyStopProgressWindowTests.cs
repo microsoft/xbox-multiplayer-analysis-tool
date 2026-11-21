@@ -17,6 +17,18 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task ShouldShowAsync_ReturnsFalseWithoutObservingAFastFault()
+        {
+            Task operation = Task.FromException(new InvalidOperationException("operation failed"));
+            var shouldShow = await WebProxyStopProgressWindow.ShouldShowAsync(
+                operation,
+                TimeSpan.FromMilliseconds(50));
+
+            Assert.False(shouldShow);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
+        }
+
+        [Fact]
         public async Task ShouldShowAsync_ReturnsTrueForSlowOperation()
         {
             var operationCompletion = new TaskCompletionSource(

@@ -442,14 +442,13 @@ namespace XMAT.Tests
         [Fact]
         public void PreferencesWindow_ShowsEveryWebProxySetting()
         {
-            _application.Run(_ =>
+            _application.Run(owner =>
             {
-                var dialog = new PreferencesWindow
+                using var setup = new AdministrationTestData();
+                WpfTestHost.Show(owner, new Grid());
+                var dialog = new PreferencesWindow(setup.Model, setup.Preferences)
                 {
-                    DataContext = new AppPreferencesModel
-                    {
-                        WebProxyCapturePreferences = new XMAT.WebServiceCapture.Models.PreferencesModel(),
-                    },
+                    Owner = owner,
                     Left = -12000,
                     Top = -12000,
                     ShowInTaskbar = false,
@@ -457,7 +456,11 @@ namespace XMAT.Tests
                 try
                 {
                     dialog.Show();
-                    WpfTestHost.Pump();
+                    PumpUntil(() => dialog.DataContext is AppPreferencesModel draft &&
+                        !ReferenceEquals(draft, setup.Model.PreferencesModel));
+                    var draft = Assert.IsType<AppPreferencesModel>(dialog.DataContext);
+                    Assert.IsType<XMAT.WebServiceCapture.Models.PreferencesModel>(
+                        draft.WebProxyCapturePreferences);
                     var tabs = (TabControl)((Grid)dialog.Content).Children[0];
                     var limit = (TextBox)((FrameworkElement)dialog.FindName("ProxyOptions")).FindName("CaptureLimit");
 

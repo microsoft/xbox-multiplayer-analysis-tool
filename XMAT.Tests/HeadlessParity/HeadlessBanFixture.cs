@@ -14,6 +14,10 @@ namespace XMAT.Operations.ParityFixtures
     {
         internal static object AppModelSingleton() => CaptureAppModel.AppModel;
 
+        internal static object DesktopDispatch() => App.CaptureUiDispatcher();
+
+        internal static object StatefulRuntimeDispatch() => ApplicationDispatch.RuntimeDispatcher;
+
         internal static object ActiveDatabase(ICaptureAppModel model) => model.ActiveDatabase;
 
         internal static bool SavedSettings(CaptureAppModel model) => CaptureAppSettings.Serialize(model);
@@ -41,6 +45,10 @@ namespace XMAT.Tests.HeadlessParity
     internal static class HeadlessBanControlFixture
     {
         internal static object AppModelSingleton() => CaptureAppModel.AppModel;
+
+        internal static object DesktopDispatch() => App.CaptureUiDispatcher();
+
+        internal static object StatefulRuntimeDispatch() => ApplicationDispatch.RuntimeDispatcher;
 
         internal static string StorageFolder() => PublicUtilities.StorageDirectoryPath;
 

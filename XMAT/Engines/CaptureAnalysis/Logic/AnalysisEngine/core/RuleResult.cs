@@ -12,6 +12,7 @@ namespace CaptureAnalysisEngine
     {
         // Name of the Rule the result came from
         public String RuleName { get; set; }
+        public string RuleType { get; internal set; }
         // Endpoint the had the rule applied
         public String Endpoint { get; set; }
         // Collision-free identity of the endpoint bucket the rule ran on

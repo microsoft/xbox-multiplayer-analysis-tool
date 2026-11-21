@@ -988,12 +988,12 @@ namespace XMAT.Tests.Replay
                     true,
                     true),
                 commands);
-            Assert.Subset(
-                ReviewedReflectionTypes,
-                reflection
-                    .Where(use => !use.InXamlCompilerCode)
-                    .Select(use => TypeOf(use.User))
-                    .ToHashSet(StringComparer.Ordinal));
+            Assert.DoesNotContain(reflection, use =>
+                !use.InXamlCompilerCode &&
+                !ReviewedReflectionTypes.Contains(TypeOf(use.User)) &&
+                // SQL result columns bind only to cell text and tooltips, not routed commands.
+                !(use.User == "XMAT.SqlQueryResultsView::RebuildColumns" &&
+                    use.Operand == "System.Windows.Data.Binding::.ctor"));
             Assert.Contains(
                 reflection, use => !use.InXamlCompilerCode && TypeOf(use.User) == "XboxClient.XboxClientConnection");
             Assert.Contains(

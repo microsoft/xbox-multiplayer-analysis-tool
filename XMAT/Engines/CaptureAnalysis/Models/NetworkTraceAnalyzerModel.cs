@@ -5,13 +5,14 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTraceCaptureAnalysis.Models
 {
     internal class NetworkTraceAnalyzerResultsDataModel
     {
         public string Name { get; set; }
-        public int Value { get; set; }
+        public long Value { get; set; }
     }
 
     internal class NetworkTraceAnalyzerResultsModel
@@ -41,6 +42,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis.Models
 
         public ObservableCollection<NetworkTraceAnalyzerResultsModel> NumericStatsLists { get; }
         public ObservableCollection<NetworkTraceAnalyzerResultsDataModel> NumericStats { get; }
+        internal NetworkTraceStatisticsResult CanonicalAnalysis { get; set; }
+        internal CaptureDataResult InvestigationData { get; set; }
 
         public event PropertyChangedEventHandler PropertyChanged;
     }

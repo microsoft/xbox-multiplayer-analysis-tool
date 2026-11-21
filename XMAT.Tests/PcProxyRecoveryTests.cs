@@ -5,6 +5,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using XMAT.ApplicationServices;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
 
@@ -19,6 +20,61 @@ namespace XMAT.Tests
         private static ProxySettings User => ProxyRecoveryTestEnvironment.UserSettings;
 
         public void Dispose() => _environment.Dispose();
+
+        [Fact]
+        public async Task StructuredStartupInspectionNeverWritesAndExplicitRecoveryRequiresTheExactDeadOwnerState()
+        {
+            var lease = _environment.WriteLease(_environment.DeadOwner(), User, applied: true);
+            var recovery = new ApplicationStartupRecovery(NewStart, () => new([], []));
+            var snapshot = await recovery.InspectAsync(default);
+            Assert.True(snapshot.CanRecoverPcLease);
+            Assert.Equal(lease.Intended, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            var changed = User with { Server = "another-proxy:3128", Flags = ProxySettings.Proxy };
+            _environment.Store.Write(changed);
+            Assert.Equal(XMAT.SharedInterfaces.AgentAccessError.SourceChanged,
+                (await Assert.ThrowsAsync<XMAT.SharedInterfaces.AgentAccessException>(() =>
+                    recovery.ExecuteAsync(snapshot.Revision, false, false, default))).Error);
+            Assert.Equal(changed, _environment.Store.Read());
+            _environment.Store.Write(lease.Intended);
+            snapshot = await recovery.InspectAsync(default);
+            await recovery.ExecuteAsync(snapshot.Revision, false, false, default);
+            Assert.Equal(User, _environment.Store.Read());
+            Assert.False(File.Exists(_environment.JournalPath));
+        }
+
+        [Fact]
+        public void StructuredRecoveryProtectsLiveOwnersAndChecksCancellationAfterTakingTheRecoveryLock()
+        {
+            var lease = _environment.WriteLease(
+                ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()), User, applied: true);
+            var recovery = NewStart();
+            var snapshot = recovery.InspectStartup();
+            Assert.Equal(RecoveryResult.Superseded, recovery.RecoverStartup(snapshot.Revision, false));
+            Assert.Equal(lease.Intended, _environment.Store.Read());
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() =>
+                recovery.RecoverStartup(snapshot.Revision, false, cancellation.Token));
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+        }
+
+        [Fact]
+        public async Task XboxNoticeInspectionIsReadOnlyAndAcknowledgmentDoesNotChangeProxySettings()
+        {
+            var owner = _environment.DeadOwner();
+            new XboxProxySessions(_environment.Folder, owner).SetCapturing("console-a", true);
+            var notices = XboxProxySessions.FindAbandoned(_environment.Folder, cleanInvalid: false, maximumRecords: 64);
+            var recovery = new ApplicationStartupRecovery(NewStart, () =>
+                XboxProxySessions.FindAbandoned(_environment.Folder, cleanInvalid: false, maximumRecords: 64));
+            var before = _environment.Store.Read();
+            var snapshot = await recovery.InspectAsync(default);
+            Assert.Equal(new[] { "console-a" }, snapshot.AbandonedXboxConsoles);
+            Assert.All(notices.Files, path => Assert.True(File.Exists(path)));
+            await recovery.ExecuteAsync(snapshot.Revision, false, true, default);
+            Assert.Equal(before, _environment.Store.Read());
+            Assert.All(notices.Files, path => Assert.False(File.Exists(path)));
+        }
 
         [Fact]
         public void Startup_RestoresTheSettingsLeftByAnOwnerThatDied()

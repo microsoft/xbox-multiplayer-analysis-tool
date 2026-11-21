@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
+using XMAT.ApplicationServices;
+using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTraceCaptureAnalysis.Models;
@@ -14,259 +17,96 @@ namespace XMAT.NetworkTraceCaptureAnalysis
 {
     public class NetworkTraceCaptureAnalyzer : ICaptureAnalyzer
     {
-        public static ICaptureAnalyzer Analyzer { get { return AnalyzerInstance; } }
-
+        public static ICaptureAnalyzer Analyzer => AnalyzerInstance;
         internal static readonly NetworkTraceCaptureAnalyzer AnalyzerInstance = new();
-
-        public ICaptureMethod SupportedCaptureMethod
-        {
-            get
-            {
-                return NetworkTraceCaptureMethod.Method;
-            }
-        }
-
-        public bool IsSelected { get; set; }
-
-        public string Description { get { return Localization.GetLocalizedString("NETCAP_ANALYSIS_TAB"); } }
-
-        public override string ToString()
-        {
-            return Description;
-        }
-
         internal static readonly NetworkTraceAnalysisOptionsModel PreferencesModelInstance = new();
+        private CaptureAppModel _appModel;
 
-        public ICaptureAnalyzerPreferences PreferencesModel { get { return PreferencesModelInstance; } }
+        public ICaptureMethod SupportedCaptureMethod => NetworkTraceCaptureMethod.Method;
+        public bool IsSelected { get; set; }
+        public string Description => Localization.GetLocalizedString("NETCAP_ANALYSIS_TAB");
+        public ICaptureAnalyzerPreferences PreferencesModel => PreferencesModelInstance;
+        public override string ToString() => Description;
+        public void Initialize(ICaptureAppModel appModel) => _appModel = appModel as CaptureAppModel;
+        public void Shutdown() => _appModel = null;
 
-        public void Initialize(ICaptureAppModel appModel)
-        {
-        }
-
-        private string PrettyProtocolName(int protocolNum)
-        {
-            if (Enum.IsDefined(typeof(NetworkProtocol), protocolNum))
-            {
-                return $"{protocolNum} ({((NetworkProtocol)protocolNum).ToString()})";
-            }
-
-            return protocolNum.ToString();
-        }
+        internal static NetworkTraceStatisticsOptions GetOptions() => new(
+            PreferencesModelInstance.MaximumMTU,
+            PreferencesModelInstance.PacketsPerSecondThreshold,
+            PreferencesModelInstance.DuplicatePacketWindow);
 
         public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
         {
-            NetworkTraceCaptureController controller = captureController as NetworkTraceCaptureController;
-
-            if (controller.FilteredItems == null)
-            {
+            var controller = captureController as NetworkTraceCaptureController;
+            if (controller?.FilteredItems == null)
                 return ECaptureAnalyzerResult.NoSuitableData;
-            }
-
-            var selectedItems = new NetworkTracePacketDataModel[controller.FilteredItems.Count];
-
-            controller.FilteredItems.CopyTo(selectedItems, 0);
-
-            await Task.Run(() =>
+            var selected = new NetworkTracePacketDataModel[controller.FilteredItems.Count];
+            controller.FilteredItems.CopyTo(selected, 0);
+            var options = GetOptions();
+            NetworkTraceStatisticsResult canonical;
+            CaptureDataResult investigation = null;
+            if (_appModel?.HasInvestigationTarget(controller) == true)
             {
-                NetworkTraceAnalyzerModel analyzerModel = new NetworkTraceAnalyzerModel();
-
-                analysisRun.AnalysisData = analyzerModel;
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PCBP"),
-                        Values =
-                            from packet in selectedItems
-                            orderby packet.Protocol
-                            group packet by packet.Protocol into protocolGroup
-                            select new NetworkTraceAnalyzerResultsDataModel
-                            {
-                                Name = PrettyProtocolName(protocolGroup.Key),
-                                Value = protocolGroup.Count(),
-                            }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PSBS"),
-                        Values =
-                            from packet in selectedItems
-                            orderby packet.SourceIpv4Address
-                            where (packet.Flags & NetworkTrace.Models.NetworkPacketFlags.Send) != 0
-                            group packet by packet.SourceIpv4Address into sourceIpGroup
-                            select new NetworkTraceAnalyzerResultsDataModel
-                            {
-                                Name = sourceIpGroup.Key,
-                                Value = sourceIpGroup.Count(),
-                            }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PRBS"),
-                        Values =
-                            from packet in selectedItems
-                            orderby packet.SourceIpv4Address
-                            where (packet.Flags & NetworkTrace.Models.NetworkPacketFlags.Receive) != 0
-                            group packet by packet.SourceIpv4Address into sourceIpGroup
-                            select new NetworkTraceAnalyzerResultsDataModel
-                            {
-                                Name = sourceIpGroup.Key,
-                                Value = sourceIpGroup.Count(),
-                            }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BSBS"),
-                        Values =
-                            from packet in selectedItems
-                            orderby packet.SourceIpv4Address
-                            where (packet.Flags & NetworkTrace.Models.NetworkPacketFlags.Send) != 0
-                            group packet by packet.SourceIpv4Address into sourceIpGroup
-                            select new NetworkTraceAnalyzerResultsDataModel
-                            {
-                                Name = sourceIpGroup.Key,
-                                Value = sourceIpGroup.Sum(p => p.Payload.Length),
-                            }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BRBS"),
-                        Values =
-                            from packet in selectedItems
-                            orderby packet.SourceIpv4Address
-                            where (packet.Flags & NetworkTrace.Models.NetworkPacketFlags.Receive) != 0
-                            group packet by packet.SourceIpv4Address into sourceIpGroup
-                            select new NetworkTraceAnalyzerResultsDataModel
-                            {
-                                Name = sourceIpGroup.Key,
-                                Value = sourceIpGroup.Sum(p => p.Payload.Length),
-                            }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStatsLists.Add(
-                    new NetworkTraceAnalyzerResultsModel
-                    {
-                        Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PLBS"),
-                        Values =
-                             from packet in selectedItems
-                             orderby packet.SourceIpv4Address
-                             group packet by packet.SourceIpv4Address into sourceIpGroup
-                             select new NetworkTraceAnalyzerResultsDataModel
-                             {
-                                 Name = sourceIpGroup.Key,
-                                 Value = (int)sourceIpGroup.Average(p => p.Payload.Length),
-                             }
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStats.Add(
-                    new NetworkTraceAnalyzerResultsDataModel
-                    {
-                        Name = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_UPOM", PreferencesModelInstance.MaximumMTU),
-                        Value =
-                            (from packet in selectedItems
-                             where packet.Protocol == (int)NetworkTrace.Models.NetworkProtocol.UDP && packet.Payload.Length > PreferencesModelInstance.MaximumMTU
-                             select packet).Count()
-                    }));
-
-                var packetsPerMinuteDataQuery =
-                    from packet in selectedItems
-                    orderby packet.Timestamp
-                    where (packet.Flags & NetworkTrace.Models.NetworkPacketFlags.Send) != 0
-                    group packet by packet.Timestamp.ToLongTimeString() into timeBucket
-                    select new
-                    {
-                        Time = timeBucket.Key,
-                        Sources =
-                            from packet in timeBucket
-                            orderby packet.SourceIpv4Address
-                            group packet by packet.SourceIpv4Address into packetBucket
-                            select new
-                            {
-                                SourceIpv4Address = packetBucket.Key,
-                                Packets = packetBucket.ToList(),
-                            },
-                    };
-
-                int packetCount = 0;
-
-                // Check for packets sent per second over threshold
-                foreach (var bucket in packetsPerMinuteDataQuery)
+                investigation = await ((CaptureInvestigation)_appModel.CaptureInvestigation).AnalyzeDesktopNetworkAsync(
+                    analysisRun, controller, selected, options);
+                canonical = ((CaptureDataDetails)investigation.Details).CanonicalNetworkAnalysis;
+            }
+            else
+            {
+                canonical = await Task.Run(() => NetworkTraceStatistics.Analyze(
+                    selected, options, log: text => PublicUtilities.AppLog(LogLevel.INFO, text)));
+            }
+            PublicUtilities.SafeInvoke(() =>
+            {
+                var model = new NetworkTraceAnalyzerModel { CanonicalAnalysis = canonical, InvestigationData = investigation };
+                analysisRun.AnalysisData = model;
+                foreach (var id in new[]
                 {
-                    foreach (var source in bucket.Sources)
-                    {
-                        if (source.Packets.Count() > PreferencesModelInstance.PacketsPerSecondThreshold)
-                        {
-                            packetCount++;
-                            PublicUtilities.AppLog(LogLevel.INFO, $"{source.SourceIpv4Address} at {bucket.Time} sent {source.Packets.Count()} packets; should be less than {PreferencesModelInstance.PacketsPerSecondThreshold}");
-                        }
-                    }
-                }
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStats.Add(
-                    new NetworkTraceAnalyzerResultsDataModel
-                    {
-                        Name = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PSOT", PreferencesModelInstance.PacketsPerSecondThreshold),
-                        Value = packetCount
-                    }));
-
-                // Check for duplicate packets
-                packetCount = 0;
-
-                for (int i = 0; i < selectedItems.Length; i++)
+                    "packet.protocol", "packet.sent.count", "packet.received.count",
+                    "packet.sent.bytes", "packet.received.bytes", "packet.source.average-bytes"
+                })
                 {
-                    // Get the starting model
-                    var startModel = selectedItems[i];
-                    var startTime = startModel.Timestamp.Ticks / TimeSpan.TicksPerMillisecond;
-
-                    // Get the index of the next model
-                    int sub = i + 1;
-
-                    // Loop while the subsequent models are within the timeframe
-                    while (sub < selectedItems.Length)
+                    var group = canonical.Statistics.Where(statistic => statistic.Id == id).ToArray();
+                    model.NumericStatsLists.Add(new NetworkTraceAnalyzerResultsModel
                     {
-                        // Next model to check
-                        var nextModel = selectedItems[sub];
-                        var nextTime = nextModel.Timestamp.Ticks / TimeSpan.TicksPerMillisecond;
-
-                        if (nextTime - startTime > PreferencesModelInstance.DuplicatePacketWindow)
+                        Topic = Topic(id, options),
+                        Values = group.Select(statistic => new NetworkTraceAnalyzerResultsDataModel
                         {
-                            // We're outside the window and can exit the loop
-                            break;
-                        }
-
-                        if (nextModel.Payload == startModel.Payload)
-                        {
-                            packetCount++;
-                            PublicUtilities.AppLog(LogLevel.INFO, $"Duplicate packets from {nextModel.SourceIpv4Address} detected at {nextModel.Timestamp.ToLongTimeString()}");
-                        }
-
-                        sub++;
-                    }
+                            Name = statistic.Id == "packet.protocol"
+                                ? ProtocolName(int.Parse(statistic.Group, CultureInfo.InvariantCulture)) : statistic.Group,
+                            Value = statistic.Value
+                        }).ToArray()
+                    });
                 }
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.NumericStats.Add(
-                    new NetworkTraceAnalyzerResultsDataModel
+                foreach (var statistic in canonical.Statistics.Where(statistic => statistic.Group == null &&
+                    statistic.Id is "packet.udp-over-mtu" or "packet.send-second-over-threshold" or "packet.matching-payload-pairs"))
+                {
+                    model.NumericStats.Add(new NetworkTraceAnalyzerResultsDataModel
                     {
-                        Name = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_DUPS", PreferencesModelInstance.DuplicatePacketWindow),
-                        Value = packetCount
-                    }));
-
-                PublicUtilities.SafeInvoke(() => analyzerModel.TotalPacketsScanned = selectedItems.Length);
+                        Name = Topic(statistic.Id, options),
+                        Value = statistic.Value
+                    });
+                }
+                model.TotalPacketsScanned = canonical.TotalPackets;
             });
-
             return ECaptureAnalyzerResult.Success;
         }
 
-        public void Shutdown()
+        private static string ProtocolName(int number) => Enum.IsDefined(typeof(NetworkProtocol), number)
+            ? $"{number} ({(NetworkProtocol)number})" : number.ToString(CultureInfo.InvariantCulture);
+
+        private static string Topic(string id, NetworkTraceStatisticsOptions options) => id switch
         {
-        }
+            "packet.protocol" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PCBP"),
+            "packet.sent.count" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PSBS"),
+            "packet.received.count" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PRBS"),
+            "packet.sent.bytes" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BSBS"),
+            "packet.received.bytes" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BRBS"),
+            "packet.source.average-bytes" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PLBS"),
+            "packet.udp-over-mtu" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_UPOM", options.MaximumMtu),
+            "packet.send-second-over-threshold" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PSOT", options.PacketsPerSecondThreshold),
+            "packet.matching-payload-pairs" => Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_DUPS", options.DuplicateWindowMilliseconds),
+            _ => throw new ArgumentOutOfRangeException(nameof(id))
+        };
     }
 }

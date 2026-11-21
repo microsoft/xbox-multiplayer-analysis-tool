@@ -23,6 +23,7 @@
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
+        <CommandBinding Command="{x:Static logic:NetworkTraceCommands.AcknowledgeRecovery}" Executed="AcknowledgeRecovery_Executed" CanExecute="AcknowledgeRecovery_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
@@ -72,6 +73,11 @@
                     ToolTipService.ShowOnDisabled="True">Analyze Capture</Button>
             <Separator/>
             <Button x:Name="ClearCapturesButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" IsEnabled="{Binding CaptureController.HaveTraces}">Clear Captures</Button>
+            <TextBlock Text="{Binding CaptureController.RecoveryStatusText}" ToolTip="{Binding CaptureController.RecoveryStatusText}"
+                       TextWrapping="Wrap" MaxWidth="420" Margin="8,0"/>
+            <Button x:Name="AcknowledgeRecoveryButton" Command="{x:Static logic:NetworkTraceCommands.AcknowledgeRecovery}"
+                    CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}"
+                    Visibility="{Binding CaptureController.RecoveryRequired, Converter={StaticResource BooleanToVisibilityConverter}}"/>
         </ToolBar>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -91,6 +97,7 @@
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   Visibility="{Binding CaptureController.HaveTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                   ItemsSource="{Binding NetworkTracePackets, ElementName=NetworkTraceCaptureControl, Mode=OneWay}"
+                  SelectedItem="{Binding CaptureController.SelectedPacket, Mode=TwoWay}"
                   AutoGenerateColumns="False" GridLinesVisibility="None">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="TIMESTAMP" Binding="{Binding Timestamp, StringFormat={}{0:HH:mm:ss.fffffff}}" Width="120"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>

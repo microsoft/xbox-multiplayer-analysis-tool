@@ -125,6 +125,11 @@ namespace XMAT.Cli
                 {
                     WriteCommands(writer, report.Commands);
                 }
+                if (report.Agent.HasValue)
+                {
+                    writer.WritePropertyName("agent");
+                    report.Agent.Value.WriteTo(writer);
+                }
 
                 writer.WriteStartArray("artifacts");
                 foreach (CliArtifact artifact in report.Artifacts)

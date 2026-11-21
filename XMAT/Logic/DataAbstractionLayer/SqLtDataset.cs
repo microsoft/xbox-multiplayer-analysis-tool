@@ -33,89 +33,99 @@ namespace XMAT.DataAbstractionLayer
 
         public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] fieldNamesAndValues)
         {
-            ThrowIfDisposed();
-            SqliteDataReader dataReader = null;
-
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
-
-            string fields = string.Join(
-                ",",
-                _fieldDefinitions.Select(
-                    field => QuoteIdentifier(field.Key)));
-            _commandBuilder.Append(fields);
-
-            _commandBuilder.Append(" FROM ")
-                .Append(
-                    QuoteIdentifier(
-                        _sourceTableName));
-            _commandBuilder.Append(@" WHERE");
-
-            FieldDefinition[] filterFields =
-                fieldNamesAndValues.Select(
-                    value =>
-                        (FieldDefinition)_fieldDefinitions[value.Name])
-                    .ToArray();
-            string[] parameters = filterFields.Select(
-                (_, index) => $"$value{index}").ToArray();
-            string whereValues = string.Join(
-                " AND ",
-                filterFields.Select(
-                    (field, index) =>
-                        " " +
-                        QuoteIdentifier(field.Name) +
-                        " = " +
-                        parameters[index]));
-            _commandBuilder.Append(whereValues);
-
-            _commandInterface.Parameters.Clear();
-            _commandInterface.CommandText = _commandBuilder.ToString();
-            for (int index = 0; index < filterFields.Length; index++)
+            lock (_gate)
             {
-                _commandInterface.Parameters.AddWithValue(
-                    parameters[index],
-                    filterFields[index].ValueAsParameter(
-                        fieldNamesAndValues[index].Value));
-            }
+                ThrowIfDisposed();
+                SqliteDataReader dataReader = null;
 
-            if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
+
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
+                _commandBuilder.Append(fields);
+
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
+                _commandBuilder.Append(@" WHERE");
+
+                _commandInterface.Parameters.Clear();
+                var index = 0;
+                string whereValues = string.Join(" AND ", fieldNamesAndValues.Select(
+                    (x) =>
+                    {
+                        var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
+                        var fieldName = fieldDef.Name;
+                        var parameter = $"$p{index++}";
+                        _commandInterface.Parameters.AddWithValue(parameter,
+                            fieldDef.ValueAsParameter(x.Value));
+                        return " " + QuoteIdentifier(fieldName) + " = " + parameter;
+                    }));
+                _commandBuilder.Append(whereValues);
+
+                _commandInterface.CommandText = _commandBuilder.ToString();
+
+                if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
+                {
+                    dataReader = _commandInterface.ExecuteReader();
+                }
+
+                return Track(dataReader);
+            }
+        }
+
+        public bool HasRecords(params IFieldValue[] fieldNamesAndValues)
+        {
+            lock (_gate)
             {
-                dataReader = _commandInterface.ExecuteReader();
+                ThrowIfDisposed();
+                using var command = _commandInterface.Connection.CreateCommand();
+                var conditions = fieldNamesAndValues.Select((value, index) =>
+                {
+                    var definition = (FieldDefinition)_fieldDefinitions[value.Name];
+                    var parameter = "$p" + index;
+                    command.Parameters.AddWithValue(parameter,
+                        definition.ValueAsParameter(value.Value));
+                    return QuoteIdentifier(definition.Name) + " = " + parameter;
+                }).ToArray();
+                command.CommandText = "SELECT EXISTS(SELECT 1 FROM " + QuoteIdentifier(_sourceTableName) +
+                    (conditions.Length == 0 ? string.Empty : " WHERE " + string.Join(" AND ", conditions)) + ")";
+                return (long)command.ExecuteScalar() != 0;
             }
-
-            return Track(dataReader);
         }
 
         public IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId, int limit)
         {
-            ThrowIfDisposed();
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
 
-            string fields = string.Join(
-                ",",
-                _fieldDefinitions.Select(
-                    field => QuoteIdentifier(field.Key)));
-            _commandBuilder.Append(fields);
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
+                _commandBuilder.Append(fields);
 
-            _commandBuilder.Append(" FROM ")
-                .Append(
-                    QuoteIdentifier(
-                        _sourceTableName));
-            _commandBuilder.Append(
-                " WHERE id >= $firstRowId LIMIT $limit");
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
+                _commandBuilder.Append(" WHERE id >= $firstRowId LIMIT $limit");
 
-            _commandInterface.Parameters.Clear();
-            _commandInterface.CommandText = _commandBuilder.ToString();
-            _commandInterface.Parameters.AddWithValue(
-                "$firstRowId",
-                firstRowId);
-            _commandInterface.Parameters.AddWithValue(
-                "$limit",
-                limit);
-            var dataReader = _commandInterface.ExecuteReader();
+                _commandInterface.CommandText = _commandBuilder.ToString();
+                _commandInterface.Parameters.Clear();
+                _commandInterface.Parameters.AddWithValue("$firstRowId", firstRowId);
+                _commandInterface.Parameters.AddWithValue("$limit", limit);
+                var dataReader = _commandInterface.ExecuteReader();
 
-            return Track(dataReader);
+                return Track(dataReader);
+            }
         }
 
         internal SqLtDataset(
@@ -125,6 +135,7 @@ namespace XMAT.DataAbstractionLayer
             IReadOnlyList<SqLtSchemaColumn> columns,
             CaptureTextSource captureTextSource)
         {
+            _gate = SqLtConnectionGate.For(connection);
             ArgumentNullException.ThrowIfNull(captureTextSource);
             _sourceTableName = sourceTableName;
             _commandInterface = new SqliteCommand();
@@ -159,26 +170,29 @@ namespace XMAT.DataAbstractionLayer
 
         private IEnumerable<IDataRecord> GetDataRecords()
         {
-            ThrowIfDisposed();
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
 
-            string fields = string.Join(
-                ",",
-                _fieldDefinitions.Select(
-                    field => QuoteIdentifier(field.Key)));
-            _commandBuilder.Append(fields);
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
+                _commandBuilder.Append(fields);
 
-            _commandBuilder.Append(" FROM ")
-                .Append(
-                    QuoteIdentifier(
-                        _sourceTableName));
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
 
-            _commandInterface.Parameters.Clear();
-            _commandInterface.CommandText = _commandBuilder.ToString();
-            var dataReader = _commandInterface.ExecuteReader();
+                _commandInterface.CommandText = _commandBuilder.ToString();
+                _commandInterface.Parameters.Clear();
+                var dataReader = _commandInterface.ExecuteReader();
 
-            return Track(dataReader);
+                return Track(dataReader);
+            }
         }
 
         public void Dispose()
@@ -217,7 +231,8 @@ namespace XMAT.DataAbstractionLayer
             {
                 try
                 {
-                    _commandInterface.Dispose();
+                    lock (_gate)
+                    { _commandInterface.Dispose(); }
                 }
                 catch (Exception exception) when (
                     !ExceptionUtilities.IsFatal(
@@ -253,7 +268,7 @@ namespace XMAT.DataAbstractionLayer
                         _activeEnumerables.Remove(
                             disposed);
                     }
-                });
+                }, _gate);
             bool ownerDisposed;
             lock (_enumerablesLock)
             {
@@ -291,8 +306,8 @@ namespace XMAT.DataAbstractionLayer
         private readonly IReadOnlySet<string> _untypedColumns;
         private readonly HashSet<SqLtDataEnumerable> _activeEnumerables =
             new(ReferenceEqualityComparer.Instance);
-        private readonly object _enumerablesLock =
-            new();
+        private object _enumerablesLock => _gate;
+        private readonly object _gate;
         private bool _disposed;
 
         private static string QuoteIdentifier(string value) =>

@@ -2,14 +2,16 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.ComponentModel;
-using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.CodeAnalysis;
 using Microsoft.Win32;
+using XMAT.ApplicationServices;
 using XMAT.Scripting;
 
 namespace XMAT
@@ -73,7 +75,7 @@ namespace XMAT
             AttachSelectedScript(EventSelector.SelectedItem as ScriptModel);
         }
 
-        private void LoadScript_Executed(object sender, ExecutedRoutedEventArgs e)
+        private async void LoadScript_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             if (e.Parameter is not ScriptModel sm)
                 return;
@@ -89,14 +91,12 @@ namespace XMAT
                                                           MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
                 if (result == MessageBoxResult.Yes)
                 {
-                    string script = File.ReadAllText(openFileDialog.FileName);
-                    sm.Filename = openFileDialog.FileName;
-                    sm.Script = script;
+                    await LoadScriptFileAsync(sm, openFileDialog.FileName, rememberFileName: true);
                 }
             }
         }
 
-        private void SaveScript_Executed(object sender, ExecutedRoutedEventArgs e)
+        private async void SaveScript_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             if (e.Parameter is not ScriptModel sm)
                 return;
@@ -116,10 +116,20 @@ namespace XMAT
             }
 
             if (!string.IsNullOrEmpty(sm.Filename))
-                File.WriteAllText(sm.Filename, sm.Script);
+            {
+                try
+                {
+                    await ScriptFiles.SaveDesktopAsync(sm, sm.Filename);
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    MessageBox.Show(Localization.GetLocalizedString("SCRIPT_FILE_SAVE_FAILED", exception.Message),
+                        Localization.GetLocalizedString("SCRIPT_FILE_SAVE_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
         }
 
-        private void RevertScript_Executed(object sender, ExecutedRoutedEventArgs e)
+        private async void RevertScript_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             if (e.Parameter is not ScriptModel sm)
                 return;
@@ -127,7 +137,21 @@ namespace XMAT
             MessageBoxResult result = MessageBox.Show(Localization.GetLocalizedString("SCRIPT_REVERT_MESSAGE"), Localization.GetLocalizedString("SCRIPT_REVERT_TITLE"), MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
             if (result == MessageBoxResult.Yes)
             {
-                sm.Script = File.ReadAllText(sm.Filename);
+                await LoadScriptFileAsync(sm, sm.Filename, rememberFileName: false);
+            }
+        }
+
+        private static async Task LoadScriptFileAsync(
+            ScriptModel script, string path, bool rememberFileName)
+        {
+            try
+            {
+                await ScriptFiles.LoadDesktopAsync(script, path, rememberFileName);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                MessageBox.Show(Localization.GetLocalizedString("SCRIPT_FILE_LOAD_FAILED", exception.Message),
+                    Localization.GetLocalizedString("SCRIPT_FILE_LOAD_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -149,11 +173,11 @@ namespace XMAT
 
             if (sm.IsEnabled)
             {
-                sm.DisableScript();
+                await ScriptOperations.SetEnabledAsync(sm, false);
                 return;
             }
 
-            await sm.EnableScriptAsync<WebServiceCaptureScriptParams>();
+            await ScriptOperations.SetEnabledAsync(sm, true);
         }
 
         private void ValidateScript_CanExecute(object sender, CanExecuteRoutedEventArgs e)

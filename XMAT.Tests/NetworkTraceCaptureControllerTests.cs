@@ -2,253 +2,170 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Drawing;
+using System.Diagnostics;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using NetworkTraceCaptureControls;
-using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.NetworkTrace;
-using XMAT.NetworkTrace.Models;
-using XMAT.NetworkTrace.NTDE;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.Tests
 {
     [Collection(CaptureUiApplicationCollection.Name)]
-    public class NetworkTraceCaptureControllerTests
+    public class NetworkTraceCaptureControllerTests(CaptureUiApplicationFixture application)
     {
-        private readonly CaptureUiApplicationFixture _application;
-
-        public NetworkTraceCaptureControllerTests(CaptureUiApplicationFixture application)
-        {
-            _application = application;
-        }
-
-        [Fact]
-        public void IsCapturing_UpdatesIsRunning()
-        {
-            var controller = new NetworkTraceCaptureController(
-                "Test device",
-                DeviceType.LocalPC);
-
-            controller.IsCapturing = true;
-
-            Assert.True(controller.IsRunning);
-
-            controller.IsCapturing = false;
-
-            Assert.False(controller.IsRunning);
-        }
-
-        [Fact]
-        public async Task CanCloseAsync_ReturnsFalseWhileCaptureIsRunning()
-        {
-            var controller = new NetworkTraceCaptureController(
-                "Test device",
-                DeviceType.LocalPC)
-            {
-                IsCapturing = true
-            };
-
-            Assert.False(await controller.CanCloseAsync());
-
-            controller.IsCapturing = false;
-
-            Assert.True(await controller.CanCloseAsync());
-        }
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
         [Theory]
         [InlineData("start")]
         [InlineData("stop")]
         [InlineData("download")]
-        public async Task CaptureFailure_ResetsStateAndAllowsClosing(string phase)
+        public void FailedTransition_BlocksCloseAndResumesAtFailedPhase(string phase)
         {
-            var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var engine = new TestTraceEngine { PendingPhase = phase, PendingOperation = pending.Task };
-            var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+            application.Run(window =>
             {
-                _networkTraceEngine = engine
-            };
-            var expected = new InvalidOperationException("Trace operation failed.");
-            if (phase != "start")
-            {
-                await controller.StartCapture(null);
-            }
+                using var database = CaptureInvestigationTestData.NetworkDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var factory = new FakeTraceEngineFactory();
+                var engine = new FakeTraceEngine();
+                factory.Engines.Enqueue(engine);
+                var target = CreateTarget(model, factory);
+                using var controller = target.Controller;
+                var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var expected = new IOException("Trace operation failed.");
+                switch (phase)
+                {
+                    case "start": engine.Start = () => pending.Task; break;
+                    case "stop": engine.Stop = () => pending.Task; break;
+                    case "download": engine.Download = _ => pending.Task; break;
+                }
 
-            var operation = phase == "start" ? controller.StartCapture(null) : controller.StopCapture(null);
-            Assert.False(operation.IsCompleted);
-            Assert.True(controller.IsRunning);
-            Assert.False(await controller.CanCloseAsync());
+                var starting = phase == "start";
+                if (!starting)
+                    Assert.True(Complete(model.CaptureOperations.SetRunningAsync(target, true)).Succeeded);
+                var operation = model.CaptureOperations.SetRunningAsync(target, starting);
+                WaitFor(() => phase switch
+                {
+                    "start" => engine.StartCount == 1,
+                    "stop" => engine.StopCount == 1,
+                    _ => engine.DownloadCount == 1
+                });
+                Assert.False(operation.IsCompleted);
+                Assert.True(controller.IsTransitioning);
+                Assert.True(controller.IsRunning);
+                Assert.False(Complete(controller.CanCloseAsync()));
+                Assert.Equal(phase == "download" ? 1 : 0, engine.Subscribers);
 
-            pending.SetException(expected);
-            var actual = await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
-
-            Assert.Same(expected, actual);
-            Assert.False(controller.IsCapturing);
-            Assert.False(controller.IsRunning);
-            Assert.Equal(DeviceStatusEnum.Idle, controller.DeviceStatus);
-            Assert.True(await controller.CanCloseAsync());
-            Assert.Equal(0, engine.SubscriberCount);
-
-            engine.PendingPhase = null;
-            await controller.StartCapture(null);
-            Assert.True(controller.IsRunning);
-            Assert.Equal(DeviceStatusEnum.Tracing, controller.DeviceStatus);
-            Assert.Equal(1, engine.SubscriberCount);
-            await controller.StopCapture(null);
-            Assert.True(await controller.CanCloseAsync());
-            Assert.Equal(0, engine.SubscriberCount);
-        }
-
-        [Fact]
-        public async Task Capture_CanRestartWithOneEventSubscription()
-        {
-            var engine = new TestTraceEngine();
-            var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
-            {
-                _networkTraceEngine = engine
-            };
-
-            for (int capture = 0; capture < 2; capture++)
-            {
-                await controller.StartCapture(null);
+                pending.SetException(expected);
+                Assert.Same(expected, Assert.Throws<IOException>(() => Complete(operation)));
+                Assert.False(controller.IsTransitioning);
                 Assert.True(controller.IsCapturing);
-                Assert.Equal(DeviceStatusEnum.Tracing, controller.DeviceStatus);
-                Assert.Equal(1, engine.SubscriberCount);
-                Assert.False(await controller.CanCloseAsync());
+                Assert.True(controller.IsRunning);
+                Assert.Equal(DeviceStatusEnum.RecoveryRequired, controller.DeviceStatus);
+                Assert.Equal(phase == "download" ? CaptureTraceRecoveryPhase.Download : CaptureTraceRecoveryPhase.Stop,
+                    controller.RecoveryPhase);
+                Assert.Equal(phase != "download", controller.MayBeTracing);
+                Assert.False(Complete(controller.CanCloseAsync()));
+                Assert.Equal(CaptureOperationFailure.RecoveryRequired,
+                    Complete(model.CaptureOperations.SetRunningAsync(target, true)).Failure);
+                Assert.Equal(0, engine.Subscribers);
 
-                await controller.StopCapture(null);
-                Assert.False(controller.IsCapturing);
-                Assert.Equal(DeviceStatusEnum.Idle, controller.DeviceStatus);
-                Assert.Equal(0, engine.SubscriberCount);
-                Assert.True(await controller.CanCloseAsync());
-            }
+                engine.Stop = () => Task.CompletedTask;
+                engine.Download = _ => Task.CompletedTask;
+                Assert.True(Complete(model.CaptureOperations.SetRunningAsync(target, false)).Succeeded);
+                Assert.Equal(1, factory.ConnectCount);
+                Assert.Equal(1, factory.DisconnectCount);
+                Assert.Equal(1, engine.StartCount);
+                Assert.Equal(phase == "stop" ? 2 : 1, engine.StopCount);
+                Assert.Equal(phase == "download" ? 2 : 1, engine.DownloadCount);
+                Assert.Equal(0, engine.Subscribers);
+                Assert.False(controller.IsRunning);
+                Assert.False(controller.RecoveryRequired);
+                Assert.True(Complete(controller.CanCloseAsync()));
+            });
         }
 
         [Theory]
-        [InlineData("start", false)]
-        [InlineData("start", true)]
-        [InlineData("stop", false)]
-        [InlineData("stop", true)]
-        [InlineData("download", false)]
-        [InlineData("download", true)]
-        [InlineData("disconnect", true)]
-        [InlineData("complete", false)]
-        public async Task ConsoleCleanup_BlocksRestartButNotClose(string phase, bool disconnectFails)
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ConsoleDisconnect_BlocksCloseUntilCleanupCompletes(bool disconnectFails)
         {
-            var pendingDisconnect = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var expected = new InvalidOperationException("Trace operation failed.");
-            var disconnectError = new IOException("Disconnect failed.");
-            var engine = new TestTraceEngine
+            application.Run(window =>
             {
-                PendingPhase = phase,
-                PendingOperation = phase is "start" or "stop" or "download"
-                    ? Task.FromException(expected)
-                    : Task.CompletedTask
-            };
-            var disconnected = new List<INetworkTraceEngine>();
-            var controller = new NetworkTraceCaptureController("Test device", DeviceType.XboxConsole, traceEngine =>
-            {
-                disconnected.Add(traceEngine);
-                return disconnected.Count == 1 ? pendingDisconnect.Task : Task.CompletedTask;
-            })
-            {
-                _networkTraceEngine = engine,
-                NetworkTracePackets = new NetworkTracePacketsCollection()
-            };
-            var appModel = new CaptureAppModel();
-            appModel.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(controller));
-            Assert.True(appModel.TryBeginCaptureDataOperation(out var operationLease));
-            using var lease = operationLease;
-            Assert.False(await appModel.CanCloseAsync());
-            if (phase != "start")
-            {
-                await controller.StartCapture(null, lease);
-                lease.Dispose();
-            }
+                using var database = CaptureInvestigationTestData.NetworkDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var factory = new FakeTraceEngineFactory();
+                var engine = new FakeTraceEngine();
+                var nextEngine = new FakeTraceEngine();
+                factory.Engines.Enqueue(engine);
+                factory.Engines.Enqueue(nextEngine);
+                var target = CreateTarget(model, factory, DeviceType.XboxConsole);
+                using var controller = target.Controller;
+                var errors = new List<Exception>();
+                var view = new NetworkTraceCaptureView(model, errors.Add) { DataContext = target };
+                WpfTestHost.Show(window, view);
+                Assert.True(Complete(model.CaptureOperations.SetRunningAsync(target, true)).Succeeded);
 
-            var operation = phase == "start" ? controller.StartCapture(null, lease) : controller.StopCapture(null);
+                var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                factory.BeforeDisconnect = () => pending.Task;
+                var operation = model.CaptureOperations.SetRunningAsync(target, false);
+                WaitFor(() => factory.DisconnectCount == 1);
+                Assert.False(operation.IsCompleted);
+                Assert.Equal(DeviceStatusEnum.Disconnecting, controller.DeviceStatus);
+                Assert.True(controller.IsRunning);
+                Assert.False(controller.MayBeTracing);
+                Assert.False(Complete(controller.CanCloseAsync()));
+                Assert.False(NetworkTraceCommands.StartStopCapture.CanExecute(null, view));
+                Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                    Complete(model.CaptureOperations.SetRunningAsync(target, true)).Failure);
+                Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                    Complete(model.CaptureOperations.SetRunningAsync(target, false)).Failure);
+                Assert.Equal(0, engine.Subscribers);
 
-            Assert.False(operation.IsCompleted);
-            Assert.Equal(DeviceStatusEnum.Disconnecting, controller.DeviceStatus);
-            Assert.False(controller.IsCapturing);
-            Assert.False(controller.IsRunning);
-            Assert.True(await controller.CanCloseAsync());
-            Assert.False(appModel.IsCaptureDataOperationRunning);
-            Assert.True(await appModel.CanCloseAsync());
-            Assert.Null(controller._networkTraceEngine);
-            Assert.Equal(0, engine.SubscriberCount);
-            Assert.Same(engine, Assert.Single(disconnected));
-            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartCapture(null));
-            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StopCapture(null));
-            NetworkTraceCaptureView view = null;
-            if (phase == "start" && !disconnectFails)
-            {
-                _application.Run(window =>
+                factory.BeforeDisconnect = () => Task.CompletedTask;
+                if (disconnectFails)
                 {
-                    view = new NetworkTraceCaptureView
-                    {
-                        DataContext = new TestCaptureDeviceContext(controller)
-                    };
-                    WpfTestHost.Show(window, view);
-                    Assert.False(NetworkTraceCommands.StartStopCapture.CanExecute(null, view));
-                });
-            }
-
-            if (disconnectFails)
-            {
-                pendingDisconnect.SetException(disconnectError);
-            }
-            else
-            {
-                pendingDisconnect.SetResult();
-            }
-
-            if (phase == "complete")
-            {
-                await operation;
-            }
-            else if (phase == "disconnect")
-            {
-                Assert.Same(disconnectError, await Assert.ThrowsAsync<IOException>(() => operation));
-            }
-            else
-            {
-                Assert.Same(expected, await Assert.ThrowsAsync<InvalidOperationException>(() => operation));
-            }
-            Assert.Equal(DeviceStatusEnum.Idle, controller.DeviceStatus);
-
-            _application.Run(window =>
-            {
-                if (view != null)
-                {
-                    WpfTestHost.Show(window, view);
+                    var expected = new IOException("Disconnect failed.");
+                    pending.SetException(expected);
+                    Assert.Same(expected, Assert.Throws<IOException>(() => Complete(operation)));
+                    Assert.Equal(CaptureTraceRecoveryPhase.Disconnect, controller.RecoveryPhase);
+                    Assert.False(Complete(controller.CanCloseAsync()));
                     Assert.True(NetworkTraceCommands.StartStopCapture.CanExecute(null, view));
+                    ExecuteCaptureCommand(view);
+                    WaitFor(() => !controller.IsTransitioning &&
+                        (controller.DeviceStatus == DeviceStatusEnum.Idle || errors.Count > 0));
                 }
-                var nextEngine = new TestTraceEngine();
-                controller._networkTraceEngine = nextEngine;
-                controller.StartCapture(null).GetAwaiter().GetResult();
-                Assert.Same(nextEngine, controller._networkTraceEngine);
-                Assert.Equal(1, nextEngine.SubscriberCount);
-                controller.StopCapture(null).GetAwaiter().GetResult();
-                Assert.Equal(new INetworkTraceEngine[] { engine, nextEngine }, disconnected);
+                else
+                {
+                    pending.SetResult();
+                    Assert.True(Complete(operation).Succeeded);
+                }
+
+                Assert.Empty(errors);
+                Assert.Equal(1, engine.StopCount);
+                Assert.Equal(1, engine.DownloadCount);
+                Assert.Equal(disconnectFails ? 2 : 1, factory.DisconnectCount);
+                Assert.True(Complete(controller.CanCloseAsync()));
+                Assert.True(NetworkTraceCommands.StartStopCapture.CanExecute(null, view));
+                Assert.True(Complete(model.CaptureOperations.SetRunningAsync(target, true)).Succeeded);
+                Assert.True(Complete(model.CaptureOperations.SetRunningAsync(target, false)).Succeeded);
+                Assert.Equal(2, factory.ConnectCount);
+                Assert.Equal(1, nextEngine.StartCount);
+                Assert.Equal(0, nextEngine.Subscribers);
             });
         }
 
         [Fact]
         public void DeviceStatusChange_RefreshesCaptureCommandAvailability()
         {
-            _application.Run(window =>
+            application.Run(window =>
             {
-                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
-                {
-                    NetworkTracePackets = new NetworkTracePacketsCollection()
-                };
-                var view = new NetworkTraceCaptureView
-                {
-                    DataContext = new TestCaptureDeviceContext(controller)
-                };
+                using var database = CaptureInvestigationTestData.NetworkDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var target = CreateTarget(model, new FakeTraceEngineFactory());
+                using var controller = target.Controller;
+                var view = new NetworkTraceCaptureView(model) { DataContext = target };
                 WpfTestHost.Show(window, view);
                 var toolbar = ((Grid)view.Content).Children.OfType<ToolBar>().Single();
                 var button = toolbar.Items.OfType<ToggleButton>().Single();
@@ -265,105 +182,95 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void PartialDownloadFailure_KeepsPacketsFiltersAndRetryInSync()
+        public void PartialDownload_UpdatesPacketsAndFiltersOnlyAfterRecoveryCommandSucceeds()
         {
-            _application.Run(window =>
+            application.Run(window =>
             {
-                using var database = new SqLtDatabase();
-                database.Initialize();
-                NetworkTraceCaptureMethod.Method.Initialize(new CaptureAppModel { ActiveDatabase = database });
+                using var database = CaptureInvestigationTestData.NetworkDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var factory = new FakeTraceEngineFactory();
+                var engine = new FakeTraceEngine();
+                factory.Engines.Enqueue(engine);
+                var target = CreateTarget(model, factory);
+                using var controller = target.Controller;
+                var table = database.TableByName(NetworkTraceCaptureMethod.TableName);
                 var expected = new IOException("Download incomplete.");
-                var engine = new TestTraceEngine
+                engine.Download = source =>
                 {
-                    PendingPhase = "download",
-                    PendingOperation = Task.FromException(expected),
-                    PacketOnDownload = """
-                        {"event":{"processId":4,"threadId":308,"timestamp":"2026-01-01T12:00:00Z"},
-                         "packet":{"mediaType":"ethernet","flags":["start","end","receive"],
-                         "data":"////////xJ3tqEMCCABFAABOT/wAAIARZlDAqAEDwKgB/wCJAIkAOvm7/+ABEAABAAAAAAAAIEVKRUlGRUVQRUtFRUVPRUtGQkNBQ0FDQUNBQ0FDQUFBAAAgAAE="}}
-                        """
+                    source.Emit(NetworkTraceTestData.Event(1));
+                    return Task.FromException(expected);
                 };
-                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
-                {
-                    _networkTraceEngine = engine
-                };
-                controller.Initialize();
-                var packets = controller.NetworkTracePackets;
-                var reportedErrors = new List<Exception>();
-                var view = new NetworkTraceCaptureView(reportedErrors.Add)
-                {
-                    DataContext = new TestCaptureDeviceContext(controller)
-                };
+                var errors = new List<Exception>();
+                var view = new NetworkTraceCaptureView(model, errors.Add) { DataContext = target };
                 WpfTestHost.Show(window, view);
                 var grid = (DataGrid)view.FindName("PacketList");
 
-                NetworkTraceCommands.StartStopCapture.Execute(null, view);
-                Assert.Equal(DeviceStatusEnum.Tracing, controller.DeviceStatus);
-                NetworkTraceCommands.StartStopCapture.Execute(null, view);
-                WpfTestHost.Pump();
+                ExecuteCaptureCommand(view);
+                WaitFor(() => !controller.IsTransitioning &&
+                    (controller.DeviceStatus == DeviceStatusEnum.Tracing || errors.Count > 0));
+                Assert.Empty(errors);
+                ExecuteCaptureCommand(view);
+                WaitFor(() => errors.Count > 0);
 
-                Assert.Same(expected, Assert.Single(reportedErrors));
-                Assert.Equal(DeviceStatusEnum.Idle, controller.DeviceStatus);
-                Assert.Same(packets, controller.NetworkTracePackets);
-                var packet = Assert.Single(packets);
+                Assert.Same(expected, Assert.Single(errors));
+                Assert.Equal(CaptureTraceRecoveryPhase.Download, controller.RecoveryPhase);
+                Assert.False(controller.MayBeTracing);
+                Assert.Empty(table.Dataset.DataRecords);
+                Assert.Empty(controller.NetworkTracePackets);
+                Assert.Empty(grid.Items);
+                Assert.Empty(controller.PidFilterList);
+                Assert.Empty(controller.TidFilterList);
+                Assert.Equal(0, engine.Subscribers);
+
+                engine.Download = source =>
+                {
+                    source.Emit(NetworkTraceTestData.Event(2));
+                    return Task.CompletedTask;
+                };
+                ExecuteCaptureCommand(view);
+                WaitFor(() => !controller.IsTransitioning && controller.DeviceStatus == DeviceStatusEnum.Idle);
+
+                Assert.Single(errors);
+                Assert.Single(table.Dataset.DataRecords);
+                var packet = Assert.Single(controller.NetworkTracePackets);
+                Assert.Equal(2, packet.Timestamp.Second);
                 Assert.Same(packet, Assert.Single(view.NetworkTracePackets));
                 Assert.Same(grid.Items, controller.FilteredItems);
-                Assert.Same(packet, Assert.Single(controller.FilteredItems.Cast<NetworkTracePacketDataModel>()));
-                Assert.Equal("4", Assert.Single(controller.PidFilterList).Text);
-                Assert.Equal("308", Assert.Single(controller.TidFilterList).Text);
+                Assert.Same(packet, Assert.Single(controller.FilteredItems.Cast<object>()));
+                Assert.Equal("1", Assert.Single(controller.PidFilterList).Text);
+                Assert.Equal("2", Assert.Single(controller.TidFilterList).Text);
                 Assert.True(controller.HaveTraces);
-
-                engine.PendingPhase = null;
-                NetworkTraceCommands.StartStopCapture.Execute(null, view);
-                Assert.Equal(DeviceStatusEnum.Tracing, controller.DeviceStatus);
-                NetworkTraceCommands.StartStopCapture.Execute(null, view);
-                WpfTestHost.Pump();
-
-                Assert.Single(reportedErrors);
-                Assert.Same(packets, controller.NetworkTracePackets);
-                var nextPacket = Assert.Single(packets);
-                Assert.NotSame(packet, nextPacket);
-                Assert.Same(nextPacket, Assert.Single(view.NetworkTracePackets));
-                Assert.Same(nextPacket, Assert.Single(controller.FilteredItems.Cast<NetworkTracePacketDataModel>()));
-                Assert.Single(controller.PidFilterList);
-                Assert.Equal(0, engine.SubscriberCount);
+                Assert.False(controller.IsRunning);
+                Assert.False(controller.RecoveryRequired);
+                Assert.Equal(1, engine.StopCount);
+                Assert.Equal(2, engine.DownloadCount);
+                Assert.Equal(0, engine.Subscribers);
             });
         }
 
-        private sealed class TestCaptureDeviceContext(IDeviceCaptureController controller) : ICaptureDeviceContext
+        private static TraceCaptureContext CreateTarget(
+            CaptureAppModel model, FakeTraceEngineFactory factory, DeviceType deviceType = DeviceType.LocalPC)
         {
-            public DeviceType DeviceType { get; set; } = DeviceType.LocalPC;
-            public CaptureType CaptureType => CaptureType.NetworkTrace;
-            public string DeviceName => "Test device";
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; }
-            public Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController => controller;
+            var target = new TraceCaptureContext(factory, deviceType: deviceType);
+            target.Controller.Initialize(model.ActiveDatabase.TableByName(NetworkTraceCaptureMethod.TableName));
+            model.CaptureDeviceContexts.Add(target);
+            return target;
         }
 
-        private sealed class TestTraceEngine : INetworkTraceEngine
+        private static void ExecuteCaptureCommand(NetworkTraceCaptureView view)
         {
-            internal string PendingPhase { get; set; }
-            internal Task PendingOperation { get; set; } = Task.CompletedTask;
-            internal int SubscriberCount => EventRecordAvailable?.GetInvocationList().Length ?? 0;
-            internal string PacketOnDownload { get; set; }
+            Assert.True(NetworkTraceCommands.StartStopCapture.CanExecute(null, view));
+            NetworkTraceCommands.StartStopCapture.Execute(null, view);
+        }
 
-            public event EventHandler<string> EventRecordAvailable;
+        private static T Complete<T>(Task<T> task) => WpfTestHost.Complete(task, Timeout);
 
-            public Task StartPacketTraceAsync() =>
-                PendingPhase == "start" ? PendingOperation : Task.CompletedTask;
-
-            public Task StopPacketTraceAsync() =>
-                PendingPhase == "stop" ? PendingOperation : Task.CompletedTask;
-
-            public Task GetAllEventsAsync()
-            {
-                if (PacketOnDownload != null)
-                {
-                    EventRecordAvailable?.Invoke(this, PacketOnDownload);
-                }
-                return PendingPhase == "download" ? PendingOperation : Task.CompletedTask;
-            }
+        private static void WaitFor(Func<bool> condition)
+        {
+            var clock = Stopwatch.StartNew();
+            while (!condition() && clock.Elapsed < Timeout)
+                WpfTestHost.Pump();
+            Assert.True(condition(), "The trace transition did not reach the expected state.");
         }
     }
 }

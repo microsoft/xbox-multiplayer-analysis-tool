@@ -17,9 +17,19 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BlockListModel
     {
-        private readonly HostPatternList _patterns = new();
+        private readonly HostPatternList _patterns;
 
-        public ObservableCollection<string> BlockedUrls => _patterns.Entries;
+        public ObservableCollection<string> BlockedUrls => Entries;
+        internal HostListCollection Entries => _patterns.Entries;
+
+        public BlockListModel() : this(new object())
+        {
+        }
+
+        internal BlockListModel(object gate)
+        {
+            _patterns = new HostPatternList(gate);
+        }
 
         public bool Add(string pattern) => _patterns.Add(pattern);
 

@@ -48,13 +48,13 @@ namespace XMAT.NetworkTrace.Models
     {
         public event PropertyChangedEventHandler PropertyChanged;
 
-        public Int64 RecordRowId { get; private set; }
+        public Int64 RecordRowId { get; internal set; }
         public Int64 ProcessId { get; private set; }
         public Int64 ThreadId { get; private set; }
         public DateTime Timestamp { get; private set; }
         public NetworkMediaType MediaType { get; private set; }
         public NetworkPacketFlags Flags { get; private set; }
-        public byte[] Payload { get; private set; }
+        public byte[] Payload { get; private set; } = Array.Empty<byte>();
         public int Protocol { get; internal set; }
 
         internal NetworkTracePacketDataModel(IDataRecord dataRecord)
@@ -64,6 +64,7 @@ namespace XMAT.NetworkTrace.Models
 
         internal void UpdateFromDataRecord(IDataRecord dataRecord)
         {
+            RecordRowId = dataRecord.RowId;
             var intVal = dataRecord.Int(@"ProcessId");
             if (intVal != default(Int64))
             {
@@ -153,7 +154,7 @@ namespace XMAT.NetworkTrace.Models
 
             ParseIpPacketHeader();
 
-            Protocol = RawIpHeader.Protocol;
+            Protocol = RawIpHeader.Version == 4 ? RawIpHeader.Protocol : (int)NetworkProtocol.Unknown;
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }

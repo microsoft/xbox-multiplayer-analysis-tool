@@ -7,6 +7,8 @@
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <StartupObject>XMAT.Tests.TestAgentHostProgram</StartupObject>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
   </PropertyGroup>
@@ -42,6 +44,7 @@
     <EmbeddedResource Include="..\XMAT\Windows\MainWindow.xaml" LogicalName="XMAT.Tests.MainWindow.xaml" />
   </ItemGroup>
 
+  <Import Project="..\XMAT.AgentBridge\AgentBridge.targets" />
   <!-- Every product XAML file, so the headless-parity tests can classify its Command, Click and CommandBinding
        entry points. Logical names keep the path relative to the XMAT project. App.xaml and MainWindow.xaml are
        embedded once, above, and the parity tests read them under those names. -->

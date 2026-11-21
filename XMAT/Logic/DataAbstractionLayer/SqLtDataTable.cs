@@ -258,7 +258,8 @@ namespace XMAT.DataAbstractionLayer
         public IReadOnlyList<long> ReplaceImportedRows(
             CaptureTextSource source,
             IFieldValue capture,
-            IEnumerable<object[]> rows)
+            IEnumerable<object[]> rows,
+            CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(source);
             if (source.Semantics !=
@@ -270,6 +271,7 @@ namespace XMAT.DataAbstractionLayer
 
             lock (_lockObj)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
                 var fields = _fieldDefinitions.Values.Cast<FieldDefinition>().ToArray();
                 string fieldNames = string.Join(",", fields.Select(field => field.Name));
@@ -308,6 +310,7 @@ namespace XMAT.DataAbstractionLayer
 
                 foreach (object[] row in rows)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (row.Length != fields.Length)
                     {
                         throw new ArgumentException("Inequal number of values to table fields.", nameof(rows));
@@ -324,7 +327,12 @@ namespace XMAT.DataAbstractionLayer
                     rowIds.Add((long)rowIdCommand.ExecuteScalar());
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 transaction.Commit();
+                foreach (long rowId in rowIds)
+                {
+                    _rowVersions[rowId] = VersionOfCore(rowId) + 1;
+                }
                 return rowIds;
             }
         }
@@ -364,7 +372,7 @@ namespace XMAT.DataAbstractionLayer
             IEnumerable<IField> fields)
             : this(
                 connection,
-                new object(),
+                SqLtConnectionGate.For(connection),
                 name,
                 fields,
                 global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal)
@@ -401,7 +409,8 @@ namespace XMAT.DataAbstractionLayer
             _command.Connection = connection;
             _commandBuilder = new StringBuilder();
 
-            InitializeNewTable();
+            lock (_lockObj)
+            { InitializeNewTable(); }
         }
 
         private void InitializeNewTable()

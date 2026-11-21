@@ -1,0 +1,98 @@
+<UserControl x:Class="XMAT.SqlQueryDocumentView"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:local="clr-namespace:XMAT"
+  xmlns:sql="clr-namespace:XMAT.SqlQueries"
+  Loaded="View_Loaded" PreviewKeyDown="View_PreviewKeyDown">
+  <Grid Background="{DynamicResource PanelBackgroundBrush}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    <WrapPanel Margin="4">
+      <TextBlock Text="{sql:SqlText SQL_DATABASE}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <ComboBox x:Name="SourceSelector" MinWidth="220" MaxWidth="440" ItemsSource="{Binding SourceChoices}"
+        SelectedItem="{Binding SelectedSource, Mode=TwoWay}" DisplayMemberPath="DisplayName"
+        ToolTip="{Binding SelectedSource.ToolTip}" SelectionChanged="SourceSelector_SelectionChanged"
+        AutomationProperties.Name="{sql:SqlText SQL_DATABASE}"/>
+      <TextBlock Text="{sql:SqlText SQL_READ_ONLY}" Margin="12,0" VerticalAlignment="Center"/>
+      <TextBlock Text="{sql:SqlText SQL_DATABASE_SCOPE}" VerticalAlignment="Center" TextWrapping="Wrap"
+        Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+    </WrapPanel>
+    <WrapPanel Grid.Row="1" Margin="4,0">
+      <Button x:Name="RunButton" Content="{sql:SqlText SQL_RUN}" Click="Run_Click" Padding="8,3"
+        IsEnabled="{Binding CanRun}" ToolTip="{Binding RunAvailability}" ToolTipService.ShowOnDisabled="True"/>
+      <Button Content="{sql:SqlText SQL_CANCEL}" Click="Cancel_Click" Margin="4,0" Padding="8,3" IsEnabled="{Binding CanCancel}"/>
+      <Button Content="{sql:SqlText SQL_OPEN}" Click="Open_Click" Margin="4,0" Padding="6,3" IsEnabled="{Binding CanEditFiles}"/>
+      <Button Content="{sql:SqlText SQL_SAVE}" Click="Save_Click" Margin="4,0" Padding="6,3" IsEnabled="{Binding CanEditFiles}"/>
+      <Button Content="{sql:SqlText SQL_SAVE_AS}" Click="SaveAs_Click" Margin="4,0" Padding="6,3" IsEnabled="{Binding CanEditFiles}"/>
+      <Button x:Name="ExamplesButton" Content="{sql:SqlText SQL_EXAMPLES}" Click="Examples_Click" Margin="4,0" Padding="6,3"/>
+      <Expander Header="{sql:SqlText SQL_OPTIONS}" Margin="10,0">
+        <StackPanel>
+          <WrapPanel>
+            <TextBlock Text="{sql:SqlText SQL_TIMEOUT}" VerticalAlignment="Center" Margin="4"/>
+            <TextBox x:Name="TimeoutInput" Text="{Binding TimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"
+              Width="70" Margin="4" AutomationProperties.Name="{sql:SqlText SQL_TIMEOUT}"/>
+            <TextBlock Text="{sql:SqlText SQL_QUOTA}" VerticalAlignment="Center" Margin="4"/>
+            <TextBox x:Name="QuotaInput" Text="{Binding MaximumResultMiB, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"
+              Width="70" Margin="4" AutomationProperties.Name="{sql:SqlText SQL_QUOTA}"/>
+          </WrapPanel>
+          <TextBlock Text="{sql:SqlText SQL_OPTIONS_HELP}" TextWrapping="Wrap" MaxWidth="580" Margin="4"/>
+        </StackPanel>
+      </Expander>
+    </WrapPanel>
+    <TextBlock Grid.Row="2" Text="{Binding RunAvailability}" TextWrapping="Wrap" Margin="6,3"
+      Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+    <Grid Grid.Row="3" Margin="4">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="240" MinWidth="130"/>
+        <ColumnDefinition Width="4"/>
+        <ColumnDefinition Width="*" MinWidth="240"/>
+      </Grid.ColumnDefinitions>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="2*" MinHeight="90"/>
+        <RowDefinition Height="4"/>
+        <RowDefinition Height="3*" MinHeight="120"/>
+      </Grid.RowDefinitions>
+      <DockPanel Grid.RowSpan="3" Margin="0,0,4,0">
+        <StackPanel DockPanel.Dock="Top">
+          <DockPanel Margin="0,0,0,4">
+            <Button Content="{sql:SqlText SQL_SCHEMA_REFRESH}" Click="RefreshSchema_Click" Padding="4,2"
+              DockPanel.Dock="Right" IsEnabled="{Binding CanRefreshSchema}"/>
+            <TextBlock Text="{sql:SqlText SQL_SCHEMA}" VerticalAlignment="Center"/>
+          </DockPanel>
+          <TextBox Text="{Binding SchemaSearch, UpdateSourceTrigger=PropertyChanged}"
+            ToolTip="{sql:SqlText SQL_SCHEMA_SEARCH}" AutomationProperties.Name="{sql:SqlText SQL_SCHEMA_SEARCH}"/>
+          <TextBlock Text="{Binding SchemaStatus}" FontSize="11" TextWrapping="Wrap" Margin="0,4"/>
+          <WrapPanel>
+            <Button Content="{sql:SqlText SQL_INSERT}" Click="InsertSchema_Click" Padding="3,2" Margin="0,0,4,0"/>
+            <Button Content="{sql:SqlText SQL_GENERATE_SELECT}" Click="GenerateSelect_Click" Padding="3,2" Margin="0,0,4,0"/>
+            <Button Content="{sql:SqlText SQL_PREVIEW_TABLE}" Click="PreviewTable_Click" Padding="3,2"/>
+          </WrapPanel>
+        </StackPanel>
+        <Expander DockPanel.Dock="Bottom" Header="{sql:SqlText SQL_SCHEMA_HELP_TITLE}" Margin="0,4">
+          <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+            <TextBlock Text="{sql:SqlText SQL_SCHEMA_HELP}" TextWrapping="Wrap"/>
+          </ScrollViewer>
+        </Expander>
+        <TreeView x:Name="SchemaTree" ItemsSource="{Binding SchemaItems}" MouseDoubleClick="SchemaTree_MouseDoubleClick"
+          Background="{DynamicResource PanelBackgroundBrush}" Foreground="{DynamicResource PrimaryForegroundBrush}"
+          AutomationProperties.Name="{sql:SqlText SQL_SCHEMA}">
+          <TreeView.ItemTemplate>
+            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+              <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding ToolTip}"/>
+            </HierarchicalDataTemplate>
+          </TreeView.ItemTemplate>
+        </TreeView>
+      </DockPanel>
+      <GridSplitter Grid.Column="1" Grid.RowSpan="3" Width="4" HorizontalAlignment="Stretch"
+        ResizeDirection="Columns" Background="{DynamicResource GridSplitterBrush}"/>
+      <local:SqlQueryEditorView Grid.Column="2" x:Name="EditorView" RunRequested="Editor_RunRequested"/>
+      <GridSplitter Grid.Column="2" Grid.Row="1" Height="4" HorizontalAlignment="Stretch"
+        ResizeDirection="Rows" Background="{DynamicResource GridSplitterBrush}"/>
+      <local:SqlQueryResultsView Grid.Column="2" Grid.Row="2" x:Name="ResultsView"/>
+    </Grid>
+  </Grid>
+</UserControl>

@@ -116,6 +116,15 @@ IDataTable                       # Table with event-driven row management
   └── Events: RowAdded, RowUpdated, RowsRemoved
 
 IDataset → IDataRecord → IFieldDefinition   # Query results
+
+IQueryDatabase                   # Shared generic SQL capability on both database interfaces
+  ├── GetQuerySchemaAsync()
+  └── CreateQuerySessionAsync()
+
+IQuerySession → IQueryResult      # Immutable snapshot/results, independent of capture records
+  ├── ExecuteAsync()             # One read-only statement, deadline and store quota
+  ├── ReadPageAsync() / ReadValueAsync()
+  └── DisposeAsync()             # Drain readers and delete owned temporary storage
 ```
 
 ### Application Model Interfaces
@@ -230,6 +239,134 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 4. **Analysis** — `ICaptureAnalyzer.RunAsync()` reads the capture table, converts rows to `ServiceCallItem` objects, groups by endpoint, computes `ServiceCallStats`, then feeds data to the `RulesEngine`
 5. **Rule execution** — Rules run in parallel; each produces a `RuleResult` containing violations (`RuleViolation`) categorized as Error, Warning, or Info
 6. **Reporting** — Results are transformed into JSON reports, rendered in WebView2 using HTML/CSS/JS templates, and displayed in analysis tabs
+
+## Agent access and application operations
+
+### One application runtime, separate adapters
+
+`ApplicationRuntime` owns composition/readiness and reverse-order draining for Desktop and persistent
+Headless hosts: policy, storage/localization, active database/table factories, validated preferences/
+controllers, analyzers, shared services, MCP and instance presence. `Program` dispatches ProxyGuard
+first and internal agent-host arguments before creating any WPF `App`. Headless owns an STA dispatcher
+but creates no Application, window, WebView, theme resources or dialogs. `ApplicationDispatch` binds
+generic thread-affinity helpers to that dispatcher; `PublicUtilities.SafeInvoke` publishes callbacks
+without requiring `Application.Current`. Actual dialogs remain desktop adapters.
+
+The short-lived offline `xmat analyze` path remains separate: `HeadlessStorage`, stable sanitized CLI
+schemas, bounded input readers, work budgets and no-GUI/settings/logging bans are unchanged. Both
+offline and stateful investigation use `AnalyzeCaptureOperation`; adapters supply guarded files or
+DAL-owned records, never another rule/conversion loop. All-console canonical results and original
+record evidence remain independent of WPF report rendering.
+
+Bootstrap creates tables/restores preferences without capture/proxy/ETW/certificate side effects.
+Web proxy transport and certificate creation are deferred; trust setup is an explicit desktop/Windows
+workflow. Shared Xbox capture-session tracking retains ownership-bound crash-recovery records.
+Headless desktop-only navigation fails explicitly; theme persistence reports deferred rendering.
+
+### Global policy, local discovery and client confirmations
+
+`AgentAccessSettingsStore` atomically persists one versioned per-user `agent-access.json`, separate
+from ordinary preferences. `AgentAccessPolicyService` serializes writers, watches cross-process
+updates and applies restrictive intersections immediately. Privilege increases require durable save;
+a failed restriction retains its effective floor and reports restart/persistence risk. Initial state
+is disabled, redacted, Inspect and export, backups off. All current/future eligible clients use this
+policy directly, not replicated per-client grants. Normal MCP Preferences cannot edit it.
+
+`AgentAccessHost` owns the official SDK server and native current-user/elevation checked pipes with
+server-side remote-client rejection. The packaged bridge only discovers/connects/forwards protocol
+stdio. Instance metadata distinguishes ready/enabled endpoints from disabled/starting/stopping process
+presence; actual executable/PID/start/user/elevation and pipe-server identity are validated separately.
+Discovery refuses ambiguity or prerequisite states instead of launching around them.
+
+CLI setup/config/status/start/stop are thin adapters. A per-user/elevation launch lease coordinates
+trusted sibling executable startup, bounded readiness and a real MCP handshake. Supported detached/
+breakaway process lifetime inherits no MCP stdio; prohibited jobs return an external-launch prerequisite,
+not a containment bypass. The host persists after bridge exit while session cleanup remains scoped.
+Installed AGENTS/CLAUDE/GEMINI guidance and full guides are distribution content, not repository/global
+instruction or client-configuration installation.
+
+`AgentRuntime` retains exact effect requirements, argument hashes, idempotency ledgers, connection-owned
+jobs/results/cursors, capture/script epochs, cancellation, quotas and truthful committed outcomes.
+`AgentMcpServerTool` uses negotiated SDK form elicitation or request/session/policy-bound continuation
+tokens only for consequence-based confirmations, independently of authorization/effect metadata.
+Routine controls, reads, new projected exports and benign shared-state changes run without another
+acknowledgment. Actual data loss/overwrite, disruptive external changes, unredacted output under
+Redacted, cross-session interference and broad host-list changes retain exact confirmations.
+Accepted script ID/hash versions are bounded host-local state shared across eligible clients;
+successful operations record acceptance, and access/data-policy changes invalidate it.
+Static MCP hints mark benign controls nondestructive while retaining conservative hints on mixed
+tools with destructive variants. Acknowledgment never grants authority or attests a human click. Global tightening drains
+affected work and invalidates incompatible handles; data-sharing changes invalidate data views,
+while backup-only changes recheck protected commits without discarding unrelated read results.
+The compact Agent Access window contains global controls, disclosure and generated client setup:
+no client grant table, desktop approval queue or resource manager.
+
+### Shared source, SQL and data-sharing boundaries
+
+`CaptureCatalog` resolves explicit opaque IDs and expected revisions on the dispatcher.
+`ICaptureOperations`, device/proxy/script/import/clear services and controller/DAL implementations are
+the same boundaries used by WPF; UI selection never redirects agent work. Active snapshots require
+stopped captures, while immutable loaded-source reads do not stop unrelated capture.
+
+Only the DAL opens SQLite. `IQueryDatabase` supports an opt-in provider-free trusted projection;
+unsupported providers fail closed. For redacted agent SQL, `SqLtQueryProjection` reads the frozen
+source and creates a fresh database containing only projected values, not copied source schema SQL,
+defaults/triggers or raw freelist pages. Shared `SazSanitizer` detectors process HTTP text and decoded
+base64 bodies; opaque/oversized content is omitted. Stable per-view device/address pseudonyms support
+typed filtering and preserve control IDs/revisions/hashes. Filtering is best effort, not confidentiality.
+
+`SqLtQuerySession` uses existing read-only authorizers, statement validation, progress cancellation/
+deadlines and result quotas. `SqLtQueryResult` preserves complete ordinal types/labels and batches wide
+reads within native column limits. Pages, exact value chunks and CSV/JSON exports read the same
+projected immutable result, never rerun SQL or reopen raw data. Structured MCP/text fallback egress
+shares bounded recursive projection. Built-in analysis can compute original-data metrics locally,
+then project outbound DTOs; substitutions can make arbitrary SQL semantics differ.
+
+Raw details, evidence, session WebSockets and canonical reports retain source/snapshot provenance,
+reader/export pins and honest unavailable evidence. Script source is filtered before chunking;
+original revision/hash stays authoritative and filtered text is not silently round-tripped. Compilation
+does not install code and disables #load/#r resolution. Activated C# remains trusted in-process code,
+not a sandbox. No generic filesystem, shell or write-SQL tool is introduced.
+
+`CaptureReadonlySources` opens native/SAZ/ETL inputs without changing active rows, devices or selection.
+SAZ/ETL share `PreparedCaptureImport`, existing bounded parsers/table factories and a DAL working
+database, then the native loader. Only complete prepared views/source state publish. The existing
+loaded-source registry owns connections/workspaces and protects original file paths/hardlink identities.
+Destructive imports separately replace exact active scopes through atomic DAL transactions.
+
+### Files, backups and guarded lifetime
+
+Typed absolute paths reuse `CaptureFileInputs`, `CaptureFileExports`, guarded local NTFS/ReFS directories,
+input identity/hash checks and shared serializers. `CaptureFilePublication` binds explicit overwrite
+to the observed identity/length/hash, obtains required preimages and atomically renames an owned handle.
+A new destination appearing after preflight is never overwritten. Loaded originals/aliases remain
+protected. Native/raw capture, script, diagnostics and local report files retain original fidelity;
+agent query exports retain their projected values. Raw local output is disclosed, not privacy-safe.
+
+Canonical multi-file reports stage outputs and all required preimages before replacing only exact
+manifest members. Unrelated files remain. Individual files are atomic, not an entire directory or
+machine-wide transaction; partial/unknown receipts retain recovery paths and prohibit blind retries.
+
+`AgentMutationProtection` carries trusted agent origin through dispatcher hops into shared pre-commit
+hooks. `AgentBackupStore` creates flushed native database snapshots via the DAL or exact file preimages,
+with owned manifests/hashes/scope/exclusions and prepared/committed outcomes. It counts operation
+bundles, keeps newest 10 within 2 GiB and pins active recovery copies. A complete new backup precedes
+pruning; backup/quota/retention failure blocks protected destruction. Desktop-origin operations are
+unchanged. Backups exclude memory-only WebSockets, unsaved scripts/SQL and device/network changes.
+
+`ApplicationShutdown` coordinates revision-bound SQL Save/Discard/Cancel, captured-data save/discard,
+draft acknowledgment, shared capture stop/drain, optional explicit Xbox proxy disable, final post-stop
+backup and settings persistence. It retains backup pins until actual database disposal. Cancellation/
+stale decisions/failed recovery resume admission and document/UI state; partial stopped/saved effects
+are reported without claiming rollback. Normal human Close retains its dialogs. Inspector shutdown
+is restricted to sole-client idle headless housekeeping and revalidated at exit; broader effects
+require Full control. Requested shutdown is distinct from confirmed process exit.
+
+Exact-owner/revision resource recovery and operator takeover are typed runtime operations; private
+results/cursors never transfer. Normal capture/script controls and the selected-capture operator
+takeover action replace the old dialog's resource grid. Final cleanup attempts all owned entries,
+keeps retryable recovery visible and does not dispose the active database after blocked cleanup.
+Offline forbidden-member ratchets remain intact; stateful dispatch has a separate exact profile.
 
 ## Data Layer
 

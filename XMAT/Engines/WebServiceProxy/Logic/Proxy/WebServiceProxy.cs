@@ -169,6 +169,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
         private static readonly Lazy<CertificateManager> _defaultCertManager = new(() => new(false));
+        private static readonly object InitializationGate = new();
         private readonly CertificateManager _certificates;
         private readonly bool _applicationDiagnostics;
         private IHost _host;
@@ -206,15 +207,31 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal static bool Initialize(string certPath)
         {
-            if (_isInitialized)
+            lock (InitializationGate)
             {
-                throw new InvalidOperationException("Only call Initialize once.");
+                if (_isInitialized)
+                    throw new InvalidOperationException("Only call Initialize once.");
+                return InitializeCore(certPath, allowCreate: true);
             }
+        }
 
-            if (CertManager.Initialize())
+        internal static bool IsInitialized => Volatile.Read(ref _isInitialized);
+
+        internal static bool InitializeExisting(string certPath)
+        {
+            lock (InitializationGate)
+            {
+                return _isInitialized || InitializeCore(certPath, allowCreate: false);
+            }
+        }
+
+        private static bool InitializeCore(string certPath, bool allowCreate)
+        {
+            if (CertManager.Initialize(allowCreate))
             {
                 CertManager.ExportRootCertificate(certPath);
                 _isInitialized = true;
+                ProxyPublicRootCertificate.RegisterInitializedReader(CertManager.ReadPublicRootCertificate);
             }
 
             return _isInitialized;

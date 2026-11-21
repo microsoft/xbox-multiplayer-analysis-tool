@@ -16,7 +16,7 @@ namespace XMAT.Tests
     // These tests point the process-wide NetworkTraceCaptureMethod at their own live table,
     // so they run alone and put it back afterwards.
     [Collection(IsolatedProxyTests.Name)]
-    public sealed class NetworkCaptureReloadTests
+    public sealed class NetworkCaptureReloadTests : IClassFixture<CaptureUiApplicationFixture>
     {
         // Long enough for the packet model to parse an Ethernet and an IPv4 header.
         private static readonly string ValidPayload =
@@ -634,12 +634,17 @@ namespace XMAT.Tests
 
             internal long AddLivePacket(
                 string deviceName,
-                int processId = 1) =>
-                AddPacket(
+                int processId = 1)
+            {
+                var row = AddPacket(
                     _liveTable,
                     deviceName,
                     ValidPayload,
                     processId);
+                System.Windows.Application.Current?.Dispatcher.Invoke(
+                    () => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                return row;
+            }
 
             // The controllers whose handlers are subscribed to the live table's RowAdded event.
             internal object[] LiveSubscribers() =>

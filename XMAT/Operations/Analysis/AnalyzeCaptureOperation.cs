@@ -30,6 +30,7 @@ namespace XMAT.Operations.Analysis
         }
 
         private readonly Lazy<AnalysisAssetSet> _assets;
+        private readonly Func<bool, TraceAnalyzer> _analyzerFactory;
         private readonly CaptureInputReader _inputReader = new();
 
         internal const string WorkLimitCode =
@@ -52,13 +53,25 @@ namespace XMAT.Operations.Analysis
                 LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
+        private AnalyzeCaptureOperation(Func<bool, TraceAnalyzer> analyzerFactory)
+        {
+            _analyzerFactory = analyzerFactory ?? throw new ArgumentNullException(nameof(analyzerFactory));
+        }
+
+        internal static AnalyzeCaptureOperation FromAnalyzer(TraceAnalyzer analyzer)
+        {
+            ArgumentNullException.ThrowIfNull(analyzer);
+            return new AnalyzeCaptureOperation(_ => analyzer);
+        }
+
         internal Action<Type, string> ExceptionObserver { get; set; }
 
         internal Func<AnalysisWorkBudget> WorkBudgetFactory { get; set; } =
             static () => new AnalysisWorkBudget();
 
         internal Func<RequestBodyIdentityInterner>
-            BodyIdentityFactory { get; set; } =
+            BodyIdentityFactory
+        { get; set; } =
                 static () =>
                     new RequestBodyIdentityInterner();
 
@@ -257,8 +270,9 @@ namespace XMAT.Operations.Analysis
                     "Legacy report generation requires exactly one device.");
             }
 
-            var analyzer = _assets.Value.CreateAnalyzer(
-                options.ProduceLegacyReports);
+            var analyzer = _analyzerFactory != null
+                ? _analyzerFactory(options.ProduceLegacyReports || options.RetainCanonicalResults)
+                : _assets.Value.CreateAnalyzer(options.ProduceLegacyReports || options.RetainCanonicalResults);
             AnalysisWorkBudget workBudget =
                 WorkBudgetFactory?.Invoke() ??
                 throw new InvalidOperationException(
@@ -370,6 +384,14 @@ namespace XMAT.Operations.Analysis
                 totalCalls,
                 totalFindings,
                 shaping);
+            var value = new AnalysisResult(summary)
+            {
+                Legacy = legacy,
+                Canonical = options.RetainCanonicalResults && deviceAnalyses.Count == 1
+                    ? deviceAnalyses[0].Canonical : null,
+                ProcessScope = selected.Scope,
+                IncludedKeys = selected.IncludedKeys,
+            };
             if (totalCalls == 0 ||
                 deviceSummaries.All(device => device.Consoles.Count == 0))
             {
@@ -383,22 +405,13 @@ namespace XMAT.Operations.Analysis
                 // The selection still completed, so adapters can say how many sessions the process filter hid.
                 return new OperationResult<AnalysisResult>(
                     OperationOutcome.NoAnalyzableData,
-                    new AnalysisResult(summary)
-                    {
-                        ProcessScope = selected.Scope,
-                        IncludedKeys = selected.IncludedKeys,
-                    },
+                    value,
                     diagnostics);
             }
 
             ReportProgress(context, "analysis.complete", 1);
             return OperationResult<AnalysisResult>.Success(
-                new AnalysisResult(summary)
-                {
-                    Legacy = legacy,
-                    ProcessScope = selected.Scope,
-                    IncludedKeys = selected.IncludedKeys,
-                },
+                value,
                 diagnostics);
         }
 
@@ -447,6 +460,8 @@ namespace XMAT.Operations.Analysis
         {
             ReportProgress(context, "analysis.convert", null);
             var serviceCallItems = new List<ServiceCallItem>();
+            var sourceRows = options.RetainCanonicalResults ? new Dictionary<string, long>(StringComparer.Ordinal) : null;
+            var skipped = 0;
             try
             {
                 foreach (IDataRecord record in
@@ -465,7 +480,10 @@ namespace XMAT.Operations.Analysis
                     if (item != null)
                     {
                         serviceCallItems.Add(item);
+                        sourceRows?.Add(item.BreadCrumb, record.RowId);
                     }
+                    else
+                        skipped++;
                 }
             }
             finally
@@ -506,7 +524,7 @@ namespace XMAT.Operations.Analysis
                     rulesEngine,
                     serviceCallData,
                     outputDirectory,
-                    options.ProduceLegacyReports,
+                    options.ProduceLegacyReports || options.RetainCanonicalResults,
                     cancellationToken);
             }
             catch (AggregateException ex)
@@ -558,7 +576,13 @@ namespace XMAT.Operations.Analysis
                 device.Id,
                 serviceCallItems,
                 serviceCallData,
-                consoleResults);
+                consoleResults)
+            {
+                Canonical = options.RetainCanonicalResults
+                    ? new CanonicalAnalysisResult(
+                        TraceAnalysisResult.FromConsoleResults(consoleResults), sourceRows, serviceCallItems.Count, skipped)
+                    : null
+            };
         }
 
         internal static RuleAggregateFailure
@@ -737,7 +761,10 @@ namespace XMAT.Operations.Analysis
             string DeviceId,
             IReadOnlyList<ServiceCallItem> ServiceCallItems,
             ServiceCallData ServiceCallData,
-            IReadOnlyDictionary<string, TraceConsoleAnalysis> ConsoleResults);
+            IReadOnlyDictionary<string, TraceConsoleAnalysis> ConsoleResults)
+        {
+            internal CanonicalAnalysisResult Canonical { get; init; }
+        }
 
         private sealed class CanonicalServiceLabeler
         {

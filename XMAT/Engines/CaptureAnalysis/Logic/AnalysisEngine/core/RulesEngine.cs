@@ -189,6 +189,7 @@ namespace CaptureAnalysisEngine
                     result.ActionableHost =
                         actionableHosts[
                             endpointRule.Endpoint];
+                    result.RuleType = endpointRule.Rule.GetType().Name;
                 }
                 m_results[console].Add(result);
             }

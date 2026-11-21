@@ -6,7 +6,7 @@ using System.Collections.Generic;
 
 namespace XMAT.SharedInterfaces
 {
-    public interface IReadonlyDatabase
+    public interface IReadonlyDatabase : IQueryDatabase, ICaptureDatabaseBackup
     {
         IEnumerable<string> TableNames();
 

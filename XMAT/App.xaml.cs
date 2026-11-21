@@ -3,16 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
-using XMAT.Models;
-using XMAT.NetworkTrace;
-using XMAT.NetworkTraceCaptureAnalysis;
-using XMAT.SharedInterfaces;
+using XMAT.Hosting;
 using XMAT.WebServiceCapture;
-using XMAT.XboxLiveCaptureAnalysis;
 
 namespace XMAT
 {
@@ -22,32 +17,49 @@ namespace XMAT
     public partial class App : Application
     {
         private readonly Logger _unhandledLog = new();
-        private XboxProxySessions _xboxSessions;
+        private readonly Guid? _instanceId;
+        private readonly bool _agentLaunched;
+        internal ApplicationRuntime Runtime { get; private set; }
 
-        private void Application_Startup(object sender, StartupEventArgs e)
+        public App() { }
+        internal App(Guid instanceId, bool agentLaunched)
         {
-            // must be first
-            Localization.LoadLanguage(CaptureAppModel.AppModel.PreferencesModel.Language);
-
-            ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
-
-            InitializeExceptionHandlers();
-            // Before any proxy, certificate or database initialization.
-            RecoverProxySettings();
-            InitializeDataLayer();
-            InitializeCaptureMethods();
-            InitializeCaptureAnalyzers();
-            TrackXboxCaptures();
-            SessionEnding += Application_SessionEnding;
+            _instanceId = instanceId;
+            _agentLaunched = agentLaunched;
         }
 
-        // Windows ending the session closes XMAT without the main window's Closing, which would cancel a running replay
-        // and wait for it: cancel it here, without waiting, since its rows are added on this thread. This handler never
-        // cancels the session end (e.Cancel stays false), so XMAT always exits and BeginShutdown, which is terminal, is
-        // safe here. A handler that may cancel it must first add a reversible preparation instead (BeginShutdown).
+        private async void Application_Startup(object sender, StartupEventArgs e)
+        {
+            Localization.LoadLanguage("en-us");
+            InitializeExceptionHandlers();
+            try
+            {
+                Runtime = new(Dispatcher, ApplicationHostMode.Desktop, instanceId: _instanceId);
+                await Runtime.AdvertiseStartingAsync();
+                if (!_agentLaunched)
+                    RecoverProxySettings();
+                Runtime.Initialize();
+                SessionEnding += Application_SessionEnding;
+                ThemeManager.ApplyTheme(Runtime.Model.PreferencesModel.Theme);
+                MainWindow = new MainWindow();
+                MainWindow.Show();
+                await Runtime.MarkReadyAsync();
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Application initialization failed: {exception.GetType().Name}");
+                if (!_agentLaunched)
+                    MessageBox.Show(Localization.GetLocalizedString("AGENT_RUNTIME_START_FAILED"),
+                        Localization.GetLocalizedString("UNHANDLED_EXCEPTION_HANDLER_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                if (Runtime != null)
+                    await Runtime.DisposeAsync();
+                Shutdown(70);
+            }
+        }
+
         private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
         {
-            CaptureAppModel.AppModel.BeginShutdown();
+            Runtime?.Model.BeginShutdown();
         }
 
         private void InitializeExceptionHandlers()
@@ -163,98 +175,6 @@ namespace XMAT
             }
         }
 
-        private void TrackXboxCaptures()
-        {
-            _xboxSessions = new XboxProxySessions(PcProxyRecovery.DefaultDirectory, ProcessIdentity.Current);
-            void Track(ICaptureDeviceContext context)
-            {
-                if (context.DeviceType == DeviceType.XboxConsole &&
-                    context.CaptureController is WebServiceDeviceCaptureController controller)
-                {
-                    controller.PropertyChanged += (s, e) =>
-                    {
-                        if (e.PropertyName == nameof(WebServiceDeviceCaptureController.IsRunning))
-                        {
-                            _xboxSessions.SetCapturing(controller.DeviceName, controller.IsRunning);
-                        }
-                    };
-                }
-            }
-            foreach (var context in CaptureAppModel.AppModel.CaptureDeviceContexts)
-            {
-                Track(context);
-            }
-            CaptureAppModel.AppModel.CaptureDeviceContexts.CollectionChanged += (s, e) =>
-            {
-                foreach (var context in e.NewItems?.OfType<ICaptureDeviceContext>() ?? Enumerable.Empty<ICaptureDeviceContext>())
-                {
-                    Track(context);
-                }
-            };
-        }
-
-        private void InitializeDataLayer()
-        {
-            CaptureAppModel.AppModel.InitializeDatabase();
-        }
-
-        private void InitializeCaptureMethods()
-        {
-            WebServiceCaptureMethod.Method.Initialize(CaptureAppModel.AppModel);
-            NetworkTraceCaptureMethod.Method.Initialize(CaptureAppModel.AppModel);
-
-            // initialize the preferences
-            CaptureAppModel.AppModel.PreferencesModel.WebProxyCapturePreferences =
-                WebServiceCaptureMethod.Method.PreferencesModel;
-            CaptureAppModel.AppModel.PreferencesModel.NetworkCapturePreferences =
-                NetworkTraceCaptureMethod.Method.PreferencesModel;
-            CaptureAppModel.AppModel.PreferencesModel.NetworkAnalysisPreferences =
-                NetworkTraceCaptureAnalyzer.Analyzer.PreferencesModel;
-        }
-
-        private void InitializeCaptureAnalyzers()
-        {
-            InitializeCaptureAnalyzer(XboxLiveCaptureAnalyzer.Analyzer);
-            InitializeCaptureAnalyzer(NetworkTraceCaptureAnalyzer.Analyzer);
-            // TODO: initialize the analyzer preferences
-        }
-
-        private void InitializeCaptureAnalyzer(ICaptureAnalyzer analyzer)
-        {
-            try
-            {
-                CaptureAppModel.AppModel.AddCaptureAnalyzer(analyzer);
-            }
-            catch (Exception ex)
-            {
-                // some kind of application error message should be displayed
-                MessageBox.Show(
-                    ex.Message,
-                    Localization.GetLocalizedString("RUN_ANALYZER_EXCEPTION", analyzer.Description),
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
-        }
-
-        private void ShutdownDataLayer()
-        {
-            CaptureAppModel.AppModel.ActiveDatabase.Shutdown();
-        }
-
-        private void ShutdownCaptureMethods()
-        {
-            WebServiceCaptureMethod.Method.Shutdown();
-            NetworkTraceCaptureMethod.Method.Shutdown();
-        }
-
-        private void ShutdownCaptureAnalyzers()
-        {
-            foreach (ICaptureAnalyzer analyzer in CaptureAppModel.AppModel.CaptureAnalyzers)
-            {
-                analyzer.Shutdown();
-            }
-        }
-
         private void ShutdownExceptionHandlers()
         {
             if (_unhandledLog != null)
@@ -265,13 +185,7 @@ namespace XMAT
 
         private void Application_Exit(object sender, ExitEventArgs e)
         {
-            // Application.Shutdown, as when XMAT restarts as administrator, ignores a cancelled Closing and does not wait for
-            // a running replay either: cancel it, without waiting, before the capture methods and the database go away.
-            CaptureAppModel.AppModel.BeginShutdown();
-            ShutdownCaptureAnalyzers();
-            ShutdownCaptureMethods();
-            _xboxSessions?.Clear();
-            ShutdownDataLayer();
+            Runtime?.Model.BeginShutdown();
             ShutdownExceptionHandlers();
         }
 

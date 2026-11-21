@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System.Text.Json;
+using XMAT.Models;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTraceCaptureAnalysis.Models
 {
-    class NetworkTraceAnalysisOptionsModel : ICaptureAnalyzerPreferences
+    class NetworkTraceAnalysisOptionsModel : PreferenceObservable, ICaptureAnalyzerPreferences
     {
         private readonly int DefaultPacketsPerSecondThreshold = 20;
         private readonly int DefaultXboxMaximumMTU = 1384;
@@ -20,9 +21,21 @@ namespace XMAT.NetworkTraceCaptureAnalysis.Models
             DuplicatePacketWindow = DefaultDuplicatePacketWindowMS;
         }
 
-        public int PacketsPerSecondThreshold { get; set; }
-        public int MaximumMTU { get; set; }
-        public int DuplicatePacketWindow { get; set; }
+        private int _packetsPerSecondThreshold;
+        private int _maximumMtu;
+        private int _duplicatePacketWindow;
+
+        public int PacketsPerSecondThreshold
+        {
+            get => _packetsPerSecondThreshold;
+            set => SetValue(ref _packetsPerSecondThreshold, value);
+        }
+        public int MaximumMTU { get => _maximumMtu; set => SetValue(ref _maximumMtu, value); }
+        public int DuplicatePacketWindow
+        {
+            get => _duplicatePacketWindow;
+            set => SetValue(ref _duplicatePacketWindow, value);
+        }
 
         public void DeserializeFrom(JsonElement serializedObject)
         {

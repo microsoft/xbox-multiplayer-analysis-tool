@@ -27,6 +27,39 @@ namespace XMAT.Tests
     public class WebServiceDeviceCaptureControllerTests
     {
         [Fact]
+        public async Task DeferredProxyInitializationAndAnIdleStopDoNotCreateATransport()
+        {
+            using var database = CaptureInvestigationTestData.WebDatabase();
+            var listener = new CaptureDeviceTestData.DeviceListener();
+            var creations = 0;
+            var pool = new ProxyPortPool();
+            var controller = new WebServiceDeviceCaptureController(
+                "deferred proxy", DeviceType.GenericProxyDevice, false, pool, proxyFactory: () =>
+                {
+                    creations++;
+                    return listener;
+                });
+            controller.Initialize(deferPortAllocation: false, deferProxyCreation: true);
+            typeof(WebServiceDeviceCaptureController).GetField("_dataTable", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(controller, database.TableByName(WebServiceCaptureMethod.TableName));
+            try
+            {
+                Assert.Equal(0, creations);
+                await controller.StopProxyAsync();
+                Assert.Equal(0, creations);
+                await controller.StartProxyAsync(false);
+                Assert.Equal(1, creations);
+                Assert.Equal(1, listener.StartCount);
+                Assert.NotNull(listener.WebRequestPolicyAsync);
+                await controller.StopProxyAsync();
+                await controller.StartProxyAsync(false);
+                Assert.Equal(1, creations);
+                Assert.Equal(2, listener.StartCount);
+            }
+            finally { await controller.CloseAsync(); }
+        }
+
+        [Fact]
         public async Task ImportedShapingIsVisibleButNeverActivated()
         {
             var recorded = new NetworkShapingController();
