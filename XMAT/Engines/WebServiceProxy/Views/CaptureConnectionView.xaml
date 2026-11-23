@@ -343,6 +343,15 @@
             <TabItem x:Name="BlockListTab" Header="Block List">
                 <local:BlockListView BlockList="{Binding CaptureController.BlockList}"/>
             </TabItem>
+            <TabItem x:Name="AutoResponderTab" Header="AutoResponder">
+                <TabItem.Style>
+                    <Style TargetType="TabItem">
+                        <Style.Triggers><DataTrigger Binding="{Binding IsReadOnly}" Value="True"><Setter Property="IsEnabled" Value="False"/></DataTrigger></Style.Triggers>
+                    </Style>
+                </TabItem.Style>
+                <local:AutoResponderView Rules="{Binding CaptureController.AutoResponder}"
+                                         SelectedCapture="{Binding SelectedItem, ElementName=ConnectionList}"/>
+            </TabItem>
             <TabItem x:Name="BypassListTab" Header="Bypass List">
                 <local:BypassListView BypassList="{Binding CaptureController.BypassList}"/>
             </TabItem>

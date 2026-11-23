@@ -446,6 +446,8 @@ namespace XMAT.WebServiceCapture
         // The application's session host lists; stable for the controller's lifetime.
         public HostListPolicy HostListPolicy { get; }
         public BlockListModel BlockList => HostListPolicy.BlockList;
+
+        public AutoResponderRules AutoResponder { get; } = new();
         public BypassListModel BypassList => HostListPolicy.BypassList;
         public WebSocketMessageModel SelectedWebSocketMessage
         {
@@ -887,6 +889,7 @@ namespace XMAT.WebServiceCapture
                 _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
                 if (_webProxy is WebServiceProxy streamingProxy)
                 {
+                    streamingProxy.AutoResponder = AutoResponder;
                     streamingProxy.WebResponseProgressAsync = WebProxy_WebResponseProgressAsync;
                 }
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;

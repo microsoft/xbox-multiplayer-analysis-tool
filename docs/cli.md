@@ -982,6 +982,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Export sessions as a sanitized Fiddler archive (`capture-file.sanitize`) | `xmat export INPUT --out FILE.saz --format sanitized-saz` | Supported (S2) |
 | Save captures (.xmatcap) (`capture-file.save-xmatcap`) | (not available yet) | Planned (S5, XMAT-021) |
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
+| Mock proxy responses with ordered rules (`capture.auto-responder`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Delete sessions from a capture (`capture.delete-sessions`) | (none) | GUI only by policy (S11, XMAT). Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the capture list; headless runs export the sessions to keep instead |
 | Capture an explicit-proxy (generic) device (`capture.generic`) | `xmat capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] [--shape off\|min\|avg\|exc\|broken\|disconnect] [--down-kbps N] [--up-kbps N] [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]` | Supported (S5) |

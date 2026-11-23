@@ -496,6 +496,24 @@ namespace XMAT.WebServiceCapture.Proxy
                 context.Abort();
                 return;
             }
+            if (!context.WebSockets.IsWebSocketRequest)
+            {
+                var rule = _proxy.AutoResponder.Match(clientRequest.Method, uri);
+                if (rule != null)
+                {
+                    await Task.Delay(rule.DelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                    ServerResponse mock = rule.CreateResponse(clientRequest);
+                    await WriteResponseAsync(context, tunnel.ConnectionId, mock, true, cancellationToken).ConfigureAwait(false);
+                    await context.Response.CompleteAsync().ConfigureAwait(false);
+                    if (HttpMethods.IsHead(context.Request.Method))
+                        mock.BodyBytes = Array.Empty<byte>();
+                    if (_proxy.TryRegisterStreamedResponseFinalizer(
+                            tunnel.ConnectionId, clientRequest, mock, tunnel.ProcessContext,
+                            out WebServiceProxy.StreamedResponseFinalizer finalizer, proxyGenerated: true))
+                        finalizer.Complete(DateTime.Now, prepareResponse: null);
+                    return;
+                }
+            }
             if (context.WebSockets.IsWebSocketRequest)
             {
                 await ProxyWebSocketAsync(

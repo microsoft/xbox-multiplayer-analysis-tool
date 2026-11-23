@@ -385,6 +385,17 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
+            if (!WebSocketProxy.IsWebSocketUpgrade(request))
+            {
+                var rule = _proxy.AutoResponder.Match(request.Method, uri);
+                if (rule != null)
+                {
+                    await SendMockResponseAsync(connectionID, clientStream, request, rule, processContext, ct)
+                        .ConfigureAwait(false);
+                    return;
+                }
+            }
+
             if (WebSocketProxy.IsWebSocketUpgrade(request))
             {
                 await HandleWebSocketAsync(connectionID, uri, clientStream, request, processContext, ct).ConfigureAwait(
@@ -1004,6 +1015,30 @@ namespace XMAT.WebServiceCapture.Proxy
             HttpResponseMessage response,
             HeaderCollection trailers) =>
             ProxyHeaderUtilities.AllowedTrailerNames(response.Headers, trailers).ToArray();
+
+        private async Task SendMockResponseAsync(
+            int connectionId, Stream clientStream, ClientRequest request, AutoResponderRule rule,
+            ClientProcessContext processContext, CancellationToken cancellationToken)
+        {
+            await Task.Delay(rule.DelayMilliseconds, cancellationToken).ConfigureAwait(false);
+            ServerResponse response = rule.CreateResponse(request);
+            if (string.Equals(request.Method, "HEAD", StringComparison.OrdinalIgnoreCase))
+                response.BodyBytes = Array.Empty<byte>();
+            try
+            {
+                await clientStream.WriteAsync(response.ToByteArray(), cancellationToken).ConfigureAwait(false);
+                await clientStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+            {
+                LogConnection(connectionId, LogLevel.WARN, $"Client connection ended while writing a mock response: {ex.Message}");
+                return;
+            }
+            if (_proxy.TryRegisterStreamedResponseFinalizer(
+                    connectionId, request, response, processContext,
+                    out WebServiceProxy.StreamedResponseFinalizer finalizer, proxyGenerated: true))
+                finalizer.Complete(DateTime.Now, prepareResponse: null);
+        }
 
         private async Task WriteProxyErrorAsync(
             int connectionId,

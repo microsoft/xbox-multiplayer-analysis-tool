@@ -1,0 +1,51 @@
+<UserControl x:Class="XMAT.WebServiceCapture.AutoResponderView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Control">
+  <Grid Margin="8">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <StackPanel>
+      <CheckBox x:Name="EnabledBox" IsChecked="{Binding Rules.Enabled, ElementName=Control, Mode=TwoWay}"/>
+      <TextBlock x:Name="HelpText" TextWrapping="Wrap" Margin="0,4,0,8"/>
+    </StackPanel>
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
+      <DockPanel Margin="0,0,8,0">
+        <WrapPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
+          <Button x:Name="RemoveButton" Click="Remove_Click" Margin="0,0,4,4" Padding="6,3"/>
+          <Button x:Name="SaveButton" Click="Save_Click" Margin="0,0,4,4" Padding="6,3"/>
+          <Button x:Name="LoadButton" Click="Load_Click" Margin="0,0,4,4" Padding="6,3"/>
+        </WrapPanel>
+        <ListBox x:Name="RuleList" ItemsSource="{Binding Rules.Items, ElementName=Control}" SelectionChanged="RuleList_SelectionChanged"/>
+      </DockPanel>
+      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <TextBlock x:Name="ScenarioLabel"/>
+          <ComboBox x:Name="ScenarioBox" SelectionChanged="Scenario_SelectionChanged" Margin="0,0,0,6"/>
+          <TextBlock x:Name="PatternLabel"/>
+          <TextBox x:Name="PatternBox" Margin="0,0,0,6"/>
+          <TextBlock x:Name="MethodLabel"/>
+          <TextBox x:Name="MethodBox" Text="*" Margin="0,0,0,6"/>
+          <TextBlock x:Name="StatusLabel"/>
+          <TextBox x:Name="StatusBox" Text="200" Margin="0,0,0,6"/>
+          <TextBlock x:Name="DelayLabel"/>
+          <TextBox x:Name="DelayBox" Text="0" Margin="0,0,0,6"/>
+          <TextBlock x:Name="HeadersLabel"/>
+          <TextBox x:Name="HeadersBox" Height="90" AcceptsReturn="True" FontFamily="Consolas" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6"/>
+          <DockPanel>
+            <Button x:Name="BodyFileButton" Click="BodyFile_Click" DockPanel.Dock="Right" Margin="4,0" Padding="6,3"/>
+            <Button x:Name="CapturedResponseButton" Click="CapturedResponse_Click" DockPanel.Dock="Right" Margin="4,0" Padding="6,3"/>
+            <CheckBox x:Name="Base64Box" VerticalAlignment="Center"/>
+          </DockPanel>
+          <TextBlock x:Name="BodyLabel"/>
+          <TextBox x:Name="BodyBox" Height="100" AcceptsReturn="True" FontFamily="Consolas" VerticalScrollBarVisibility="Auto"/>
+          <WrapPanel Margin="0,6,0,0">
+            <Button x:Name="AddButton" Click="Add_Click" Padding="6,3" Margin="0,0,4,0"/>
+            <Button x:Name="UpdateButton" Click="Update_Click" Padding="6,3"/>
+          </WrapPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+    <TextBlock x:Name="ErrorText" Grid.Row="2" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,6,0,0" AutomationProperties.LiveSetting="Polite"/>
+  </Grid>
+</UserControl>

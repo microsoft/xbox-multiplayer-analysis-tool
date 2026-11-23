@@ -187,6 +187,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private Guid _runId = Guid.NewGuid();
 
         internal BypassListModel BypassList { get; set; }
+        internal AutoResponderRules AutoResponder { get; set; } = new();
         internal ClientProcessResolver ProcessResolver { get; set; } = ClientProcessResolverHost.Shared;
         internal Guid RunId => _runId;
 
