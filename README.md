@@ -18,8 +18,8 @@ PlayFab, and other network traffic from PCs and Xbox development consoles.
 Product telemetry requires explicit per-user opt-in, separately from release approval. On first GUI run,
 XMAT asks when no consent value is saved. Choose Yes to opt in or No to decline; Cancel does not opt in.
 Change either choice under **Options > Product Telemetry**. Missing, invalid, or unreadable consent is off.
-**Live telemetry is currently disabled in all builds**, including after opt-in, pending schema and
-event/privacy policy approval. No pre-consent usage is buffered for upload. Opting out stops new XMAT events;
+Default and CI builds do not send telemetry. An explicitly approved, SDK-enabled build can send after
+opt-in. No pre-consent usage is buffered for upload. Opting out stops new XMAT events;
 previously queued SDK events may still be uploaded.
 
 The local event contract includes application/OS version, build audience, random per-session and per-operation
@@ -30,7 +30,8 @@ console's sandbox. XMAT does not collect the Windows SQM machine ID.
 Telemetry does **not** upload captured traffic, headers, bodies, packets, WebSocket messages, URLs, hostnames,
 console names, addresses, account information, scripts, file paths, exception messages, stack traces, or debug
 logs. Existing local captures and support bundles are separate and can contain sensitive traffic.
-Application-side filtering does not control collector-side IP enrichment; that remains a required release approval.
+The SDK can emit Required health events and may add device or installation identifiers; their desktop
+behavior and collector-side enrichment remain unconfirmed by the SDK team.
 
 | Events | Purpose |
 |---|---|
@@ -42,7 +43,7 @@ Application-side filtering does not control collector-side IP enrichment; that r
 | `SessionSummary` | Elapsed session time and peak concurrent capture operations |
 | `UnhandledFailure` | Deduplicated observed failures with fixed error categories, never exception contents |
 
-Live collection remains build-disabled pending approval. The SDK adapter excludes collector traffic throughout
+The SDK adapter excludes collector traffic throughout
 initialization and teardown. Opt-out stops new XMAT events; already queued events may still upload.
 Unfinished local sample operations are marked cancelled on normal application exit.
 Missing exit events do not prove crashes, and statistics exclude non-exporting/offline launches. Hidden reports

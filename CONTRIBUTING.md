@@ -24,11 +24,12 @@ Any new functionality added, must include appropriate testing alongside the new 
 Telemetry is XMAT-owned code in `XMAT\Logic\Telemetry`, behind `ITelemetryReporter`.
 The obsolete OpenTelemetry/OneCollector exporter and its dependencies have been removed.
 The approved migration target is `Microsoft.Xbox.Telemetry` (the team's 1DS wrapper), with registry-generated
-C# payloads. The adapter is buildable for integration but live export remains disabled pending schema and
-event/privacy approval. No internal package/feed is needed by public/default/CI builds.
+C# payloads. Approved SDK-enabled builds may export after explicit user consent. No internal package/feed
+is needed by public/default/CI builds.
 
 Local, PR, and CI builds default to `EnableTelemetry=false`; a Release configuration alone does not enable
-export. Enabling telemetry currently fails the build even with approval. Focused tests use injected registry
+export. Enabling telemetry requires approval, the SDK, a non-local channel, and a valid instrumentation key.
+Focused tests use injected registry
 access and fake reporters; never instantiate an emitting SDK client or modify the user's registry in tests:
 
 ```powershell
@@ -45,7 +46,7 @@ The GUI saves consent as HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool
 when the value is absent; Options > Product Telemetry permits both changes later. Closing/cancelling does
 not accept. Failed registry writes stop collection for the session and show a warning.
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value suppresses telemetry, including local sampling.
-Ordinary runs read only consent, not sandbox metadata. No pre-consent events are retained.
+Non-exporting ordinary runs read only consent, not sandbox metadata. No pre-consent events are retained.
 Opt-out stops new XMAT submissions; previously queued or dispatched SDK events may still be uploaded.
 
 The full schema and app sample-generation commands are in [TELEMETRY.md](TELEMETRY.md). Use
@@ -55,8 +56,8 @@ sandbox; sanitize it before sharing.
 
 Every new event must use fixed enums/explicit attribute mappings. Never add arbitrary strings, command options,
 exception objects, URLs, paths, traffic contents, or environment resource detectors. Preserve capture and
-analysis behavior. Before any future live adapter is enabled, verify both generated contracts and its
-actual serialized payload without production upload, including SDK-added common fields and health events.
+analysis behavior. Verify both generated contracts and serialized payloads without production upload;
+SDK-added common fields and health events remain subject to SDK-team confirmation.
 `XMAT\Data\TelemetryUsage.kql` contains aggregate query templates against an owner-provided normalized
 `XmatTelemetry` view; its column mapping and deployment require the destination owner's approval.
 

@@ -63,15 +63,26 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
-    - name: Verify live telemetry remains blocked
+    - name: Verify telemetry build gates
       shell: pwsh
       run: |
-        $output = dotnet msbuild XMAT\XboxMultiplayerAnalysisTool.csproj -t:ValidateTelemetryConfiguration `
-          -p:Platform=x64 -p:EnableTelemetry=true -p:TelemetryApproved=true -p:TelemetryBuildChannel=Test 2>&1 | Out-String
-        $failedAsExpected = $LASTEXITCODE -ne 0
-        if (-not $failedAsExpected -or -not $output.Contains("Live telemetry is disabled")) {
-          throw "The live telemetry safety gate did not reject an enabled build: $output"
+        $base = @('XMAT\XboxMultiplayerAnalysisTool.csproj', '-t:ValidateTelemetryConfiguration', '-p:Platform=x64',
+          '-p:EnableTelemetry=true', '-p:TelemetryBuildChannel=Test')
+        $cases = @(
+          @{ Args = @('-p:TelemetryApproved=false', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=test-key'); Error = 'TelemetryApproved=true' },
+          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true'); Error = 'valid TelemetryInstrumentationKey' },
+          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=invalid'); Error = 'valid TelemetryInstrumentationKey' },
+          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=false', '-p:TelemetryInstrumentationKey=test-key'); Error = 'BuildTelemetrySdk=true' },
+          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=test-key', '-p:TelemetryBuildChannel=Local'); Error = 'TelemetryBuildChannel=Public' }
+        )
+        foreach ($case in $cases) {
+          $output = dotnet msbuild @base @($case.Args) 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or -not $output.Contains($case.Error)) {
+            throw "Telemetry build gate failed: $output"
+          }
         }
+        dotnet msbuild @base -p:TelemetryApproved=true -p:BuildTelemetrySdk=true -p:TelemetryInstrumentationKey=test-key
+        if ($LASTEXITCODE -ne 0) { throw 'Approved telemetry build configuration was rejected.' }
         exit 0
 
     # Generate coverage report

@@ -102,10 +102,11 @@
 
   <Target Name="ValidateTelemetryConfiguration" BeforeTargets="GenerateAssemblyInfo">
     <Error Condition="'$(EnableTelemetry)' != 'true' and '$(EnableTelemetry)' != 'false'" Text="EnableTelemetry must be true or false." />
-    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryApproved)' != 'true'" Text="Telemetry-enabled builds require TelemetryApproved=true after XMAT collector/privacy approval." />
-    <Error Condition="'$(EnableTelemetry)' == 'true'" Text="Live telemetry is disabled pending schema and event/privacy policy approval. Build with EnableTelemetry=false." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryApproved)' != 'true'" Text="Telemetry-enabled builds require TelemetryApproved=true." />
     <Error Condition="'$(BuildTelemetrySdk)' != 'true' and '$(BuildTelemetrySdk)' != 'false'" Text="BuildTelemetrySdk must be true or false." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(BuildTelemetrySdk)' != 'true'" Text="Telemetry-enabled builds require BuildTelemetrySdk=true." />
     <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryBuildChannel)' != 'Public' and '$(TelemetryBuildChannel)' != 'Internal' and '$(TelemetryBuildChannel)' != 'Test'" Text="Telemetry-enabled builds require TelemetryBuildChannel=Public, Internal, or Test." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and !$([System.Text.RegularExpressions.Regex]::IsMatch('$(TelemetryInstrumentationKey)', '^(?=.{1,128}$)(?=.*-)[A-Za-z0-9-]+$'))" Text="Telemetry-enabled builds require a valid TelemetryInstrumentationKey." />
   </Target>
 
   <ItemGroup>

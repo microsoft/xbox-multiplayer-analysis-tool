@@ -2,6 +2,27 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 //
+// SDK health: run against https://gaming.westus.kusto.windows.net, database Gaming.
+// Health events are best effort and do not prove that business events were delivered.
+XboxTelemetryClientLifecycle
+| where event_time >= ago(1d) and app_id has "XboxMultiplayerAnalysisTool"
+| summarize CreateInstance = countif(operation == "CreateInstance"),
+    Shutdown = countif(operation == "Shutdown")
+    by app_id, AppVersion = tostring(ext.app.ver), osName;
+
+union withsource=SourceTable XboxTelemetryEventDropped, XboxTelemetrySdkFailure
+| where event_time >= ago(1d) and app_id has "XboxMultiplayerAnalysisTool"
+| summarize Reports = count() by SourceTable, app_id, AppVersion = tostring(ext.app.ver), stage, reason
+| order by Reports desc;
+
+// OptionalDataPolicy indicates optional-data gating; reports can be deduplicated.
+// Ask [Xbox]\XBOX-Telemetry Reviewers for the business-event table and field mapping.
+// Replace the placeholder and adjust columns only after that mapping is confirmed:
+// <XMAT events table>
+// | where BuildChannel == "Test"
+// | where name startswith "Microsoft.Gaming.Tooling.XMAT."
+// | take 100
+//
 // The destination owner must define XmatTelemetry using the approved ingestion mapping.
 // Required columns:
 // Timestamp:datetime, EventName:string, SessionId:string,

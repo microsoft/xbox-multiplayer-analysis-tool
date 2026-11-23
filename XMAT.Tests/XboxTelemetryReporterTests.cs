@@ -103,6 +103,36 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void AcceptedServiceSubmitsEveryGeneratedEventWithTestChannel()
+        {
+            var client = new FakeClient();
+            var config = new TelemetryConfiguration(true, true, "test-key", TelemetryBuildChannel.Test);
+            using var service = XmatTelemetryService.Create(config, channel =>
+            [
+                new("ext.app.ver", "0.2"),
+                new("ext.os.ver", "10.0.19045.0"),
+                new("BuildChannel", channel.ToString())
+            ], (_, environment) =>
+            {
+                var payload = new XboxTelemetryPayload(environment);
+                return XboxTelemetryReporter.Create(() => client, payload.Serialize);
+            }, _ => throw new InvalidOperationException("Unexpected telemetry diagnostic."), TelemetryConsentState.Accepted);
+
+            foreach (var kind in Enum.GetValues<TelemetryEventKind>())
+            {
+                service.Track(new(kind));
+            }
+
+            Assert.Equal(Enum.GetValues<TelemetryEventKind>().Length, client.Calls.Count);
+            foreach (var (kind, json) in Enum.GetValues<TelemetryEventKind>().Zip(client.Calls))
+            {
+                using var document = JsonDocument.Parse(json);
+                Assert.Equal($"Microsoft.Gaming.Tooling.XMAT.{kind}", document.RootElement.GetProperty("name").GetString());
+                Assert.Equal("Test", document.RootElement.GetProperty("BuildChannel").GetString());
+            }
+        }
+
+        [Fact]
         public void GeneratedEnumsCoverEveryApplicationValue()
         {
             AssertNames<TelemetryFeature, Schema.FeatureName>();

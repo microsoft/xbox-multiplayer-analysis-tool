@@ -5,9 +5,9 @@ Names and enum values are
 case-sensitive. The source of truth is `XMAT\Logic\Telemetry\TelemetryEvents.cs`, with common metadata
 in `TelemetryEnvironmentProvider.cs`.
 
-No build currently exports telemetry. The obsolete OpenTelemetry/OneCollector exporter has been removed;
-its replacement uses `Microsoft.Xbox.Telemetry`, but live export remains disabled pending schema and
-event/privacy policy approval. An explicitly requested
+Default builds do not export telemetry. An explicitly approved SDK-enabled build can export after
+user opt-in using `Microsoft.Xbox.Telemetry`. The obsolete OpenTelemetry/OneCollector exporter has been
+removed. An explicitly requested
 **local sample run** records the same application events to a local file without creating a collector
 reporter or requiring a collector key.
 
@@ -26,8 +26,7 @@ Neither build approval nor Optional-event SDK settings replace consent. Before o
 health/lifecycle emission, replay, device-metadata read, or event buffering for later upload.
 Opt-out stops new XMAT event submission, clears the service session and emits no XMAT shutdown summary.
 Already queued SDK events may still be uploaded during teardown or later; cancellation and purge are not
-promised. A later opt-in starts a fresh service session and cannot resume old operations. Currently no SDK
-is created even after opt-in and enabled builds fail explicitly.
+promised. A later opt-in starts a fresh service session and cannot resume old operations.
 
 Local file sampling is a separately requested, non-networked development action, not permission to
 upload. Its explicit command may read sandbox metadata and record local events without
@@ -48,9 +47,9 @@ while retaining a Windows 10 17763 runtime minimum. Default builds need no inter
 
 The adapter admits unknown events with `PassThroughInferred` (Optional) and enables Optional data
 only after XMAT consent. It never uses `AllowEventNamespace`. SDK initialization and teardown may emit
-Required SDK health events; shutdown may flush queued events. SDK behavior has not been validated using
-a live client. Audit SDK-added
-identity/common/health fields against the privacy contract below before any release approval.
+Required SDK health events; shutdown may flush queued events. Desktop SDK-added device or installation
+identifiers and their persistence have not been confirmed by the SDK team. Live-client activation and
+delivery have not been verified by the development tests.
 Keep `mobile.events.data.microsoft.com:443` excluded from proxy capture from before SDK creation until
 all teardown is finished, including WinINet/system-proxy traffic. If activation or disposal fails, the
 exclusion is retained rather than risking capture of an SDK that may still be active.
@@ -80,7 +79,7 @@ schemas, compliance files and synthetic examples. The field mapping is:
 Regenerate using `npm run codegen -- --config <absolute-path-to-XMAT-Schema\codegen.yaml>` from
 the registry checkout at the pinned input commit; add `--check` for drift validation.
 Generated C# contracts serialize JSON; they do not send or approve telemetry. Registry authoring/codegen
-and SDK policy admission are separate steps. Production collection remains blocked until both are reviewed.
+and SDK policy admission are separate steps. The test build does not imply schema approval or backend routing.
 
 ## Event names and semantics
 
@@ -366,8 +365,8 @@ This is an illustrative wire event with **synthetic identifiers**:
 Register all 11 fully qualified event names with the shared attribute schema and optional fields above.
 Collector table names may replace dots with underscores and change casing; confirm the actual ingestion
 mapping with the data-source owner rather than assuming the original event name is the table name.
-Live collection still requires reviewed event policy/privacy and explicit user consent, as well as a
-safe SDK lifecycle. The authorized shared team key does not replace those gates.
+Live collection requires an approved build and explicit user consent. The authorized shared team key does
+not establish the business-event destination or verify SDK-added fields.
 Local samples do not satisfy those approval gates.
 
 `XMAT\Data\TelemetryUsage.kql` expects an owner-defined normalized `XmatTelemetry` view. The collector
@@ -396,7 +395,7 @@ count as live-capture conversion.
 The `TelemetryTraffic` helper excludes an exact destination host/port from capture/script events and
 tunnels HTTPS CONNECT without TLS interception. The SDK reporter holds that exclusion throughout
 initialization, upload and teardown; local file sampling does not create it. Other traffic to that
-exact destination is also excluded while such a lease is held. Live collection remains build-disabled.
+exact destination is also excluded while such a lease is held.
 
 Statistics operations are correlated by WebView2 navigation ID. Redirects keep one operation, a
 replacement navigation cancels its predecessor, and stale completion notifications cannot finish the
@@ -529,13 +528,33 @@ be local-only and must cover SDK-added fields as well as XMAT's explicit attribu
 - Initialization errors display a failure dialog. Runtime write/drop/shutdown failures produce sanitized
   `XMAT telemetry:` trace messages (`LocalSampleWriteFailed`, `LocalSampleDropped`,
   `LocalSampleShutdownTimedOut`); inspect debugger trace output if an expected line is missing.
-- Running without `--telemetry-sample` restores ordinary non-exporting behavior automatically; nothing
+- Running a non-exporting build without `--telemetry-sample` restores ordinary non-exporting behavior; nothing
   about sample mode is saved in user preferences (upload consent is separate). Stop samples by closing
   that app launch. Delete only the specific sample file you generated when no longer needed.
 
-## Live collector validation remains blocked
+## Validating on the backend
 
-No current build can send to a live collector, including a test channel. Obtain schema and privacy/policy
-approval and validate the SDK lifecycle before any separately authorized test ingestion. The test channel
-is a label, not an automatic safe destination, and the
-authorized team key does not approve data collection, retention/access, or backend enrichment.
+Run an approved `EnableTelemetry=true`, `TelemetryApproved=true`, `BuildTelemetrySdk=true` build with
+`TelemetryBuildChannel=Test` and a valid instrumentation key. Choose **Yes** on first-run consent or
+under **Options > Product Telemetry**. Default builds remain non-exporting. `Test` labels events; it does
+not change the destination. Never commit the key or share a build containing it.
+
+The 11 business event names are `Microsoft.Gaming.Tooling.XMAT.` followed by `AppLaunched`, `AppReady`,
+`AppClosed`, `FeatureUsed`, `OperationStarted`, `OperationCompleted`, `OperationStage`,
+`CaptureFirstData`, `Counter`, `SessionSummary`, or `UnhandledFailure`. Filter the common
+`BuildChannel` field to `Test`. Common payload fields include `SchemaVersion`, `SessionId`, feature,
+operation, outcome, error category, durations, counts, buckets, app and OS metadata, and optional
+operation ID, capture context and host sandbox.
+
+Use the Gaming database on `https://gaming.westus.kusto.windows.net`; see the SDK health queries in
+`XMAT\Data\TelemetryUsage.kql`. Client lifecycle and drop/failure health records demonstrate SDK activity,
+not successful business-event delivery. The pass-through business-event table is not known: ask
+`[Xbox]\XBOX-Telemetry Reviewers` which table receives the XMAT events and request Gaming access. The
+business-event query in that file is a placeholder until the team confirms its table and columns.
+
+For local diagnostics, capture Windows debug output with a debugger or Sysinternals DebugView and filter
+for `XMAT telemetry:`. `InitializationFailed` indicates SDK/environment initialization failed;
+`InvalidConfiguration`, `SubmissionFailed`, and `RevocationFailed` indicate their respective failures.
+These sanitized codes omit exception text and do not prove delivery. The SDK may emit Required health
+events at initialization and teardown, and may add device or installation IDs; the SDK team has not
+yet confirmed the desktop identity fields or their persistence.

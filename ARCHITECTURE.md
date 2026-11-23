@@ -263,8 +263,8 @@ failed writes leave the session off and display a localized warning.
 The service retains unfinished operations and finalizes them as cancelled before `SessionSummary`/
 `AppClosed`, so normal exit does not abandon active capture measurements.
 
-The old OpenTelemetry/OneCollector reporter and packages are removed. No live adapter is instantiated,
-even with saved consent. Enabled builds are rejected pending schema and event/privacy policy approval.
+The old OpenTelemetry/OneCollector reporter and packages are removed. Default builds have no live adapter;
+an explicitly approved SDK-enabled build may instantiate it only with saved consent.
 The injectable service factory requires accepted consent, valid build approval/channel/key, and no
 `XMAT_SUPPRESS_TELEMETRY` override before reading metadata or constructing a reporter.
 Revocation closes the service's send gate and clears pending operation registrations and counters without
@@ -273,7 +273,7 @@ may flush queued events and emit health events. Cancellation and purge are not p
 `TelemetryTraffic` exclusion is acquired before SDK activation and retained through teardown,
 including Required SDK health events and WinINet/system-proxy traffic.
 
-In this implementation, environment metadata is read only for an explicitly requested local sample run.
+Environment metadata is read for an explicitly requested local sample or an opted-in live session.
 The host sandbox can be included; XMAT does not read or generate a persistent machine/installation ID.
 SDK-added metadata requires separate review. Field and event names are case-sensitive. Default builds
 restore no internal telemetry packages.
