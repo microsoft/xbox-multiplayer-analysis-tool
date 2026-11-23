@@ -90,13 +90,46 @@ namespace XMAT.Tests
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
+        public void ReconfirmingAnExistingChoiceDoesNotRestartOrWrite(bool accepted)
+        {
+            var calls = new List<string>();
+            var preferences = new TelemetryConsentPreferences(
+                new(() => accepted ? 1 : 0, _ => calls.Add("Write"), _ => { }),
+                () => calls.Add("Stop"), () => calls.Add("Start"));
+
+            Assert.True(preferences.Apply(accepted));
+            Assert.Equal(accepted ? TelemetryConsentState.Accepted : TelemetryConsentState.Declined, preferences.State);
+            Assert.Empty(calls);
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void InvalidOrUnreadablePreferencesStillPersistExplicitChoices(bool unreadable, bool accepted)
+        {
+            var calls = new List<string>();
+            var preferences = new TelemetryConsentPreferences(
+                new(() => unreadable ? throw new IOException() : "invalid",
+                    value => calls.Add($"Write{value}"), _ => { }),
+                () => calls.Add("Stop"), () => calls.Add("Start"));
+
+            Assert.True(preferences.Apply(accepted));
+            Assert.Equal(accepted ? TelemetryConsentState.Accepted : TelemetryConsentState.Declined, preferences.State);
+            Assert.Equal<string>(accepted ? ["Stop", "Write1", "Start"] : ["Stop", "Write0"], calls);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
         public void FailedPreferenceWriteStopsCollectionAndCannotOptIn(bool accepted)
         {
             var stops = 0;
             var starts = 0;
             List<string> diagnostics = [];
             var preferences = new TelemetryConsentPreferences(
-                new(() => 1, _ => throw new UnauthorizedAccessException("secret"), diagnostics.Add),
+                new(() => accepted ? 0 : 1, _ => throw new UnauthorizedAccessException("secret"), diagnostics.Add),
                 () => stops++, () => starts++);
             Assert.False(preferences.Apply(accepted));
             Assert.Equal(TelemetryConsentState.Unreadable, preferences.State);

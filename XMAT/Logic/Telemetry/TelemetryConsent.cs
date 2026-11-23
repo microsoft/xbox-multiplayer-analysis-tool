@@ -106,7 +106,9 @@ namespace XMAT.Telemetry
         {
             lock (_gate)
             {
-                if (!accepted.HasValue)
+                if (!accepted.HasValue ||
+                    (accepted.Value && _state == TelemetryConsentState.Accepted) ||
+                    (!accepted.Value && _state == TelemetryConsentState.Declined))
                 {
                     return true;
                 }
