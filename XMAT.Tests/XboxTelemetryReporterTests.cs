@@ -16,18 +16,20 @@ namespace XMAT.Tests
         private const string Collector = "mobile.events.data.microsoft.com";
 
         [Fact]
-        public void ConsentGatesActivationAndRevocationStopsNewEventsWhileAllowingShutdown()
+        public void ConsentTransitionsReuseClientWithoutStoppingQueuedDelivery()
         {
             var client = new FakeClient();
             var creations = 0;
-            ITelemetryReporter MakeReporter(TelemetryConfiguration _, IReadOnlyList<KeyValuePair<string, object>> __) =>
+            using var owner = new LiveTelemetryReporterOwner(_ =>
                 XboxTelemetryReporter.Create(() =>
                 {
                     creations++;
                     Assert.True(TelemetryTraffic.IsExcluded(Collector, 443));
                     return client;
-                }, (item, _) => item.Kind.ToString());
-            var config = new TelemetryConfiguration(true, true, "test-key", TelemetryBuildChannel.Test);
+                }, (item, _) => item.Kind.ToString()));
+            ITelemetryReporter MakeReporter(TelemetryConfiguration _, IReadOnlyList<KeyValuePair<string, object>> __) =>
+                owner.GetOrCreate([]);
+            var config = new TelemetryConfiguration(TelemetryBuildChannel.Test);
             using (var declined = XmatTelemetryService.Create(config, _ => [], MakeReporter, _ => { },
                 TelemetryConsentState.Declined))
             {
@@ -43,7 +45,17 @@ namespace XMAT.Tests
             accepted.Dispose();
 
             Assert.Equal(1, creations);
-            Assert.Equal(["AppLaunched", "Shutdown", "Dispose"], client.Calls);
+            Assert.Equal(["AppLaunched"], client.Calls);
+            Assert.True(TelemetryTraffic.IsExcluded(Collector, 443));
+
+            var resumed = XmatTelemetryService.Create(config, _ => [], MakeReporter, _ => { },
+                TelemetryConsentState.Accepted);
+            resumed.Track(new(TelemetryEventKind.AppReady));
+            Assert.Equal(1, creations);
+            Assert.Equal(["AppLaunched", "AppReady"], client.Calls);
+            resumed.Revoke();
+            owner.Dispose();
+            Assert.Equal(["AppLaunched", "AppReady", "Shutdown", "Dispose"], client.Calls);
             Assert.False(TelemetryTraffic.IsExcluded(Collector, 443));
         }
 
@@ -106,7 +118,7 @@ namespace XMAT.Tests
         public void AcceptedServiceSubmitsEveryGeneratedEventWithTestChannel()
         {
             var client = new FakeClient();
-            var config = new TelemetryConfiguration(true, true, "test-key", TelemetryBuildChannel.Test);
+            var config = new TelemetryConfiguration(TelemetryBuildChannel.Test);
             using var service = XmatTelemetryService.Create(config, channel =>
             [
                 new("ext.app.ver", "0.2"),

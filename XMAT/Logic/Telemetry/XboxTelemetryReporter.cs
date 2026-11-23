@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace XMAT.Telemetry
@@ -11,6 +12,35 @@ namespace XMAT.Telemetry
     {
         void TraceEvent(string payload);
         void Shutdown();
+    }
+
+    internal sealed class LiveTelemetryReporterOwner(
+        Func<IReadOnlyList<KeyValuePair<string, object>>, ITelemetryReporter> create) : IDisposable
+    {
+        private readonly object _gate = new();
+        private ITelemetryReporter _reporter;
+        private bool _disposed;
+
+        internal ITelemetryReporter GetOrCreate(IReadOnlyList<KeyValuePair<string, object>> environment)
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _reporter ??= create(environment);
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                if (!_disposed)
+                {
+                    _disposed = true;
+                    _reporter?.Dispose();
+                }
+            }
+        }
     }
 
     internal sealed class XboxTelemetryReporter : ITelemetryReporter
@@ -43,7 +73,7 @@ namespace XMAT.Telemetry
             _client.TraceEvent(_serialize(item, sessionId));
         }
 
-        public void Revoke() => Dispose();
+        public void Revoke() { }
 
         public void Dispose()
         {

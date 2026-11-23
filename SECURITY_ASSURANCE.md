@@ -157,9 +157,8 @@ The following security-sensitive operations require explicit user action:
 - The application is a **local desktop tool**, not a network service. It has no
   listening ports except the explicitly user-activated MITM proxy.
 - Product telemetry requires explicit per-user consent (first-run prompt and Options preference),
-  separately from build/release approval. Missing/corrupt/unreadable consent fails closed, and
-  pre-consent usage is not buffered. Default builds do not export; explicitly approved SDK-enabled
-  builds can export after opt-in. The SDK can emit Required health events and may add device or
+  Missing/corrupt/unreadable consent fails closed, and pre-consent usage is not buffered.
+  Ordinary builds include the SDK and can export after opt-in. The SDK can emit Required health events and may add device or
   installation identifiers whose desktop behavior is not yet confirmed. Opt-out stops new XMAT submissions;
   SDK events already queued or dispatched may still be uploaded.
   Explicit local samples write only to the requested file; see [TELEMETRY.md](TELEMETRY.md).

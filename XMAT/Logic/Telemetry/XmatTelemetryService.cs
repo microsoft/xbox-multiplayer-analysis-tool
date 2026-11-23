@@ -32,11 +32,18 @@ namespace XMAT.Telemetry
         private readonly object _operationGate = new();
         private readonly object _sendGate = new();
         private static bool _sampling;
+        private static Action _liveFailure;
+        private static readonly LiveTelemetryReporterOwner LiveReporter = new(environment =>
+        {
+            var payload = new XboxTelemetryPayload(environment);
+            return XboxTelemetryReporter.Create(XboxSdkClient.Create, payload.Serialize);
+        });
         private static readonly Lazy<TelemetryConsentPreferences> ConsentPreferences = new(() => new(
             TelemetryConsentStore.ForCurrentUser(Diagnose), StopConsentedSession, StartConsentedSession));
 
         internal static XmatTelemetryService Current { get; private set; } = new(null, Diagnose);
         internal static TelemetryConsentPreferences Consent => ConsentPreferences.Value;
+        internal static bool IsSampling => _sampling;
         internal bool IsEnabled => _reporter != null && Volatile.Read(ref _disposed) == 0;
         internal Guid SessionId { get; } = Guid.NewGuid();
 
@@ -46,18 +53,19 @@ namespace XMAT.Telemetry
             _diagnose = diagnose;
         }
 
-        internal static void Initialize(string[] args = null, Action sampleFailure = null)
+        internal static void Initialize(string[] args = null, Action sampleFailure = null, Action liveFailure = null)
         {
             args ??= [];
+            _liveFailure = liveFailure;
             var sampleRequested = Array.IndexOf(args, "--telemetry-sample") >= 0;
+            _sampling = sampleRequested;
             try
             {
                 var configuration = TelemetryConfiguration.FromAssembly();
                 var samplePath = LocalTelemetrySampleReporter.SamplePath(args);
-                _sampling = samplePath != null;
                 Current = samplePath == null
                     ? CreateLive(configuration)
-                    : CreateSample(configuration, samplePath,
+                    : CreateSample(samplePath,
                         channel => TelemetryEnvironmentProvider.Read(channel, Diagnose), Diagnose);
                 Current.Track(new(TelemetryEventKind.AppLaunched));
             }
@@ -68,25 +76,23 @@ namespace XMAT.Telemetry
                 {
                     sampleFailure?.Invoke();
                 }
+                else
+                {
+                    liveFailure?.Invoke();
+                }
             }
         }
 
         private static XmatTelemetryService CreateLive(TelemetryConfiguration configuration)
         {
-#if XMAT_TELEMETRY_SDK
-            return Create(configuration, channel => TelemetryEnvironmentProvider.Read(channel, Diagnose),
-                (config, environment) =>
-                {
-                    var payload = new XboxTelemetryPayload(environment);
-                    return XboxTelemetryReporter.Create(() => XboxSdkClient.Create(config.InstrumentationKey), payload.Serialize);
-                }, Diagnose, Consent.State);
-#else
-            if (configuration.Enabled)
+            var consent = Consent.State;
+            var service = Create(configuration, channel => TelemetryEnvironmentProvider.Read(channel, Diagnose),
+                (_, environment) => LiveReporter.GetOrCreate(environment), Diagnose, consent);
+            if (consent == TelemetryConsentState.Accepted && !IsSuppressed && !service.IsEnabled)
             {
-                Diagnose("LiveAdapterUnavailable");
+                _liveFailure?.Invoke();
             }
-            return new(null, Diagnose);
-#endif
+            return service;
         }
 
         private static void StopConsentedSession()
@@ -97,23 +103,27 @@ namespace XMAT.Telemetry
             }
         }
 
-        private static void StartConsentedSession()
+        internal static void StartConsentedSession()
         {
             if (!_sampling)
             {
-                Current = CreateLive(TelemetryConfiguration.FromAssembly());
-                Current.Track(new(TelemetryEventKind.AppLaunched));
+                try
+                {
+                    Current = CreateLive(TelemetryConfiguration.FromAssembly());
+                    Current.Track(new(TelemetryEventKind.AppLaunched));
+                }
+                catch (Exception)
+                {
+                    Diagnose("InitializationFailed");
+                    _liveFailure?.Invoke();
+                }
             }
         }
 
-        internal static XmatTelemetryService CreateSample(TelemetryConfiguration configuration, string samplePath,
+        internal static XmatTelemetryService CreateSample(string samplePath,
             Func<TelemetryBuildChannel, IReadOnlyList<KeyValuePair<string, object>>> environment,
             Action<string> diagnose)
         {
-            if (configuration.Enabled)
-            {
-                throw new InvalidOperationException("Local sampling requires a non-exporting build.");
-            }
             if (IsSuppressed)
             {
                 diagnose("LocalSampleSuppressed");
@@ -128,12 +138,7 @@ namespace XMAT.Telemetry
             Func<TelemetryConfiguration, IReadOnlyList<KeyValuePair<string, object>>, ITelemetryReporter> reporter,
             Action<string> diagnose, TelemetryConsentState consent = TelemetryConsentState.Missing)
         {
-            if (!configuration.IsValid)
-            {
-                diagnose("InvalidConfiguration");
-                return new(null, diagnose);
-            }
-            if (!configuration.Enabled || consent != TelemetryConsentState.Accepted || IsSuppressed)
+            if (consent != TelemetryConsentState.Accepted || IsSuppressed)
             {
                 return new(null, diagnose);
             }
@@ -150,6 +155,25 @@ namespace XMAT.Telemetry
 
         internal static bool IsSuppressed =>
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XMAT_SUPPRESS_TELEMETRY"));
+
+        internal static void Shutdown()
+        {
+            try
+            {
+                Current.Dispose();
+            }
+            finally
+            {
+                try
+                {
+                    LiveReporter.Dispose();
+                }
+                catch (Exception)
+                {
+                    Diagnose("ShutdownFailed");
+                }
+            }
+        }
 
         internal void Track(TelemetryEvent item)
         {

@@ -112,7 +112,7 @@ namespace XMAT.Tests
         [InlineData("Unreadable")]
         public void NoMetadataClientOrBufferedUsageBeforeConsent(string state)
         {
-            using var service = XmatTelemetryService.Create(new(true, true, "test-key", TelemetryBuildChannel.Test),
+            using var service = XmatTelemetryService.Create(new(TelemetryBuildChannel.Test),
                 _ => throw new InvalidOperationException("Metadata read before consent"),
                 (_, _) => throw new InvalidOperationException("Client created before consent"),
                 _ => throw new InvalidOperationException("Unexpected diagnostic"), Enum.Parse<TelemetryConsentState>(state));
@@ -128,29 +128,30 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void AcceptedConsentCreatesClientAndFakeReporterRevocationDiscardsPendingEvents()
+        public void AcceptedConsentCreatesReporterAndRevocationStopsNewEvents()
         {
             var reporter = new QueueReporter();
-            using var service = XmatTelemetryService.Create(new(true, true, "test-key", TelemetryBuildChannel.Test),
+            using var service = XmatTelemetryService.Create(new(TelemetryBuildChannel.Test),
                 _ => [], (_, _) => reporter, _ => { }, TelemetryConsentState.Accepted);
             Assert.True(service.IsEnabled);
             using var operation = service.Begin(TelemetryOperationKind.Capture, TelemetryFeature.WebProxyCapture);
             service.ScriptFailure(TelemetryFeature.ResponseScript);
             Assert.NotEmpty(reporter.Pending);
             service.Revoke();
+            var pending = reporter.Pending.Count;
             service.Revoke();
             operation.ItemReceived();
             operation.Complete();
             service.Ready();
             service.Track(new(TelemetryEventKind.Counter));
             service.Dispose();
-            Assert.Empty(reporter.Pending);
+            Assert.Equal(pending, reporter.Pending.Count);
             Assert.Equal(1, reporter.RevokeCount);
             Assert.Equal(0, reporter.FlushCount);
-            using var next = XmatTelemetryService.Create(new(true, true, "test-key", TelemetryBuildChannel.Test),
+            using var next = XmatTelemetryService.Create(new(TelemetryBuildChannel.Test),
                 _ => [], (_, _) => reporter, _ => { }, TelemetryConsentState.Declined);
             Assert.False(next.IsEnabled);
-            Assert.Empty(reporter.Pending);
+            Assert.Equal(pending, reporter.Pending.Count);
         }
 
         private sealed class QueueReporter : ITelemetryReporter
@@ -162,7 +163,6 @@ namespace XMAT.Tests
             public void Revoke()
             {
                 RevokeCount++;
-                Pending.Clear();
             }
             public void Dispose() => FlushCount++;
         }

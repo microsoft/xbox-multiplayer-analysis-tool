@@ -15,11 +15,11 @@ PlayFab, and other network traffic from PCs and Xbox development consoles.
 
 ## Product Telemetry
 
-Product telemetry requires explicit per-user opt-in, separately from release approval. On first GUI run,
+Product telemetry requires explicit per-user opt-in. On first GUI run,
 XMAT asks when no consent value is saved. Choose Yes to opt in or No to decline; Cancel does not opt in.
 Change either choice under **Options > Product Telemetry**. Missing, invalid, or unreadable consent is off.
-Default and CI builds do not send telemetry. An explicitly approved, SDK-enabled build can send after
-opt-in. No pre-consent usage is buffered for upload. Opting out stops new XMAT events;
+Ordinary builds include the telemetry SDK and can send after opt-in. No pre-consent usage is buffered
+for upload. Opting out stops new XMAT events;
 previously queued SDK events may still be uploaded.
 
 The local event contract includes application/OS version, build audience, random per-session and per-operation

@@ -38,6 +38,9 @@ namespace XMAT
             XmatTelemetryService.Initialize(e.Args, () => MessageBox.Show(
                 Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_MESSAGE"),
                 Localization.GetLocalizedString("TELEMETRY_SAMPLE_FAILED_TITLE"),
+                MessageBoxButton.OK, MessageBoxImage.Error), () => MessageBox.Show(
+                Localization.GetLocalizedString("TELEMETRY_INITIALIZATION_FAILED_MESSAGE"),
+                Localization.GetLocalizedString("TELEMETRY_INITIALIZATION_FAILED_TITLE"),
                 MessageBoxButton.OK, MessageBoxImage.Error));
             InitializeDataLayer();
             InitializeCaptureMethods();
@@ -285,7 +288,7 @@ namespace XMAT
             }
             finally
             {
-                XmatTelemetryService.Current.Dispose();
+                XmatTelemetryService.Shutdown();
             }
         }
 

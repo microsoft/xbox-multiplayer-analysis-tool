@@ -23,12 +23,12 @@ Any new functionality added, must include appropriate testing alongside the new 
 
 Telemetry is XMAT-owned code in `XMAT\Logic\Telemetry`, behind `ITelemetryReporter`.
 The obsolete OpenTelemetry/OneCollector exporter and its dependencies have been removed.
-The approved migration target is `Microsoft.Xbox.Telemetry` (the team's 1DS wrapper), with registry-generated
-C# payloads. Approved SDK-enabled builds may export after explicit user consent. No internal package/feed
-is needed by public/default/CI builds.
+Ordinary builds include `Microsoft.Xbox.Telemetry` (the team's 1DS wrapper) and registry-generated C#
+payloads, and may export only after explicit user consent. Restoring requires authorized access to the
+internal Xbox telemetry NuGet feed. Public GitHub Actions and external contributors currently lack a
+confirmed noninteractive feed-access and binary-redistribution arrangement; CI restore may fail until
+the feed owners provide one. CI does not publish binaries pending that resolution.
 
-Local, PR, and CI builds default to `EnableTelemetry=false`; a Release configuration alone does not enable
-export. Enabling telemetry requires approval, the SDK, a non-local channel, and a valid instrumentation key.
 Focused tests use injected registry
 access and fake reporters; never instantiate an emitting SDK client or modify the user's registry in tests:
 
@@ -39,18 +39,19 @@ dotnet test XMAT.Tests\XMAT.Tests.csproj -p:Platform=x64 --filter FullyQualified
 The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is not a prerequisite.
 Do not commit keys/credentials or send development events to production. Registry schemas, collection policy,
 sandbox metadata, SDK-added fields, retention/access rules, and backend enrichment still require review.
-Build/release approval never substitutes for the user's explicit consent.
+The SDK supplies its own default ingestion key; do not copy it into source or logs.
 
 The GUI saves consent as HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool\TelemetryConsent`
 (DWORD 1 = accept, 0 = decline). Missing, invalid, and unreadable values are off. First run prompts only
 when the value is absent; Options > Product Telemetry permits both changes later. Closing/cancelling does
 not accept. Failed registry writes stop collection for the session and show a warning.
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value suppresses telemetry, including local sampling.
-Non-exporting ordinary runs read only consent, not sandbox metadata. No pre-consent events are retained.
-Opt-out stops new XMAT submissions; previously queued or dispatched SDK events may still be uploaded.
+Before consent ordinary runs read only consent, not sandbox metadata. No pre-consent events are retained.
+Opt-out stops new XMAT submissions without shutting down the SDK; previously queued or dispatched SDK
+events may still be uploaded. The existing client is reused on later opt-in and shut down on application exit.
 
 The full schema and app sample-generation commands are in [TELEMETRY.md](TELEMETRY.md). Use
-`--telemetry-sample` with a new absolute output filename in a non-exporting build to inspect real
+`--telemetry-sample` with a new absolute output filename to inspect real
 application events without any collector key or network export. Local samples can contain the host
 sandbox; sanitize it before sharing.
 

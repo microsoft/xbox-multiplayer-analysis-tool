@@ -5,13 +5,12 @@ Names and enum values are
 case-sensitive. The source of truth is `XMAT\Logic\Telemetry\TelemetryEvents.cs`, with common metadata
 in `TelemetryEnvironmentProvider.cs`.
 
-Default builds do not export telemetry. An explicitly approved SDK-enabled build can export after
-user opt-in using `Microsoft.Xbox.Telemetry`. The obsolete OpenTelemetry/OneCollector exporter has been
+Ordinary builds include `Microsoft.Xbox.Telemetry` and can export after user opt-in. The obsolete OpenTelemetry/OneCollector exporter has been
 removed. An explicitly requested
 **local sample run** records the same application events to a local file without creating a collector
 reporter or requiring a collector key.
 
-## Explicit consent and release gates
+## Explicit consent
 
 The first GUI run prompts when HKCU `Software\Microsoft\Xbox Multiplayer Analysis Tool` has no
 `TelemetryConsent` value. Yes explicitly opts in (DWORD `1`); No explicitly declines (DWORD `0`).
@@ -20,13 +19,13 @@ current preference. Invalid types/values and registry read failures are not cons
 through Options. Failed writes revoke the running session, fail closed, and show a warning rather than
 claiming the preference was saved. No tests write the actual user's registry.
 
-Consent is independent of `EnableTelemetry`, `TelemetryApproved`, and build channel approval.
 `XMAT_SUPPRESS_TELEMETRY` set to any nonempty value overrides collection, including local sample mode.
-Neither build approval nor Optional-event SDK settings replace consent. Before opt-in there is no SDK,
+Optional-event SDK settings do not replace consent. Before opt-in there is no SDK client,
 health/lifecycle emission, replay, device-metadata read, or event buffering for later upload.
 Opt-out stops new XMAT event submission, clears the service session and emits no XMAT shutdown summary.
-Already queued SDK events may still be uploaded during teardown or later; cancellation and purge are not
-promised. A later opt-in starts a fresh service session and cannot resume old operations.
+The SDK client stays alive without changing its optional-data policy; already queued SDK events may still
+be uploaded. Cancellation and purge are not promised. A later opt-in starts a fresh service session using
+the same client and cannot resume old operations. The client shuts down on application exit.
 
 Local file sampling is a separately requested, non-networked development action, not permission to
 upload. Its explicit command may read sandbox metadata and record local events without
@@ -38,12 +37,13 @@ The team authorized its existing Xbox.JS iKey; a dedicated XMAT key is **not** r
 `Microsoft.Xbox.Telemetry` has a supported C#/WPF path; emitting API and key choice are resolved.
 No live SDK instance or production event was used to develop this change.
 
-The conditional SDK build uses `Microsoft.Xbox.Telemetry` `0.8.0.261118001`,
+Every ordinary build uses `Microsoft.Xbox.Telemetry` `0.8.0.261118001`,
 `Microsoft.Windows.CsWinRT` `2.3.1` and `Microsoft.VCRTForwarders.140` `1.0.7`; it projects the
-package WinMD and includes the native DLL, PRI, CRT forwarders and activation manifest. Set
-`BuildTelemetrySdk=true` and provide an authorized internal package source to compile the integration.
-That option alone does not enable collection. SDK builds compile against Windows 10 19041 metadata
-while retaining a Windows 10 17763 runtime minimum. Default builds need no internal package.
+package WinMD and includes the native DLL, PRI, CRT forwarders and activation manifest. Restore requires
+an authorized internal package source. Public GitHub CI and external contributors have no confirmed
+feed access or redistribution arrangement; CI restore may fail until the feed owners resolve this.
+Builds compile against Windows 10 19041 metadata while retaining a Windows 10 17763 runtime minimum.
+The SDK's built-in default ingestion key is used; no key is supplied in XMAT source or build properties.
 
 The adapter admits unknown events with `PassThroughInferred` (Optional) and enables Optional data
 only after XMAT consent. It never uses `AllowEventNamespace`. SDK initialization and teardown may emit
@@ -404,17 +404,16 @@ replacement. Navigation IDs are used locally only and are not added to the expor
 ## Generate samples from the app without a collector
 
 Prerequisites: Windows, the project's .NET 10 SDK, and a source checkout. Run these commands from the
-repository root in PowerShell. The sample flag is available in **non-exporting builds only**.
+repository root in PowerShell. An authorized internal package source is required to build.
 
 ```powershell
-dotnet build XMAT\XboxMultiplayerAnalysisTool.csproj -c Debug -p:Platform=x64 `
-  -p:EnableTelemetry=false -p:TelemetryApproved=false
+dotnet build XMAT\XboxMultiplayerAnalysisTool.csproj -c Debug -p:Platform=x64
 if ($LASTEXITCODE -ne 0) { throw "XMAT build failed." }
 
 $sampleDirectory = Join-Path $env:TEMP "XMAT-Telemetry-Samples"
 New-Item -ItemType Directory -Path $sampleDirectory -Force | Out-Null
 $sampleFile = Join-Path $sampleDirectory ("xmat-" + [Guid]::NewGuid().ToString("N") + ".jsonl")
-$app = (Resolve-Path "XMAT\bin\x64\Debug\net10.0-windows10.0.17763.0\win-x64\XboxMultiplayerAnalysisTool.exe").Path
+$app = (Resolve-Path "XMAT\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\XboxMultiplayerAnalysisTool.exe").Path
 
 $process = Start-Process -FilePath $app `
   -ArgumentList "--telemetry-sample `"$sampleFile`"" -PassThru
@@ -424,7 +423,7 @@ Write-Output "Samples: $sampleFile"
 This records **real events from that app launch**, not a fabricated event for every taxonomy value.
 The output directory must already exist and be writable; the full output filename must be new.
 Existing files are never overwritten or appended. An invalid request displays a failure dialog and
-does not fall back to collector export. A telemetry-enabled build cannot use this flag.
+does not fall back to collector export.
 Normal first-run certificate/setup prompts still apply; review them as you would for an ordinary XMAT run.
 
 The telemetry path creates no HTTP client/collector and needs no instrumentation key. Other XMAT
@@ -508,7 +507,7 @@ The event attributes are produced by the exact same `TelemetryEvent.Attributes` 
 Run consent, local serialization, and service-boundary tests without any network exporter:
 
 ```powershell
-dotnet test XMAT.Tests\XMAT.Tests.csproj -c Debug -p:Platform=x64 -p:EnableTelemetry=false `
+dotnet test XMAT.Tests\XMAT.Tests.csproj -c Debug -p:Platform=x64 `
   --filter FullyQualifiedName~Telemetry `
   --logger "console;verbosity=detailed"
 ```
@@ -528,16 +527,16 @@ be local-only and must cover SDK-added fields as well as XMAT's explicit attribu
 - Initialization errors display a failure dialog. Runtime write/drop/shutdown failures produce sanitized
   `XMAT telemetry:` trace messages (`LocalSampleWriteFailed`, `LocalSampleDropped`,
   `LocalSampleShutdownTimedOut`); inspect debugger trace output if an expected line is missing.
-- Running a non-exporting build without `--telemetry-sample` restores ordinary non-exporting behavior; nothing
-  about sample mode is saved in user preferences (upload consent is separate). Stop samples by closing
+- Running without `--telemetry-sample` restores ordinary consent-controlled behavior; nothing about sample
+  mode is saved in user preferences (upload consent is separate). Stop samples by closing
   that app launch. Delete only the specific sample file you generated when no longer needed.
 
 ## Validating on the backend
 
-Run an approved `EnableTelemetry=true`, `TelemetryApproved=true`, `BuildTelemetrySdk=true` build with
-`TelemetryBuildChannel=Test` and a valid instrumentation key. Choose **Yes** on first-run consent or
-under **Options > Product Telemetry**. Default builds remain non-exporting. `Test` labels events; it does
-not change the destination. Never commit the key or share a build containing it.
+Build with `-p:TelemetryBuildChannel=Test` for backend validation. Choose **Yes** on first-run consent or
+under **Options > Product Telemetry**. Ordinary builds use `Public` unless another channel is specified.
+`Test` labels events; it does not change the destination. Do not copy the SDK's default key into source or logs,
+or distribute binaries until the feed owners confirm redistribution terms.
 
 The 11 business event names are `Microsoft.Gaming.Tooling.XMAT.` followed by `AppLaunched`, `AppReady`,
 `AppClosed`, `FeatureUsed`, `OperationStarted`, `OperationCompleted`, `OperationStage`,
@@ -554,7 +553,8 @@ business-event query in that file is a placeholder until the team confirms its t
 
 For local diagnostics, capture Windows debug output with a debugger or Sysinternals DebugView and filter
 for `XMAT telemetry:`. `InitializationFailed` indicates SDK/environment initialization failed;
-`InvalidConfiguration`, `SubmissionFailed`, and `RevocationFailed` indicate their respective failures.
+`SubmissionFailed` and `RevocationFailed` indicate their respective failures. Initialization failure also
+displays a localized error dialog.
 These sanitized codes omit exception text and do not prove delivery. The SDK may emit Required health
 events at initialization and teardown, and may add device or installation IDs; the SDK team has not
 yet confirmed the desktop identity fields or their persistence.

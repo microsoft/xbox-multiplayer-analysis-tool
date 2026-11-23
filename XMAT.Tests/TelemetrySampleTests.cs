@@ -6,9 +6,11 @@ using System.IO;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
 using XMAT.Telemetry;
+using XMAT.Tests.Proxy;
 
 namespace XMAT.Tests
 {
+    [Collection(IsolatedProxyTests.Name)]
     public sealed class TelemetrySampleTests : IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), $"xmat-sample-test-{Guid.NewGuid():N}");
@@ -32,20 +34,22 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void ExportingBuildCannotStartLocalSamplesOrReadSampleMetadata()
+        public void InvalidSampleRequestCannotFallBackToLiveTelemetryOnOptIn()
         {
-            Assert.Throws<InvalidOperationException>(() => XmatTelemetryService.CreateSample(
-                new(true, true, "test-key", TelemetryBuildChannel.Test), SampleFile,
-                _ => throw new InvalidOperationException("Metadata must not be read."), _ => { }));
-            Assert.False(File.Exists(SampleFile));
+            var failures = 0;
+            XmatTelemetryService.Initialize(["--telemetry-sample"], () => failures++,
+                () => throw new InvalidOperationException("Live telemetry must not start."));
+            Assert.Equal(1, failures);
+            Assert.True(XmatTelemetryService.IsSampling);
+            XmatTelemetryService.StartConsentedSession();
+            Assert.False(XmatTelemetryService.Current.IsEnabled);
         }
 
         [Fact]
         public void LocalSamplesNeedNoApprovalKeyOrNetworkReporterAndPreserveTypedAttributes()
         {
             List<string> diagnostics = [];
-            using (var service = XmatTelemetryService.CreateSample(
-                new(false, false, "", TelemetryBuildChannel.Local), SampleFile, channel =>
+            using (var service = XmatTelemetryService.CreateSample(SampleFile, channel =>
                 {
                     Assert.Equal(TelemetryBuildChannel.Local, channel);
                     return

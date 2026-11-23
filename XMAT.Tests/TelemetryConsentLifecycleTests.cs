@@ -22,15 +22,15 @@ namespace XMAT.Tests
             try
             {
                 Environment.SetEnvironmentVariable("XMAT_SUPPRESS_TELEMETRY", value);
-                using var service = XmatTelemetryService.Create(new(true, true, "test-key", TelemetryBuildChannel.Test),
+                using var service = XmatTelemetryService.Create(new(TelemetryBuildChannel.Test),
                     _ => throw new InvalidOperationException("Metadata must not be read"),
                     (_, _) => throw new InvalidOperationException("Client must not be constructed"),
                     _ => throw new InvalidOperationException("Unexpected diagnostic"), TelemetryConsentState.Accepted);
                 Assert.False(service.IsEnabled);
                 List<string> diagnostics = [];
                 var path = Path.Combine(Path.GetTempPath(), $"xmat-suppressed-{Guid.NewGuid():N}.jsonl");
-                using var sample = XmatTelemetryService.CreateSample(new(false, false, "", TelemetryBuildChannel.Local),
-                    path, _ => throw new InvalidOperationException("Sample metadata must not be read"), diagnostics.Add);
+                using var sample = XmatTelemetryService.CreateSample(path,
+                    _ => throw new InvalidOperationException("Sample metadata must not be read"), diagnostics.Add);
                 Assert.False(sample.IsEnabled);
                 Assert.False(File.Exists(path));
                 Assert.Equal(["LocalSampleSuppressed"], diagnostics);
@@ -41,22 +41,8 @@ namespace XMAT.Tests
             }
         }
 
-        [Theory]
-        [InlineData(false, false, "Local")]
-        [InlineData(true, false, "Test")]
-        [InlineData(true, true, "Local")]
-        public void AcceptedConsentCannotOverrideBuildGates(bool enabled, bool approved, string channel)
-        {
-            using var service = XmatTelemetryService.Create(new(enabled, approved, "test-key",
-                Enum.Parse<TelemetryBuildChannel>(channel)),
-                _ => throw new InvalidOperationException("Metadata must not be read"),
-                (_, _) => throw new InvalidOperationException("Client must not be constructed"),
-                _ => { }, TelemetryConsentState.Accepted);
-            Assert.False(service.IsEnabled);
-        }
-
         [Fact]
-        public void RevocationWaitsForInFlightSubmissionThenDiscardsWithoutFlush()
+        public void RevocationWaitsForInFlightSubmissionAndStopsNewEvents()
         {
             using var entered = new ManualResetEventSlim();
             using var release = new ManualResetEventSlim();

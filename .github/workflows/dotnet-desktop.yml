@@ -20,8 +20,6 @@ jobs:
 
     env:
       Solution_Name: XboxMultiplayerAnalysisTool.sln
-      EnableTelemetry: 'false'
-      TelemetryApproved: 'false'
 
     steps:
     - name: Harden Runner
@@ -40,16 +38,14 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
-    # Restore the solution
+    # This restore requires access to the internal Xbox telemetry package feed.
     - name: Restore the application
       run: dotnet restore $env:Solution_Name
       
-    # Public CI must not restore/activate internal telemetry, regardless of saved user consent.
     - name: Build XMAT
-      run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore -p:EnableTelemetry=false -p:TelemetryApproved=false
+      run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore
       env:
         Configuration: ${{ matrix.configuration }}
-
     # Run tests with code coverage
     - name: Run Tests with Coverage
       run: >-
@@ -62,28 +58,6 @@ jobs:
         --results-directory ./TestResults
       env:
         Configuration: ${{ matrix.configuration }}
-
-    - name: Verify telemetry build gates
-      shell: pwsh
-      run: |
-        $base = @('XMAT\XboxMultiplayerAnalysisTool.csproj', '-t:ValidateTelemetryConfiguration', '-p:Platform=x64',
-          '-p:EnableTelemetry=true', '-p:TelemetryBuildChannel=Test')
-        $cases = @(
-          @{ Args = @('-p:TelemetryApproved=false', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=test-key'); Error = 'TelemetryApproved=true' },
-          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true'); Error = 'valid TelemetryInstrumentationKey' },
-          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=invalid'); Error = 'valid TelemetryInstrumentationKey' },
-          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=false', '-p:TelemetryInstrumentationKey=test-key'); Error = 'BuildTelemetrySdk=true' },
-          @{ Args = @('-p:TelemetryApproved=true', '-p:BuildTelemetrySdk=true', '-p:TelemetryInstrumentationKey=test-key', '-p:TelemetryBuildChannel=Local'); Error = 'TelemetryBuildChannel=Public' }
-        )
-        foreach ($case in $cases) {
-          $output = dotnet msbuild @base @($case.Args) 2>&1 | Out-String
-          if ($LASTEXITCODE -eq 0 -or -not $output.Contains($case.Error)) {
-            throw "Telemetry build gate failed: $output"
-          }
-        }
-        dotnet msbuild @base -p:TelemetryApproved=true -p:BuildTelemetrySdk=true -p:TelemetryInstrumentationKey=test-key
-        if ($LASTEXITCODE -ne 0) { throw 'Approved telemetry build configuration was rejected.' }
-        exit 0
 
     # Generate coverage report
     - name: Install ReportGenerator
@@ -113,8 +87,8 @@ jobs:
     # Ship the command line (xmat.exe) next to the GUI and check that it runs from the artifact folder
     - name: Add xmat.exe to the build artifact
       run: |
-        $gui = "XMAT\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
-        $cli = "XMAT.Cli\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        $gui = "XMAT\bin\x64\$env:Configuration\net10.0-windows10.0.19041.0\win-x64"
+        $cli = "XMAT.Cli\bin\x64\$env:Configuration\net10.0-windows10.0.19041.0\win-x64"
         foreach ($name in 'xmat.exe', 'xmat.dll', 'xmat.deps.json', 'xmat.runtimeconfig.json', 'xmat.pdb') {
           $source = Join-Path $cli $name
           if ($name -ne 'xmat.pdb' -or (Test-Path -LiteralPath $source)) {
@@ -127,14 +101,5 @@ jobs:
         $doctor = (& $xmat doctor --for analyze) -join "`n" | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'succeeded') { throw "xmat doctor --for analyze failed with exit code $LASTEXITCODE" }
         Write-Host "xmat $($version.version) runs from the artifact folder"
-      env:
-        Configuration: ${{ matrix.configuration }}
-
-    # Upload build artifact
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      with:
-        name: XMAT_CI_Build_${{ env.Configuration }}
-        path: XMAT\bin\x64\${{ env.Configuration }}\net10.0-windows10.0.17763.0\win-x64\
       env:
         Configuration: ${{ matrix.configuration }}

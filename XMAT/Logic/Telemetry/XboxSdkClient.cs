@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-#if XMAT_TELEMETRY_SDK
 using Microsoft.Xbox.Telemetry;
 
 namespace XMAT.Telemetry
@@ -13,9 +12,9 @@ namespace XMAT.Telemetry
 
         private XboxSdkClient(TelemetryClient client) => _client = client;
 
-        internal static XboxSdkClient Create(string ingestionKey)
+        internal static XboxSdkClient Create()
         {
-            var options = new ClientConfigurationOptions { IngestionKey = ingestionKey };
+            var options = new ClientConfigurationOptions { IngestionKey = TelemetryClient.GetDefaultIngestionKey() };
             options.PolicyEngine.UnknownEvents = UnknownEventPolicy.PassThroughInferred;
             options.PolicyEngine.UnknownEventCommonProperties = CommonPropertyBehavior.ExcludeSensitive;
             var client = TelemetryClient.CreateInstance(new TelemetryClientConfiguration(options, null));
@@ -36,4 +35,3 @@ namespace XMAT.Telemetry
         public void Dispose() => _client.Dispose();
     }
 }
-#endif

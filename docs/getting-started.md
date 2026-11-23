@@ -43,7 +43,7 @@ Install the **.NET 10 SDK** on Windows. From the repository root, run:
 ```powershell
 dotnet restore .\XboxMultiplayerAnalysisTool.sln
 dotnet build .\XboxMultiplayerAnalysisTool.sln -c Release --no-restore
-.\XMAT\bin\x64\Release\net10.0-windows10.0.17763.0\win-x64\XboxMultiplayerAnalysisTool.exe
+.\XMAT\bin\x64\Release\net10.0-windows10.0.19041.0\win-x64\XboxMultiplayerAnalysisTool.exe
 ```
 
 Launch the built executable directly rather than using `dotnet run`, which places

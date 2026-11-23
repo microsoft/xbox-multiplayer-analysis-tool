@@ -253,7 +253,7 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 ### Product telemetry
 
 `XMAT\Logic\Telemetry` is part of the application assembly. `XmatTelemetryService` owns the per-launch
-session, fixed feature counters, explicit operation IDs, and consent/build export gates. Individual capture and
+session, fixed feature counters, explicit operation IDs, and a consent export gate. Individual capture and
 analysis operations retain their own timing/context, including simultaneous runs and restored/loaded/imported
 origins. `TelemetryConsentPreferences` reads a per-user HKCU DWORD through `TelemetryConsentStore`.
 Only explicit `1` accepts; absent, invalid, or unreadable values fail closed with sanitized diagnostics.
@@ -263,20 +263,21 @@ failed writes leave the session off and display a localized warning.
 The service retains unfinished operations and finalizes them as cancelled before `SessionSummary`/
 `AppClosed`, so normal exit does not abandon active capture measurements.
 
-The old OpenTelemetry/OneCollector reporter and packages are removed. Default builds have no live adapter;
-an explicitly approved SDK-enabled build may instantiate it only with saved consent.
-The injectable service factory requires accepted consent, valid build approval/channel/key, and no
+The old OpenTelemetry/OneCollector reporter and packages are removed. Ordinary builds include the SDK
+adapter, which may instantiate a client only with saved consent.
+The injectable service factory requires accepted consent and no
 `XMAT_SUPPRESS_TELEMETRY` override before reading metadata or constructing a reporter.
 Revocation closes the service's send gate and clears pending operation registrations and counters without
-emitting XMAT closure/summary events. The SDK reporter shuts down and disposes its client; SDK shutdown
-may flush queued events and emit health events. Cancellation and purge are not promised.
+emitting XMAT closure/summary events. It does not shut down the SDK or alter its optional-data policy.
+The retained client is reused after later opt-in and shut down at application exit; SDK shutdown may flush
+queued events and emit health events. Cancellation and purge are not promised.
 `TelemetryTraffic` exclusion is acquired before SDK activation and retained through teardown,
 including Required SDK health events and WinINet/system-proxy traffic.
 
 Environment metadata is read for an explicitly requested local sample or an opted-in live session.
 The host sandbox can be included; XMAT does not read or generate a persistent machine/installation ID.
-SDK-added metadata requires separate review. Field and event names are case-sensitive. Default builds
-restore no internal telemetry packages.
+SDK-added metadata requires separate review. Field and event names are case-sensitive. Ordinary builds
+require an internal telemetry package feed.
 
 Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
 interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.
@@ -287,7 +288,7 @@ Statistics navigation uses WebView2 IDs for local correlation; visible inspectio
 late responses, already-selected payloads, and the default timeline without duplicate binding notifications.
 Collector registration, retention/access policy, and backend enrichment review are external release gates.
 
-An explicit `--telemetry-sample` launch in a non-exporting build instead selects
+An explicit `--telemetry-sample` launch instead selects
 `LocalTelemetrySampleReporter`. It uses the same event attribute mapping, a bounded 256-record channel,
 and a background UTF-8 JSON Lines writer, with no collector reporter/key or telemetry network export.
 This opt-in development run reads the permitted metadata and creates only the requested new output file;

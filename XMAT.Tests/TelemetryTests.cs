@@ -14,54 +14,20 @@ namespace XMAT.Tests
     public class TelemetryTests
     {
         [Fact]
-        public void AssemblyConfigurationPreservesTheDeclaredBuildGates()
+        public void AssemblyConfigurationPreservesTheDeclaredChannel()
         {
             var declared = typeof(App).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
                 .ToDictionary(attribute => attribute.Key, attribute => attribute.Value);
             var configuration = TelemetryConfiguration.FromAssembly();
 
-            Assert.Equal(bool.Parse(declared["Xmat.Telemetry.Enabled"]), configuration.Enabled);
-            Assert.Equal(bool.Parse(declared["Xmat.Telemetry.Approved"]), configuration.Approved);
             Assert.Equal(Enum.Parse<TelemetryBuildChannel>(declared["Xmat.Telemetry.Channel"]), configuration.Channel);
-            Assert.Equal(declared.GetValueOrDefault("Xmat.Telemetry.Key", string.Empty), configuration.InstrumentationKey);
-        }
-
-        [Fact]
-        public void DisabledBuildDoesNotReadMetadataOrCreateTransport()
-        {
-            using var service = XmatTelemetryService.Create(new(false, false, "", TelemetryBuildChannel.Local),
-                _ => throw new InvalidOperationException("Metadata must not be read."),
-                (_, _) => throw new InvalidOperationException("Transport must not be created."),
-                _ => throw new InvalidOperationException("Valid disabled builds require no failure diagnostic."));
-            service.Ready();
-            service.Use(TelemetryFeature.Scripting);
-            using var operation = service.Begin(TelemetryOperationKind.Capture);
-            operation.ItemReceived();
-            operation.Complete();
-            Assert.False(service.IsEnabled);
-        }
-
-        [Theory]
-        [InlineData(false, "a-b", "Public")]
-        [InlineData(true, "", "Public")]
-        [InlineData(true, "invalid", "Public")]
-        [InlineData(true, "a-b;Password=secret", "Public")]
-        [InlineData(true, "a-b", "Local")]
-        public void InvalidEnabledConfigurationFailsClosed(bool approved, string key, string channel)
-        {
-            List<string> diagnostics = [];
-            using var service = XmatTelemetryService.Create(new(true, approved, key, Enum.Parse<TelemetryBuildChannel>(channel)),
-                _ => throw new InvalidOperationException("Must not read metadata."),
-                (_, _) => throw new InvalidOperationException("Must not create transport."), diagnostics.Add);
-            Assert.False(service.IsEnabled);
-            Assert.Equal(["InvalidConfiguration"], diagnostics);
         }
 
         [Fact]
         public void InitializationFailureDoesNotExposeExceptionOrReadMoreData()
         {
             List<string> diagnostics = [];
-            using var service = XmatTelemetryService.Create(new(true, true, "a-b", TelemetryBuildChannel.Test),
+            using var service = XmatTelemetryService.Create(new(TelemetryBuildChannel.Test),
                 _ => throw new IOException(@"C:\Users\private-user\token.txt"),
                 (_, _) => throw new InvalidOperationException("No transport."), diagnostics.Add, TelemetryConsentState.Accepted);
             Assert.False(service.IsEnabled);
