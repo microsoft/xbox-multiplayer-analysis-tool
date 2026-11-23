@@ -29,5 +29,16 @@ namespace XMAT.Tests
 
             Assert.True(shouldShow);
         }
+
+        [Fact]
+        public async Task ShouldShowAsync_DoesNotObserveOperationFailureOrCancellation()
+        {
+            Task failed = Task.FromException(new InvalidOperationException("failed"));
+            Task canceled = Task.FromCanceled(new CancellationToken(canceled: true));
+
+            Assert.False(await WebProxyStopProgressWindow.ShouldShowAsync(failed, TimeSpan.FromSeconds(1)));
+            Assert.False(await WebProxyStopProgressWindow.ShouldShowAsync(canceled, TimeSpan.FromSeconds(1)));
+            Assert.IsType<InvalidOperationException>(failed.Exception?.InnerException);
+        }
     }
 }
