@@ -1,0 +1,71 @@
+<!-- Motion: durations and Fluent 2 easing curves, the fade for content that arrives, and the skeleton placeholder for
+     content on its way. Both looks merge it. Motion explains what is happening and never decorates: it is short, never
+     blocks input and stops when Windows animation effects are off (MotionSettings). Storyboards take these values with
+     StaticResource; storyboards in styles and templates are frozen and can't use DynamicResource. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                    xmlns:po="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
+                    xmlns:local="clr-namespace:XMAT"
+                    mc:Ignorable="po">
+
+    <!-- Durations: fast for small changes of state, normal for content that appears, slow for larger moves. -->
+    <Duration x:Key="MotionDurationFast">0:0:0.15</Duration>
+    <Duration x:Key="MotionDurationNormal">0:0:0.2</Duration>
+    <Duration x:Key="MotionDurationSlow">0:0:0.3</Duration>
+
+    <!-- Fluent 2 curves as KeySplines, for SplineDoubleKeyFrame (easing functions such as CubicEase are not these
+         curves): decelerate for what enters, accelerate for what leaves, easy-ease for what moves within the view. -->
+    <KeySpline x:Key="MotionCurveDecelerateMid" po:Freeze="True">0,0,0,1</KeySpline>
+    <KeySpline x:Key="MotionCurveAccelerateMid" po:Freeze="True">1,0,1,1</KeySpline>
+    <KeySpline x:Key="MotionCurveEasyEase" po:Freeze="True">0.33,0,0.67,1</KeySpline>
+
+    <!-- Content that arrives fades in. Begin it on the element from code once MotionSettings allows animation; when it
+         ends, the element keeps its own opacity. -->
+    <Storyboard x:Key="FadeInStoryboard" FillBehavior="Stop">
+        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="Opacity" Duration="{StaticResource MotionDurationNormal}">
+            <DiscreteDoubleKeyFrame KeyTime="0%" Value="0"/>
+            <SplineDoubleKeyFrame KeyTime="100%" Value="1" KeySpline="{StaticResource MotionCurveDecelerateMid}"/>
+        </DoubleAnimationUsingKeyFrames>
+    </Storyboard>
+
+    <!-- A placeholder bar in SkeletonBaseBrush. While it is shown, SkeletonBlock sweeps a soft band of
+         SkeletonHighlightBrush across it; the High Contrast theme's highlight is transparent, so there it is a plain
+         bar in a system color. -->
+    <Style TargetType="local:SkeletonBlock">
+        <Setter Property="Height" Value="12"/>
+        <Setter Property="Background" Value="{DynamicResource SkeletonBaseBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:SkeletonBlock">
+                    <Grid Background="{TemplateBinding Background}"
+                          local:SurfaceClip.CornerRadius="{TemplateBinding CornerRadius}">
+                        <Rectangle x:Name="PART_Sheen" HorizontalAlignment="Left" Visibility="Collapsed"
+                                   Fill="{DynamicResource SkeletonHighlightBrush}">
+                            <Rectangle.OpacityMask>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Offset="0" Color="#00000000"/>
+                                    <GradientStop Offset="0.5" Color="#FF000000"/>
+                                    <GradientStop Offset="1" Color="#00000000"/>
+                                </LinearGradientBrush>
+                            </Rectangle.OpacityMask>
+                        </Rectangle>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSweeping" Value="True">
+                            <Setter TargetName="PART_Sheen" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A small pill, standing in for a badge such as an issue count. -->
+    <Style x:Key="SkeletonPillStyle" TargetType="local:SkeletonBlock" BasedOn="{StaticResource {x:Type local:SkeletonBlock}}">
+        <Setter Property="Width" Value="44"/>
+        <Setter Property="Height" Value="16"/>
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+    </Style>
+</ResourceDictionary>

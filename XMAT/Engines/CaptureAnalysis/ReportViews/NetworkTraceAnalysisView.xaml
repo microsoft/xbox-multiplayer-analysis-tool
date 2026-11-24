@@ -3,55 +3,139 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:app="clr-namespace:XMAT"
              xmlns:local="clr-namespace:XMAT.NetworkTraceCaptureAnalysis"
+             xmlns:analysis="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
     <UserControl.Resources>
-        <local:BooleanValueToColorConverter x:Key="BooleanValueToColorConverter"/>
+        <local:BooleanValueToIssueLevelConverter x:Key="BooleanValueToIssueLevelConverter"/>
+        <!-- The new look's check counts: a pill in the soft colors of the count's level, the success colors for none
+             found and the error colors for any, like the call rate table's badges. -->
+        <Style x:Key="CheckCountStyle" TargetType="ContentControl">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="MinWidth" Value="24"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Border MinHeight="16" Padding="6,0" CornerRadius="8" Background="{TemplateBinding Background}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.FontSize="{DynamicResource MetadataFontSize}"
+                                              TextElement.FontWeight="SemiBold"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
-    <ScrollViewer>
-        <StackPanel Margin="20,0,40,0">
-            <TextBlock x:Name="NetAnalysisTitle" Margin="0,0,0,20" FontWeight="Bold" TextDecorations="Underline" FontSize="14"/>
-            <ItemsControl ItemsSource="{Binding AnalysisData.NumericStatsLists, Mode=OneWay}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Margin="20,0,0,20">
-                            <TextBlock Text="{Binding Topic}" FontWeight="Bold" />
-                            <Grid>
-                                <DataGrid ItemsSource="{Binding Values}" AutoGenerateColumns="False" GridLinesVisibility="None" AlternatingRowBackground="{DynamicResource AltRowBackgroundBrush}" Background="{DynamicResource PanelBackgroundBrush}" HeadersVisibility="None">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Binding="{Binding Name}" Width="200"/>
-                                        <DataGridTextColumn Binding="{Binding Value}" MinWidth="80"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
+    <ScrollViewer VerticalScrollBarVisibility="{app:Look New=Auto, Original=Visible}">
+        <Grid>
+            <StackPanel Margin="20,0,40,0" Visibility="{app:Look New=Collapsed, Original=Visible}">
+                <TextBlock x:Name="NetAnalysisTitle" Margin="0,0,0,20" FontWeight="Bold" TextDecorations="Underline" FontSize="14"/>
+                <ItemsControl ItemsSource="{Binding AnalysisData.NumericStatsLists, Mode=OneWay}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="20,0,0,20">
+                                <TextBlock Text="{Binding Topic}" FontWeight="Bold" />
+                                <Grid>
+                                    <DataGrid ItemsSource="{Binding Values}" AutoGenerateColumns="False" GridLinesVisibility="None" AlternatingRowBackground="{DynamicResource AltRowBackgroundBrush}" Background="{DynamicResource SurfacePanelBrush}" HeadersVisibility="None"
+                                              AutomationProperties.Name="{Binding Topic}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Binding="{Binding Name}" Width="200"/>
+                                            <DataGridTextColumn Binding="{Binding Value}" MinWidth="80"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <ItemsControl ItemsSource="{Binding AnalysisData.NumericStats, Mode=OneWay}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="20,0,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="200"/>
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="Bold" analysis:IssueBadge.Level="{Binding Value, Converter={StaticResource BooleanValueToIssueLevelConverter}}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Value}" analysis:IssueBadge.Level="{Binding Value, Converter={StaticResource BooleanValueToIssueLevelConverter}}"/>
                             </Grid>
-                        </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <ItemsControl ItemsSource="{Binding AnalysisData.NumericStats, Mode=OneWay}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Margin="20,0,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="200"/>
-                                <ColumnDefinition />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="Bold" Background="{Binding Value, Converter={StaticResource BooleanValueToColorConverter}}"/>
-                            <TextBlock Grid.Column="1" Text="{Binding Value}" Background="{Binding Value, Converter={StaticResource BooleanValueToColorConverter}}"/>
-                        </Grid>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <Grid Margin="20,20,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/>
-                    <ColumnDefinition />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" x:Name="TotalPacketsLabel"/>
-                <TextBlock Grid.Column="1" Text="{Binding AnalysisData.TotalPacketsScanned}"/>
-            </Grid>
-        </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Grid Margin="20,20,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200"/>
+                        <ColumnDefinition />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="TotalPacketsLabel"/>
+                    <TextBlock Grid.Column="1" Text="{Binding AnalysisData.TotalPacketsScanned}"/>
+                </Grid>
+            </StackPanel>
+
+            <!-- The new look: the checks and how many packets they scanned, then each list as a histogram (Styles/
+                 DataViz.xaml). Both fill the pane in the same columns, 320px or wider and 32px apart, so a wide, short
+                 pane shows several lists side by side. The tab already names the analysis, so the report has no title
+                 of its own. -->
+            <StackPanel x:Name="Report" Margin="0,0,12,12" TextElement.FontSize="{DynamicResource BaseFontSize}"
+                        Visibility="{app:Look New=Visible, Original=Collapsed}">
+                <StackPanel Margin="0,0,0,6">
+                    <TextBlock x:Name="ChecksTitle" Style="{DynamicResource SectionTitleStyle}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ScannedText" Text="{Binding AnalysisData.ScannedText}" Margin="0,2,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+                <!-- A check reads as one sentence to screen readers, such as "UDP Packets over MTU (1384): 0"; Tab enters
+                     the checks once and the arrow keys move between them. -->
+                <ItemsControl x:Name="Checks" ItemsSource="{Binding AnalysisData.NumericStats}" Focusable="False"
+                              AutomationProperties.Name="{Binding Text, ElementName=ChecksTitle}"
+                              KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Contained">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <app:ColumnFlowPanel ColumnMinWidth="320" ColumnSpacing="32"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
+                            <Setter Property="Focusable" Value="True"/>
+                            <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+                        </Style>
+                    </ItemsControl.ItemContainerStyle>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid MinHeight="24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ContentControl x:Name="Count" Content="{Binding ValueText}" Style="{StaticResource CheckCountStyle}"
+                                                analysis:IssueBadge.Level="{Binding Value, Converter={StaticResource BooleanValueToIssueLevelConverter}}"/>
+                                <TextBlock Grid.Column="1" Margin="8,0,0,0" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <!-- The histograms share their label and amount lanes, so their bars line up. -->
+                <ItemsControl x:Name="Histograms" Margin="0,24,0,0" ItemsSource="{Binding AnalysisData.NumericStatsLists}"
+                              Focusable="False" Grid.IsSharedSizeScope="True">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <app:ColumnFlowPanel ColumnMinWidth="320" ColumnSpacing="32" RowSpacing="24"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <app:HistogramView DataContext="{Binding Histogram}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Grid>
     </ScrollViewer>
 </UserControl>

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         SizeToContent="WidthAndHeight" ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
-        Background="{DynamicResource WindowBackgroundBrush}">
+        Background="{DynamicResource SurfaceCanvasBrush}">
   <StackPanel Margin="16" Width="460">
     <TextBlock x:Name="CurrentPortLabel" Margin="0,0,0,10" TextWrapping="Wrap"/>
     <StackPanel Orientation="Horizontal">

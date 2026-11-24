@@ -1,0 +1,170 @@
+<ds:Story x:Class="XMAT.DesignSystem.TextInputsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:app="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Text boxes and dropdowns"
+          Summary="Text boxes take a typed value, such as a host or a port; a search box finds rows in a list; read-only text areas show request and response text in the inspector. Dropdowns choose one value from a list."
+          Section="Components"
+          DefinedIn="XMAT/Styles/Inputs.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Text box" StyleName="TextBox (default style)"
+                         Description="One line of typed text, with 3px corners. Read only, it can still be selected and copied.">
+            <ds:StoryExample Caption="Empty">
+                <TextBox Width="220" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="With text">
+                <TextBox Width="220" Text="api.example.com" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Read only">
+                <TextBox Width="220" Text="api.example.com" IsReadOnly="True" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <TextBox Width="220" Text="api.example.com" IsEnabled="False" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Search box" StyleName="SearchBox (default style)"
+                         Description="Finds rows in a list, such as the capture's requests. While anything is filtered, it says how many rows show; a term it can't use shows in the error color instead, and screen readers hear it. Escape or the clear button empties it.">
+            <ds:StoryExample Caption="Empty, with its hint">
+                <app:SearchBox Width="320" Hint="Search hosts, paths or status:5xx" AutomationProperties.Name="Search"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Searching, with the count">
+                <app:SearchBox Width="320" Text="status:5xx xboxlive" Summary="12 of 340" AutomationProperties.Name="Search"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A term it can't use">
+                <app:SearchBox Width="320" Text="status:abc" Problem="status:abc isn't a status" AutomationProperties.Name="Search"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Inspector text" StyleName="InspectorTextBoxStyle, in RecessedSurfaceStyle, with ResponseNoticeTextStyle"
+                         Description="Request and response text in the inspector: read only, in Consolas, in a recessed well that scrolls. A response still streaming, or one the capture limit cut, has a notice in secondary text above it, and trailers that followed the body show under its headers.">
+            <ds:StoryExample Caption="Headers of a request">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Width="460" Height="132">
+                    <ScrollViewer>
+                        <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                 TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Request headers"
+                                 Text="GET https://api.example.com/sessions/42 HTTP/1.1&#x0a;Host: api.example.com&#x0a;Accept: application/json&#x0a;User-Agent: XboxServicesAPI/2024.06&#x0a;x-xbl-contract-version: 107"/>
+                    </ScrollViewer>
+                </ContentControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A response still streaming, with trailers">
+                <StackPanel Width="460">
+                    <TextBlock Style="{DynamicResource ResponseNoticeTextStyle}"
+                               Text="Still streaming: the capture is completed when the response ends."/>
+                    <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Height="132">
+                        <ScrollViewer>
+                            <StackPanel>
+                                <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                         TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Response headers"
+                                         Text="HTTP/1.1 200 OK&#x0a;Content-Type: text/event-stream&#x0a;Transfer-Encoding: chunked"/>
+                                <TextBlock Text="Trailers" FontWeight="SemiBold" Margin="0,8,0,2"/>
+                                <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                         TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Trailers"
+                                         Text="x-checksum: abc123"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </ContentControl>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Dropdown" StyleName="ComboBox (default style), ComboBoxItem (default style)"
+                         Description="Chooses one value from a list. An editable dropdown also takes typed text. Open one to see its items.">
+            <ds:StoryExample Caption="A value chosen">
+                <ComboBox x:Name="ChosenDropdown" Width="180" SelectedIndex="0" AutomationProperties.Name="Timeline view">
+                    <ComboBoxItem Content="Waterfall"/>
+                    <ComboBoxItem Content="By Host"/>
+                    <ComboBoxItem Content="Volume"/>
+                </ComboBox>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Editable">
+                <ComboBox Width="180" IsEditable="True" Text="api.example.com" AutomationProperties.Name="Host">
+                    <ComboBoxItem Content="api.example.com"/>
+                    <ComboBoxItem Content="title.mgt.xboxlive.com"/>
+                </ComboBox>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ComboBox Width="180" SelectedIndex="0" IsEnabled="False" AutomationProperties.Name="Timeline view">
+                    <ComboBoxItem Content="Waterfall"/>
+                </ComboBox>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Filter dropdown" StyleName="CheckBoxFilters, with the dropdown styles, ClearFiltersButtonStyle and FilterSummaryTextStyle"
+                         Description="Filters a list by one column's values. Open it and pick the values to show; with none picked, All is, and every row shows. A dropdown that filters looks like a checked toggle and keeps its name, so the row keeps its layout, and its tooltip says what it shows. Clear filters, in the same row, turns every filter off; it is available while any filter is on, and shows only its icon while the row is tight, before the row folds. A process filter says what it hides on a line under the row, with Show all processes.">
+            <ds:StoryExample Caption="Showing every row">
+                <StackPanel Orientation="Horizontal">
+                    <app:CheckBoxFilters FilterDesc="Status" HorizontalAlignment="Left">
+                        <app:CheckBoxFilters.ItemsSource>
+                            <x:Array Type="{x:Type app:CheckedListItem}">
+                                <app:CheckedListItem Text="200" IsChecked="True"/>
+                                <app:CheckedListItem Text="404" IsChecked="True"/>
+                                <app:CheckedListItem Text="503" IsChecked="True"/>
+                            </x:Array>
+                        </app:CheckBoxFilters.ItemsSource>
+                    </app:CheckBoxFilters>
+                    <Button Style="{DynamicResource ClearFiltersButtonStyle}" IsEnabled="False"/>
+                </StackPanel>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Showing 404 and 503">
+                <StackPanel Orientation="Horizontal">
+                    <app:CheckBoxFilters FilterDesc="Status" IsFilterEnabled="True" HorizontalAlignment="Left">
+                        <app:CheckBoxFilters.ItemsSource>
+                            <x:Array Type="{x:Type app:CheckedListItem}">
+                                <app:CheckedListItem Text="200" IsChecked="False"/>
+                                <app:CheckedListItem Text="404" IsChecked="True"/>
+                                <app:CheckedListItem Text="503" IsChecked="True"/>
+                            </x:Array>
+                        </app:CheckBoxFilters.ItemsSource>
+                    </app:CheckBoxFilters>
+                    <Button Style="{DynamicResource ClearFiltersButtonStyle}"/>
+                </StackPanel>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A tight row: Clear filters shows only its icon">
+                <StackPanel Orientation="Horizontal" app:FilterOverflowHost.IsCompact="True">
+                    <app:CheckBoxFilters FilterDesc="Status" IsFilterEnabled="True" HorizontalAlignment="Left">
+                        <app:CheckBoxFilters.ItemsSource>
+                            <x:Array Type="{x:Type app:CheckedListItem}">
+                                <app:CheckedListItem Text="200" IsChecked="False"/>
+                                <app:CheckedListItem Text="404" IsChecked="True"/>
+                            </x:Array>
+                        </app:CheckBoxFilters.ItemsSource>
+                    </app:CheckBoxFilters>
+                    <Button Style="{DynamicResource ClearFiltersButtonStyle}"/>
+                </StackPanel>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="A process filter's summary, under the row">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Process filter: 12/40; 28 hidden; 0 unknown" Margin="0,0,8,0" VerticalAlignment="Center"
+                               Style="{DynamicResource FilterSummaryTextStyle}"/>
+                    <Button Height="24" Padding="12,0" VerticalAlignment="Center" Content="Show all processes"/>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StoryRules Description="What every filter in XMAT follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID.">
+            <ds:StoryRule RuleId="INPUT-1">
+                <ds:RuleExample Kind="Do" Caption="The dropdown is the filter. It keeps its name, its tooltip says what it shows, and Clear filters sits in the same row.">
+                    <StackPanel Orientation="Horizontal">
+                        <app:CheckBoxFilters FilterDesc="Status" IsFilterEnabled="True" HorizontalAlignment="Left">
+                            <app:CheckBoxFilters.ItemsSource>
+                                <x:Array Type="{x:Type app:CheckedListItem}">
+                                    <app:CheckedListItem Text="200" IsChecked="False"/>
+                                    <app:CheckedListItem Text="503" IsChecked="True"/>
+                                </x:Array>
+                            </app:CheckBoxFilters.ItemsSource>
+                        </app:CheckBoxFilters>
+                        <Button Style="{DynamicResource ClearFiltersButtonStyle}"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="A check box beside the dropdown turns it on, so people wonder what the check boxes in it are for.">
+                    <StackPanel Orientation="Horizontal">
+                        <CheckBox VerticalAlignment="Center" Margin="0,0,6,0" IsChecked="True" AutomationProperties.Name="Filter by Status"/>
+                        <ComboBox Width="100" IsEditable="True" IsReadOnly="True" Text="Status" AutomationProperties.Name="Status"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
+    </StackPanel>
+</ds:Story>

@@ -7,8 +7,13 @@
         xmlns:proxy="clr-namespace:XMAT.WebServiceCapture"
         mc:Ignorable="d"
         Loaded="Window_Loaded"
+        ContentRendered="Window_ContentRendered"
         Closing="Window_Closing"
         Title="{StaticResource appName}"
+        Background="{DynamicResource SurfaceCanvasBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        FontSize="{DynamicResource BaseFontSize}"
+        UseLayoutRounding="{local:Look New=True, Original=False}"
         AllowDrop="True"
         Drop="Window_Drop"
         WindowStartupLocation="CenterScreen"
@@ -33,9 +38,38 @@
         <CommandBinding Command="{x:Static local:AppCommands.ManageHostLists}" Executed="ManageHostLists_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ComposeRequest}" Executed="ComposeRequest_Executed"/>
     </Window.CommandBindings>
+    <Window.Resources>
+        <!-- An icon button in the colors of the New look switch beside it (ToggleSwitchStyle), so it too looks the same
+             in either look: two sparkles. -->
+        <Style x:Key="WhatsNewButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                                CornerRadius="3" Padding="5,1" SnapsToDevicePixels="True">
+                            <Path Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{TemplateBinding Foreground}"
+                                  Data="M6.5,3 C7.1,7.6 8.4,8.9 13,9.5 C8.4,10.1 7.1,11.4 6.5,16 C5.9,11.4 4.6,10.1 0,9.5 C4.6,8.9 5.9,7.6 6.5,3 Z M13,0 C13.3,2 13.9,2.7 16,3 C13.9,3.3 13.3,4 13,6 C12.7,4 12.1,3.3 10,3 C12.1,2.7 12.7,2 13,0 Z"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush"
+                                        Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="{local:Look New=Auto, Original=20}"/>
             <RowDefinition/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -44,7 +78,14 @@
             <ColumnDefinition Width="119*"/>
         </Grid.ColumnDefinitions>
 
-        <Menu Grid.Column="0" x:Name="MainMenuBar" Height="20" VerticalAlignment="Center" HorizontalContentAlignment="Left" VerticalContentAlignment="Top" Grid.ColumnSpan="2">
+        <Grid Grid.ColumnSpan="2" Background="{DynamicResource MenuBackgroundBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+        <!-- The menu spans the row so its background and border run under the switch on the right. -->
+        <Menu Grid.Column="0" Grid.ColumnSpan="2" x:Name="MainMenuBar" Style="{DynamicResource MainMenuBarStyle}"
+              VerticalAlignment="Center" HorizontalContentAlignment="Left">
             <MenuItem x:Name="FileMenu" HorizontalAlignment="Left" Header="_File">
                 <MenuItem x:Name="FileNewCapture"     Header="_New Capture..."   Command="New"/>
                 <MenuItem x:Name="FileLoadCaptures"   Header="_Load Captures..." Command="Open"/>
@@ -60,7 +101,20 @@
             <MenuItem x:Name="EditMenu" HorizontalAlignment="Left" Header="_Edit">
                 <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
                 <Separator />
-                <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="ToggleDarkMode_Click"/>
+                <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="SelectTheme_Click"
+                          Visibility="{local:Look New=Collapsed, Original=Visible}"/>
+                <MenuItem x:Name="AppearanceMenu" Header="_Appearance" Visibility="{local:Look New=Visible, Original=Collapsed}">
+                    <MenuItem x:Name="LightThemeMenu" Header="_Light" Tag="Light" IsCheckable="True" Click="SelectTheme_Click"/>
+                    <MenuItem x:Name="DarkThemeMenu" Header="_Dark" Tag="Dark" IsCheckable="True" Click="SelectTheme_Click"/>
+                    <Separator/>
+                    <!-- Comfort view gives the new look room; off, the new look is data-dense. The original look keeps
+                         its own spacing, so the item is unavailable there. -->
+                    <MenuItem x:Name="ComfortViewMenu" Header="_Comfort view" IsCheckable="True" Click="ComfortView_Click"
+                              IsEnabled="{local:Look New=True, Original=False}" ToolTipService.ShowOnDisabled="True"
+                              ToolTip="{local:Look New={x:Static local:MainWindow.ComfortViewTooltip}, Original={x:Static local:MainWindow.ComfortViewNewLookOnlyTooltip}}"/>
+                </MenuItem>
+                <!-- Shown while Windows high contrast sets the colors; the theme chosen above returns once it is off. -->
+                <MenuItem x:Name="HighContrastThemeNote" IsEnabled="False" Visibility="Collapsed"/>
                 <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
@@ -89,20 +143,37 @@
                 <MenuItem x:Name="ViewGDKXInfo" Command="{x:Static local:AppCommands.ViewGDKXInfo}" />
             </MenuItem>
         </Menu>
+            <!-- What's new and the switch that compares the redesign with the original look stay in the same place in
+                 both looks. -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                <Button x:Name="WhatsNewButton" Style="{DynamicResource WhatsNewButtonStyle}" Margin="0,0,4,0"
+                        VerticalAlignment="Center" Click="WhatsNew_Click"
+                        ToolTip="{x:Static local:MainWindow.WhatsNewText}"
+                        AutomationProperties.Name="{x:Static local:MainWindow.WhatsNewText}"/>
+                <ToggleButton x:Name="NewLookToggle" Style="{DynamicResource ToggleSwitchStyle}" VerticalAlignment="Center"
+                              Checked="NewLookToggle_Changed" Unchecked="NewLookToggle_Changed"/>
+            </StackPanel>
+        </Grid>
+
 
         <Grid Grid.Row="1" Grid.Column="0" x:Name="MainClientArea" Grid.ColumnSpan="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="4"/>
-                <RowDefinition Height="200"/>
+                <RowDefinition Height="{local:Look New=1, Original=4}"/>
+                <RowDefinition Height="{local:Look New=174, Original=200}"/>
             </Grid.RowDefinitions>
 
+            <!-- Capture content and analysis share one flat surface; only the divider line separates them. -->
+            <Border Grid.Row="1" Grid.RowSpan="2" Background="{DynamicResource SurfacePanelBrush}"/>
             <local:AllCaptureDevicesTabControl x:Name="AllCaptureDevicesPanel" Grid.Row="0" DeviceTabClosed="AllCaptureDevicesPanel_TabClosed"/>
-            <GridSplitter Grid.Row="1" Grid.Column="0" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+            <!-- In the new look the divider row is a hairline; the splitter overhangs it so it stays easy to grab. -->
+            <GridSplitter x:Name="AnalysisSplitter" Grid.Row="1" Grid.Column="0" Style="{DynamicResource PaneSplitterStyle}" Panel.ZIndex="1"
+                          Height="{local:Look New=13, Original=4}" Margin="{local:Look New='0,-6', Original='0'}"
+                          ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
             <local:CaptureAnalysisControl x:Name="CaptureErrorsPanel" Grid.Row="2" AnalysisTabAdded="CaptureErrorsPanel_TabAdded" AnalysisTabClosed="CaptureErrorsPanel_TabClosed"/>
         </Grid>
 
-        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" MinHeight="20" Grid.ColumnSpan="2">
+        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" Style="{DynamicResource MainStatusBarStyle}" Grid.ColumnSpan="2">
             <StatusBarItem HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <Grid x:Name="StatusBarPanels">
                     <Grid.ColumnDefinitions>
@@ -110,9 +181,9 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}"/>
+                    <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}" local:LiveRegion.Mode="Polite"/>
                     <TextBlock x:Name="StatusBar2" Grid.Column="1" Margin="0,0,16,0" Text="{Binding StatusBarText2}"/>
-                    <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}"
+                    <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}" local:LiveRegion.Mode="Polite"
                                ToolTip="{Binding StatusBarText3}" TextTrimming="CharacterEllipsis"/>
                 </Grid>
             </StatusBarItem>

@@ -45,6 +45,7 @@ namespace XMAT.Models
             {
                 CloseVisibility = value ? Visibility.Hidden : Visibility.Visible;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CloseVisibility)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsProcessing)));
             }
         }
 
@@ -52,6 +53,9 @@ namespace XMAT.Models
         {
             // TODO: is this still needed?
         }
+
+        // Screen readers name an analysis tab after its item, so this matches the tab's label.
+        public override string ToString() => Header ?? string.Empty;
 
         public event PropertyChangedEventHandler PropertyChanged;
     }

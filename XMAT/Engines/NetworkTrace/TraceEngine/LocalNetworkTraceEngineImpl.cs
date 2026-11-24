@@ -233,7 +233,9 @@ namespace XMAT.NetworkTrace.NTDE
                 ProcessStartInfo info = new ProcessStartInfo
                 {
                     FileName = "netsh.exe",
-                    Arguments = $"trace start capture=yes sessionname={_sessionName} provider=Microsoft-Windows-NDIS-PacketCapture level=4",
+                    // report=disabled skips the diagnostics package (a .cab) that netsh otherwise builds when the trace
+                    // stops. XMAT reads only the .etl, and building the package keeps Stop waiting for minutes.
+                    Arguments = $"trace start capture=yes report=disabled sessionname={_sessionName} provider=Microsoft-Windows-NDIS-PacketCapture level=4",
                     Verb = "runas",
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,

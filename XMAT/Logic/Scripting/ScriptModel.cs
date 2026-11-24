@@ -73,6 +73,10 @@ namespace XMAT.Scripting
 
         public string DisplayName { get; private set; }
         public string Description { get; private set; }
+
+        // Screen readers name an event in the script event list after its item.
+        public override string ToString() => DisplayName ?? string.Empty;
+
         public string Filename { get => _filename; set { _filename = value; RaisePropertyChange(); } }
         public string Script
         {

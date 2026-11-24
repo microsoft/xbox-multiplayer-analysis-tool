@@ -12,6 +12,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         public override string ReportName { get { return Localization.GetLocalizedString("LTA_ENDPOINT_REPORT_TITLE"); } }
         public EndpointValidationIssuesSummary Summary { get; }
         public EndpointValidationIssuesDetails Details { get; }
+        public CallRateReport CallRates { get; }
 
         public PerEndpointReportModel(
             ICaptureAppModel captureAppModel,
@@ -27,6 +28,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
                 captureAppModel,
                 sourceCaptureName,
                 reportDocument);
+            CallRates = CallRateReport.From(reportDocument);
         }
     }
 }

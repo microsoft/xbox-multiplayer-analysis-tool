@@ -4,74 +4,77 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d"
              DataContext="{Binding RelativeSource={RelativeSource Self}}"
              d:DesignHeight="450" d:DesignWidth="800">
-    <UserControl.Resources>
-        <!-- Hidden when there is nothing to show, such as for a complete response without trailers. -->
-        <Style x:Key="CollapsedWhenEmptyTextBlock" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Style.Triggers>
-                <Trigger Property="Text" Value="">
-                    <Setter Property="Visibility" Value="Collapsed"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="CollapsedWhenEmptyTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-            <Style.Triggers>
-                <Trigger Property="Text" Value="">
-                    <Setter Property="Visibility" Value="Collapsed"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </UserControl.Resources>
-    <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
-        <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
-        <TextBlock x:Name="NoticeText" DockPanel.Dock="Top" Margin="10,0,10,4" TextWrapping="Wrap"
-                   Style="{StaticResource CollapsedWhenEmptyTextBlock}"
-                   Foreground="{DynamicResource CapturePendingForegroundBrush}"
+    <DockPanel Background="{DynamicResource SurfacePanelBrush}">
+        <!-- The title's details sit at its right when they fit, and wrap below it when the pane is narrow. -->
+        <app:ReflowPanel DockPanel.Dock="Top" Margin="{DynamicResource HeadingBottomSpacing}"
+                         Spacing="{app:Look New=16, Original=0}" StackedSpacing="2">
+            <TextBlock Style="{DynamicResource SectionTitleStyle}" MinHeight="{app:Look New=20, Original=24}"
+                       Padding="{app:Look New='0', Original='10,0,0,0'}"
+                       VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
+            <ContentPresenter Content="{Binding HeaderContent}" VerticalAlignment="Center"
+                              HorizontalAlignment="Right" app:ReflowPanel.Weight="1"
+                              app:ReflowPanel.StackedAlignment="Left"/>
+        </app:ReflowPanel>
+        <!-- A response still streaming, or one the capture limit truncated; hidden when there is nothing to say. -->
+        <TextBlock x:Name="NoticeText" DockPanel.Dock="Top" Style="{DynamicResource ResponseNoticeTextStyle}"
                    Text="{Binding Notice, Mode=OneWay, TargetNullValue=''}"/>
-        <TabControl x:Name="RequestTabs">
-            <TabItem x:Name="HeadersTab" Header="Headers">
-                <ScrollViewer>
-                    <DockPanel>
-                        <TextBox x:Name="TrailersText" DockPanel.Dock="Bottom" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas"
-                                 Style="{StaticResource CollapsedWhenEmptyTextBox}"
-                                 Text="{Binding Trailers, Mode=OneWay, TargetNullValue=''}"/>
-                        <TextBlock x:Name="TrailersLabel" DockPanel.Dock="Bottom" Margin="0,8,0,2" FontWeight="Bold" Text="Trailers"
-                                   Visibility="{Binding Visibility, ElementName=TrailersText}"/>
-                        <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
-                    </DockPanel>
-                </ScrollViewer>
+        <TabControl x:Name="RequestTabs" Style="{DynamicResource FormatTabControlStyle}">
+            <TabItem x:Name="HeadersTab" Header="Headers" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <ScrollViewer>
+                        <DockPanel>
+                            <!-- The trailers that followed the body, under the headers; hidden without any
+                                 (RequestResponseView.xaml.cs). -->
+                            <TextBox x:Name="TrailersText" DockPanel.Dock="Bottom" Style="{DynamicResource InspectorTextBoxStyle}"
+                                     IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" Visibility="Collapsed"
+                                     Text="{Binding Trailers, Mode=OneWay, TargetNullValue=''}"/>
+                            <TextBlock x:Name="TrailersLabel" DockPanel.Dock="Bottom" Margin="0,8,0,2"
+                                       FontWeight="{app:Look New=SemiBold, Original=Bold}" Text="Trailers"
+                                       Visibility="{Binding Visibility, ElementName=TrailersText}"/>
+                            <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                        </DockPanel>
+                    </ScrollViewer>
+                </ContentControl>
             </TabItem>
             <!-- The Body and JSON tabs show one preview of the body, made in the background (RequestResponseView.xaml.cs);
                  what it says about the body (empty, not kept, cut, shown as bytes) is in a message bar, apart from the body. -->
-            <TabItem x:Name="BodyTab" Header="Body">
-                <DockPanel>
-                    <TextBlock x:Name="BodyMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
-                               Visibility="Collapsed"/>
-                    <TextBox x:Name="BodyTextBox" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas"
-                             HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
-                </DockPanel>
+            <TabItem x:Name="BodyTab" Header="Body" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <DockPanel>
+                        <TextBlock x:Name="BodyMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                                   Visibility="Collapsed"/>
+                        <TextBox x:Name="BodyTextBox" Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                 TextWrapping="NoWrap" FontFamily="Consolas"
+                                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                    </DockPanel>
+                </ContentControl>
             </TabItem>
-            <TabItem x:Name="JsonTab" Header="JSON">
-                <DockPanel>
-                    <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
-                               Visibility="Collapsed"/>
-                    <TreeView x:Name="JsonTree" VirtualizingPanel.IsVirtualizing="True">
-                        <TreeView.ItemTemplate>
-                            <HierarchicalDataTemplate
-                                DataType="{x:Type local:JsonTreeViewItem}"
-                                ItemsSource="{Binding JsonTreeViewItems}">
-                                <TextBlock Text="{Binding PropertyDescriptor}" />
-                            </HierarchicalDataTemplate>
-                        </TreeView.ItemTemplate>
-                        <TreeView.ItemContainerStyle>
-                            <Style TargetType="{x:Type TreeViewItem}">
-                                <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
-                            </Style>
-                        </TreeView.ItemContainerStyle>
-                    </TreeView>
-                </DockPanel>
+            <TabItem x:Name="JsonTab" Header="JSON" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <DockPanel>
+                        <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap" FontStyle="Italic"
+                                   Visibility="Collapsed"/>
+                        <TreeView x:Name="JsonTree" Style="{DynamicResource InspectorTreeViewStyle}"
+                                  VirtualizingPanel.IsVirtualizing="True">
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate
+                                    DataType="{x:Type local:JsonTreeViewItem}"
+                                    ItemsSource="{Binding JsonTreeViewItems}">
+                                    <TextBlock Text="{Binding PropertyDescriptor}" />
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="{x:Type TreeViewItem}">
+                                    <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                        </TreeView>
+                    </DockPanel>
+                </ContentControl>
             </TabItem>
             <!--<TabItem Header="Image">
                     <Image Source="{Binding BodyBytes, Mode=OneWay}" Stretch="Uniform"/>

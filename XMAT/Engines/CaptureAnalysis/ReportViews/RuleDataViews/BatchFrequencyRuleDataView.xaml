@@ -6,7 +6,8 @@
              xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
-    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True">
+    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True"
+              AutomationProperties.Name="{x:Static local:BatchFrequencyRuleDataView.TableName}">
         <DataGrid.Columns>
             <DataGridTextColumn Binding="{Binding TotalBatchCalls}" Header="{x:Static local:BatchFrequencyRuleDataView.TotalBatchCallsLabel}"/>
             <DataGridTextColumn Binding="{Binding AllowedTimeBetweenCalls}" Header="{x:Static local:BatchFrequencyRuleDataView.AllowedTimeBetweenCallsLabel}"/>

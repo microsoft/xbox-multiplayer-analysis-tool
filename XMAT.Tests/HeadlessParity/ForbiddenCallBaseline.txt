@@ -15,7 +15,7 @@ XboxMultiplayerAnalysisTool|XMAT.BatchedDispatcherQueue::ScheduleDrain|System.Wi
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::.ctor|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::.ctor|System.Windows.Threading.Dispatcher::get_CurrentDispatcher|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::ImportDataCapturesAsync|System.Windows.MessageBox::Show|2
-XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Input.CommandManager::InvalidateRequerySuggested|2
+XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Input.CommandManager::InvalidateRequerySuggested|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Threading.Dispatcher::BeginInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Threading.Dispatcher::CheckAccess|1
 XboxMultiplayerAnalysisTool|XMAT.Models.CaptureAppModel::InvalidateCommands|System.Windows.Threading.Dispatcher::get_HasShutdownFinished|1
@@ -38,7 +38,6 @@ XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Appl
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::BeginInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::CheckAccess|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::get_AppName|System.Windows.Application::get_Current|1
-XboxMultiplayerAnalysisTool|XMAT.ThemeManager::ApplySystemColorOverrides|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.ThemeManager::ApplyTheme|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.WebServiceCapture.Proxy.CertificateManager::CreateRootCertificate|System.Windows.MessageBox::Show|1
 XboxMultiplayerAnalysisTool|XMAT.WebServiceCapture.WebServiceCaptureMethod::Initialize|System.Windows.MessageBox::Show|1

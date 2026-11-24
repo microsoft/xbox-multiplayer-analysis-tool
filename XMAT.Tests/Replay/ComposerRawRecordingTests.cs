@@ -228,6 +228,16 @@ namespace XMAT.Tests.Replay
         // scripts (XMAT.Scripting.ScriptTypeCollection, XMAT.Scripting.ScriptModel): those are the System.ComponentModel
         // attributes, which keep their text, since the product declares no attribute that derives from them. None of them
         // reaches a command.
+        //
+        // The new look's types bind display properties in code or load its own XAML, and were reviewed the same way: the
+        // analysis tabs bind the selected run and whether it is processing (XMAT.CaptureAnalysisControl); the filter
+        // dropdowns refresh their text (XMAT.CheckBoxFilters); the column summaries read the row properties that the
+        // product's own columns sort by (XMAT.ColumnSummaryColumn); Comfort view loads its own spacing dictionary
+        // (XMAT.ComfortView); live regions watch a text block's Text (XMAT.LiveRegion); the Look markup extension binds
+        // LookState.IsNewLook and converts the values written in XAML (XMAT.LookExtension); the script editor follows its
+        // layout's IsStacked (XMAT.ScriptEditorView); and issue badges follow IsNewLook
+        // (XMAT.XboxLiveCaptureAnalysis.IssueBadge). Their paths name only those properties, never a command or a
+        // CommandBindings collection.
         private static readonly HashSet<string> ReviewedReflectionTypes = new(StringComparer.Ordinal)
         {
             "GDKXHelper",
@@ -238,6 +248,14 @@ namespace XMAT.Tests.Replay
             "XMAT.Scripting.ScriptHost",
             "XMAT.Scripting.ScriptTypeCollection",
             "XMAT.Scripting.ScriptModel",
+            "XMAT.CaptureAnalysisControl",
+            "XMAT.CheckBoxFilters",
+            "XMAT.ColumnSummaryColumn",
+            "XMAT.ComfortView",
+            "XMAT.LiveRegion",
+            "XMAT.LookExtension",
+            "XMAT.ScriptEditorView",
+            "XMAT.XboxLiveCaptureAnalysis.IssueBadge",
         };
 
         // This class's methods as OperandUse names their users, for its reflection controls (ReflectionControlAccessor,

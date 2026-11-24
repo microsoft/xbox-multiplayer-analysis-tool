@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -163,6 +166,53 @@ namespace XMAT
                 item = base.ItemContainerGenerator.ContainerFromIndex(base.SelectedIndex) as TabItem;
 
             return item;
+        }
+
+        // Screen readers find a tab's content under the selected tab. TabControl looks for it in
+        // PART_SelectedContentHost, which this control's template replaces with PART_ItemsHolder, so the selected tab
+        // lists the content shown for it there.
+        protected override AutomationPeer OnCreateAutomationPeer() => new TabControlExAutomationPeer(this);
+
+        // The presenter showing ITEM's content, while ITEM is the selected tab; otherwise null.
+        private ContentPresenter SelectedContentFor(object item) =>
+            Equals(SelectedItem, item) && FindChildContentPresenter(item) is { Visibility: Visibility.Visible } presenter
+                ? presenter
+                : null;
+
+        private sealed class TabControlExAutomationPeer : TabControlAutomationPeer
+        {
+            internal TabControlExAutomationPeer(TabControlEx owner) : base(owner)
+            {
+            }
+
+            protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+                new TabItemExAutomationPeer(item, this);
+        }
+
+        private sealed class TabItemExAutomationPeer : TabItemAutomationPeer
+        {
+            internal TabItemExAutomationPeer(object item, TabControlExAutomationPeer tabs) : base(item, tabs)
+            {
+            }
+
+            // While its capture runs, a capture tab's status is Capturing, which its red dot shows in the new look.
+            protected override string GetItemStatusCore() =>
+                LookState.Current.IsNewLook && Item is ICaptureDeviceContext { CaptureController.IsRunning: true }
+                    ? RecordingIndicator.CapturingText
+                    : base.GetItemStatusCore();
+
+            protected override List<AutomationPeer> GetChildrenCore()
+            {
+                List<AutomationPeer> children = base.GetChildrenCore();
+                if (ItemsControlAutomationPeer.Owner is TabControlEx tabs && tabs.SelectedContentFor(Item) is { } content &&
+                    new FrameworkElementAutomationPeer(content).GetChildren() is { } contentChildren)
+                {
+                    children ??= new List<AutomationPeer>();
+                    children.AddRange(contentChildren);
+                }
+
+                return children;
+            }
         }
     }
 }

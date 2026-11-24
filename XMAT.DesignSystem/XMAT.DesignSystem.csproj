@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The design system: a local app that shows the new look's components in the states they can be set to, a page per
+       component. It runs from source and is never shipped: the release build is XMAT's own output folder. It takes the
+       styles and controls it shows from the XMAT assembly (docs/design-system.md). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>XMAT.DesignSystem</AssemblyName>
+    <RootNamespace>XMAT.DesignSystem</RootNamespace>
+    <Platforms>x64</Platforms>
+    <ApplicationIcon>..\XMAT\XMAT.ico</ApplicationIcon>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <Deterministic>true</Deterministic>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- The same checks as the XMAT project (XMAT/Directory.Build.props). -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
+  </ItemGroup>
+
+  <!-- The theme files as written, which the foundation pages read to show what each color is made of: the palette's
+       base colors and steps, and the step or contrast theme color each theme gives a color (Foundations/ThemeSources.cs). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\XMAT\Themes\Palette.json;..\XMAT\Themes\Palette.xaml;..\XMAT\Themes\LightTheme.xaml;..\XMAT\Themes\DarkTheme.xaml;..\XMAT\Themes\HighContrastTheme.xaml"
+                      LogicalName="XMAT.DesignSystem.Themes.%(Filename)%(Extension)" WithCulture="false" />
+  </ItemGroup>
+
+</Project>

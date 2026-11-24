@@ -8,9 +8,9 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using XMAT.Operations.Processes;
@@ -19,11 +19,14 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.WebServiceCapture
 {
     /// <summary>
-    /// Waterfall / By-Host timeline view for HTTP proxy requests.
+    /// Waterfall / By-Host timeline view for HTTP proxy requests, and the Volume chart of requests per second.
     /// </summary>
     public partial class CaptureTimelineView : UserControl
     {
         private const double BarHeight = 14;
+        private const double AxisTickLength = 6;
+        // The live Volume chart moves on just after each second ends.
+        private static readonly TimeSpan SecondTimerDelay = TimeSpan.FromMilliseconds(20);
         private readonly CaptureTimelineLayout _layout = new();
         private readonly HashSet<ProxyConnectionModel> _subscribedItems = new(ReferenceEqualityComparer.Instance);
         private readonly List<CaptureTimelineLayout.Row> _visibleRows = new();
@@ -32,6 +35,7 @@ namespace XMAT.WebServiceCapture
         private readonly List<TextBlock> _hostLabels = new();
         private readonly List<AxisVisual> _axis = new();
         private readonly DispatcherTimer _refreshTimer;
+        private readonly DispatcherTimer _secondTimer;
         // Shared by every bar and host label; filled for the right-clicked element when it opens.
         private readonly ContextMenu _hostListMenu = new();
         private ObservableCollection<ProxyConnectionModel> _attachedSource;
@@ -40,7 +44,7 @@ namespace XMAT.WebServiceCapture
         private bool _dirty;
         private bool _renderingViewport;
         private bool _isWaterfall = true;
-        private static readonly Brush[] StatusBrushes = CreateStatusBrushes();
+        private bool _isVolume;
 
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register(nameof(ItemsSource),
@@ -99,13 +103,43 @@ namespace XMAT.WebServiceCapture
             set => SetValue(ProcessFilterProperty, value);
         }
 
+        public static readonly DependencyProperty AutoScrollProperty =
+            DependencyProperty.Register(nameof(AutoScroll), typeof(bool), typeof(CaptureTimelineView),
+                new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+
+        // The hosting capture view's Auto Scroll, which the new look offers at the end of the header, after the
+        // Capturing indicator. When the header is too narrow for them beside the modes, they move to a line of their
+        // own under the modes.
+        public bool AutoScroll
+        {
+            get => (bool)GetValue(AutoScrollProperty);
+            set => SetValue(AutoScrollProperty, value);
+        }
+
         // Whether a bar's context menu offers the process filter items; the capture view that hosts the timeline handles
         // their commands.
         internal bool OffersProcessFilterItems { get; set; }
 
+        // The time axis labels' size, which the Windows text size can enlarge.
+        private static readonly DependencyProperty AxisFontSizeProperty =
+            DependencyProperty.Register("AxisFontSize", typeof(double), typeof(CaptureTimelineView),
+                new PropertyMetadata(12.0, (d, e) => ((CaptureTimelineView)d).RequestRefresh(true)));
+
+        // The time axis is as tall as its labels and the ticks under them need, and never shorter than designed, so
+        // labels that the Windows text size enlarges aren't cut off.
+        private double AxisHeight => Math.Max(CaptureTimelineLayout.MinimumAxisHeight,
+            Math.Ceiling((double)GetValue(AxisFontSizeProperty) * System.Windows.Documents.TextElement.GetFontFamily(this).LineSpacing) +
+            AxisTickLength - 2);
+
         internal int RenderCount { get; private set; }
         internal bool HasPendingRefresh => _refreshTimer.IsEnabled ||
             _pendingRender?.Status == DispatcherOperationStatus.Pending;
+
+        // The clock that the live Volume chart follows, in RequestTime's local time.
+        internal Func<DateTime> Clock { get; set; } = () => DateTime.Now;
+
+        // Whether the live Volume chart is moving on once a second.
+        internal bool IsFollowingLiveVolume => _secondTimer.IsEnabled;
 
         public CaptureTimelineView()
         {
@@ -114,13 +148,22 @@ namespace XMAT.WebServiceCapture
                 Interval = TimeSpan.FromMilliseconds(100)
             };
             _refreshTimer.Tick += RefreshTimerTick;
+            _secondTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
+            _secondTimer.Tick += SecondTimerTick;
             InitializeComponent();
+            SetResourceReference(AxisFontSizeProperty, "TimelineAxisFontSize");
+            // The connections list shows the same requests and works with the keyboard; the bars are for the mouse.
+            AutomationProperties.SetName(TimelineScrollViewer, Localization.GetLocalizedString("TIMELINE_AUTOMATION_NAME"));
+            AutomationProperties.SetHelpText(TimelineScrollViewer, Localization.GetLocalizedString("TIMELINE_AUTOMATION_HELP"));
+            AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
+            VolumeChart.StepClicked = VolumeStepClicked;
             _hostListMenu.SetResourceReference(Control.BackgroundProperty, "MenuBackgroundBrush");
-            _hostListMenu.SetResourceReference(Control.ForegroundProperty, "MenuForegroundBrush");
+            _hostListMenu.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
             Loaded += ViewLoaded;
             Unloaded += ViewUnloaded;
             IsVisibleChanged += ViewVisibilityChanged;
             ContextMenuOpening += HostListMenuOpening;
+            PropertyChangedEventManager.AddHandler(LookState.Current, LookChanged, nameof(LookState.IsNewLook));
         }
 
         private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -145,11 +188,14 @@ namespace XMAT.WebServiceCapture
             view.RequestRefresh(true);
         }
 
+        // Stopping shows the final responses, or the whole capture in Volume; starting shows Volume's live minute.
         private static void OnCaptureRunningChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
-            if (!(bool)e.NewValue)
+            var view = (CaptureTimelineView)d;
+            view.UpdateSecondTimer();
+            if (!(bool)e.NewValue || view._isVolume)
             {
-                ((CaptureTimelineView)d).RequestRefresh(true);
+                view.RequestRefresh(true);
             }
         }
 
@@ -169,16 +215,19 @@ namespace XMAT.WebServiceCapture
                 _active = true;
                 AttachSource();
             }
+            UpdateSecondTimer();
             RequestRefresh(true);
         }
 
         private void Deactivate()
         {
             _active = false;
+            UpdateSecondTimer();
             DetachSource();
             TrimBars(0);
             TrimLabels(0);
             TrimAxis(0);
+            VolumeChart.Clear();
         }
 
         private void AttachSource()
@@ -282,6 +331,45 @@ namespace XMAT.WebServiceCapture
         private void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
             _isWaterfall = WaterfallMode.IsChecked is true;
+            _isVolume = VolumeMode?.IsChecked is true;
+            // The first mode is checked while the view is still being built.
+            if (VolumeChart != null)
+            {
+                ShowMode();
+            }
+            RequestRefresh(true);
+        }
+
+        // Volume replaces the waterfall in its well; the hidden view lets go of what it drew.
+        private void ShowMode()
+        {
+            TimelineScrollViewer.Visibility = _isVolume ? Visibility.Collapsed : Visibility.Visible;
+            VolumeChart.Visibility = _isVolume ? Visibility.Visible : Visibility.Collapsed;
+            if (_isVolume)
+            {
+                TrimBars(0);
+                TrimLabels(0);
+                TrimAxis(0);
+            }
+            else
+            {
+                VolumeChart.Clear();
+            }
+            UpdateSecondTimer();
+        }
+
+        // Bar labels differ by look, so every bar is updated again. Volume is part of the new look only, so the original
+        // look goes back to the waterfall.
+        private void LookChanged(object sender, PropertyChangedEventArgs e)
+        {
+            foreach (var bar in _bars)
+            {
+                bar.Model = null;
+            }
+            if (!LookState.Current.IsNewLook && VolumeMode.IsChecked is true)
+            {
+                WaterfallMode.IsChecked = true;
+            }
             RequestRefresh(true);
         }
 
@@ -336,6 +424,29 @@ namespace XMAT.WebServiceCapture
             RequestRefresh(true);
         }
 
+        // While a live capture shows Volume, the chart moves on once a second, as each second ends; otherwise nothing
+        // runs.
+        private void UpdateSecondTimer()
+        {
+            if (!_active || !_isVolume || !IsCaptureRunning)
+            {
+                _secondTimer.Stop();
+            }
+            else if (!_secondTimer.IsEnabled)
+            {
+                var ticks = Clock().Ticks % TimeSpan.TicksPerSecond;
+                _secondTimer.Interval = TimeSpan.FromTicks(TimeSpan.TicksPerSecond - ticks) + SecondTimerDelay;
+                _secondTimer.Start();
+            }
+        }
+
+        private void SecondTimerTick(object sender, EventArgs e)
+        {
+            _secondTimer.Stop();
+            RefreshViewport();
+            UpdateSecondTimer();
+        }
+
         private void CancelRefresh()
         {
             _refreshTimer.Stop();
@@ -369,6 +480,14 @@ namespace XMAT.WebServiceCapture
 
         private void RenderViewportCore()
         {
+            if (_isVolume)
+            {
+                _dirty = false;
+                RenderCount++;
+                VolumeChart.Show(_layout.Volume, IsCaptureRunning, Clock());
+                return;
+            }
+
             var width = TimelineScrollViewer.ViewportWidth;
             var height = TimelineScrollViewer.ViewportHeight;
             if (width <= 0 || height <= 0 || !double.IsFinite(width) || !double.IsFinite(height))
@@ -381,19 +500,21 @@ namespace XMAT.WebServiceCapture
 
             _dirty = false;
             RenderCount++;
-            var extentHeight = CaptureTimelineLayout.AxisHeight + _layout.GetHeight(_isWaterfall);
+            var axisHeight = AxisHeight;
+            var extentHeight = axisHeight + _layout.GetHeight(_isWaterfall);
             TimelineExtent.Width = _layout.Width;
             TimelineExtent.Height = extentHeight;
             var left = Math.Clamp(TimelineScrollViewer.HorizontalOffset, 0, Math.Max(0, _layout.Width - width));
             var top = Math.Clamp(TimelineScrollViewer.VerticalOffset, 0, Math.Max(0, extentHeight - height));
-            var rowOffset = Math.Max(0, top - CaptureTimelineLayout.AxisHeight);
-            var rowHeight = Math.Max(0, height - Math.Max(0, CaptureTimelineLayout.AxisHeight - top));
+            var rowOffset = Math.Max(0, top - axisHeight);
+            var rowHeight = Math.Max(0, height - Math.Max(0, axisHeight - top));
             Canvas.SetLeft(TimelineCanvas, left);
-            Canvas.SetTop(TimelineCanvas, rowOffset + CaptureTimelineLayout.AxisHeight);
+            Canvas.SetTop(TimelineCanvas, rowOffset + axisHeight);
             TimelineCanvas.Width = width;
             TimelineCanvas.Height = rowHeight;
             Canvas.SetLeft(TimeAxisCanvas, left);
             TimeAxisCanvas.Width = width;
+            TimeAxisCanvas.Height = axisHeight;
             _layout.GetVisibleRows(_isWaterfall, rowOffset, rowHeight, _visibleRows);
 
             var barCount = 0;
@@ -419,7 +540,7 @@ namespace XMAT.WebServiceCapture
             }
             TrimBars(barCount);
             TrimLabels(labelCount);
-            RenderAxis(left, width, top < CaptureTimelineLayout.AxisHeight);
+            RenderAxis(left, width, axisHeight, top < axisHeight);
         }
 
         private BarVisual GetBar(int index)
@@ -429,7 +550,6 @@ namespace XMAT.WebServiceCapture
                 var label = new TextBlock
                 {
                     FontSize = 9,
-                    Foreground = Brushes.White,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(3, 0, 3, 0)
@@ -457,11 +577,20 @@ namespace XMAT.WebServiceCapture
                 visual.Model = model;
                 visual.Version = row.Version;
                 visual.Root.Tag = model;
-                visual.Root.Background = StatusBrush(model.Status);
+                var status = TrafficSummary.ClassOf(model.Status);
+                if (visual.Status != status)
+                {
+                    visual.Status = status;
+                    visual.Root.SetResourceReference(Border.BackgroundProperty, StatusMeanings.ChartFill(status));
+                    visual.Label.SetResourceReference(TextBlock.ForegroundProperty, StatusMeanings.ChartLabel(status));
+                }
                 visual.Root.ToolTip = $"{model.Method} {model.Host}{model.Path}\n" +
                     $"Status: {model.Status}\nTime: {row.Start:HH:mm:ss.fff}\n" +
                     $"Duration: {row.Duration.TotalMilliseconds:F0} ms";
-                visual.Label.Text = $"{model.Method} {model.Path}";
+                // The new look starts the label with the status, so that it is not told by color alone.
+                visual.Label.Text = LookState.Current.IsNewLook && !string.IsNullOrEmpty(model.Status)
+                    ? $"{model.Status} {model.Method} {model.Path}"
+                    : $"{model.Method} {model.Path}";
             }
             visual.Root.Width = width;
             visual.Label.Visibility = width > 60 ? Visibility.Visible : Visibility.Collapsed;
@@ -472,6 +601,16 @@ namespace XMAT.WebServiceCapture
         private void Bar_Click(object sender, MouseButtonEventArgs e)
         {
             if (sender is FrameworkElement fe && fe.Tag is ProxyConnectionModel model)
+            {
+                SelectedItem = model;
+            }
+        }
+
+        // A Volume point selects its first request, as a bar selects its own.
+        private void VolumeStepClicked(long first, long end)
+        {
+            var model = _layout.FirstRequestBetween(CaptureVolumeSeries.TimeOf(first), CaptureVolumeSeries.TimeOf(end));
+            if (model != null)
             {
                 SelectedItem = model;
             }
@@ -518,14 +657,14 @@ namespace XMAT.WebServiceCapture
             if (index == _hostLabels.Count)
             {
                 var label = new TextBlock { FontWeight = FontWeights.SemiBold, FontSize = 11, ContextMenu = _hostListMenu };
-                label.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
+                label.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
                 _hostLabels.Add(label);
                 TimelineCanvas.Children.Add(label);
             }
             return _hostLabels[index];
         }
 
-        private void RenderAxis(double offset, double width, bool visible)
+        private void RenderAxis(double offset, double width, double height, bool visible)
         {
             _visibleTicks.Clear();
             if (visible)
@@ -539,6 +678,9 @@ namespace XMAT.WebServiceCapture
                 var left = tick.Left - offset;
                 visual.Tick.X1 = left;
                 visual.Tick.X2 = left;
+                // The ticks end at the bottom of the axis, under the labels at its top.
+                visual.Tick.Y1 = height - AxisTickLength;
+                visual.Tick.Y2 = height;
                 visual.Label.Text = _layout.SpanMilliseconds > 60000
                     ? TimeSpan.FromMilliseconds(tick.Milliseconds).ToString(@"m\:ss\.f")
                     : _layout.SpanMilliseconds > 1000
@@ -555,13 +697,12 @@ namespace XMAT.WebServiceCapture
             {
                 var tick = new Line
                 {
-                    Y1 = 14,
-                    Y2 = 20,
                     StrokeThickness = 1
                 };
-                tick.SetResourceReference(Shape.StrokeProperty, "SecondaryForegroundBrush");
-                var label = new TextBlock { FontSize = 9 };
-                label.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryForegroundBrush");
+                tick.SetResourceReference(Shape.StrokeProperty, "TextSecondaryBrush");
+                var label = new TextBlock();
+                label.SetResourceReference(TextBlock.FontSizeProperty, "TimelineAxisFontSize");
+                label.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
                 _axis.Add(new AxisVisual(tick, label));
                 TimeAxisCanvas.Children.Add(tick);
                 TimeAxisCanvas.Children.Add(label);
@@ -602,36 +743,14 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static Brush StatusBrush(string status)
-        {
-            var index = int.TryParse(status, out var code) ? code / 100 : 0;
-            return StatusBrushes[index >= 2 ? Math.Min(index, 5) - 1 : 0];
-        }
-
-        private static Brush[] CreateStatusBrushes()
-        {
-            var colors = new[]
-            {
-                Color.FromRgb(0x68, 0x68, 0x68), Color.FromRgb(0x4C, 0xAF, 0x50),
-                Color.FromRgb(0x21, 0x96, 0xF3), Color.FromRgb(0xFF, 0x98, 0x00),
-                Color.FromRgb(0xF4, 0x43, 0x36)
-            };
-            var brushes = new Brush[colors.Length];
-            for (var index = 0; index < colors.Length; index++)
-            {
-                var brush = new SolidColorBrush(colors[index]);
-                brush.Freeze();
-                brushes[index] = brush;
-            }
-            return brushes;
-        }
-
         private sealed class BarVisual(Border root, TextBlock label)
         {
             internal Border Root { get; } = root;
             internal TextBlock Label { get; } = label;
             internal ProxyConnectionModel Model { get; set; }
             internal long Version { get; set; }
+            // The status class the bar's colors are for, as charts color them (StatusMeanings.ChartFill).
+            internal TrafficStatusClass? Status { get; set; }
         }
 
         private sealed record AxisVisual(Line Tick, TextBlock Label);

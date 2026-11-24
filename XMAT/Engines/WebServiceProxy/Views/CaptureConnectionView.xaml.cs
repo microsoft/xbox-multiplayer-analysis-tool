@@ -13,6 +13,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -104,6 +105,10 @@ namespace XMAT.WebServiceCapture
             get { return Localization.GetLocalizedString("WEBCAP_STOP"); }
         }
 
+        public static string RequestIdText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
+        public static string RequestTimeText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
+        public static string DurationText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
+
         // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
@@ -113,6 +118,7 @@ namespace XMAT.WebServiceCapture
 
         // The sessions that an export from this list covers: the visible ones follow every active filter (the Status, Host
         // and Method checkboxes as exact values, and the process filter); selectedOnly also keeps only the selected rows.
+        // A search has no exact form in a selection, so while one is set, the visible rows are named one by one.
         internal CaptureSelectionSpec ExportSelection(bool selectedOnly) =>
             new(
                 _attachedController?.ProcessFilter ?? ProcessFilterSpec.Empty,
@@ -122,7 +128,9 @@ namespace XMAT.WebServiceCapture
                 CheckedValues(MethodFilters, _attachedController?.MethodFilterList),
                 selectedOnly
                     ? ConnectionList.SelectedItems.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
-                    : null,
+                    : _search.IsActive
+                        ? ConnectionList.Items.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
+                        : null,
                 false);
 
         // The values that an enabled checkbox filter shows: like CaptureFilterIndex, the first item of a value decides.
@@ -152,6 +160,7 @@ namespace XMAT.WebServiceCapture
             ProcessFilterPopup.Opened += (_, _) => ProcessFilterButton.IsHitTestVisible = false;
             ProcessFilterPopup.Closed += (_, _) => ProcessFilterButton.IsHitTestVisible = true;
             TimelineView.OffersProcessFilterItems = true;
+            PropertyChangedEventManager.AddHandler(LookState.Current, LookState_Changed, nameof(LookState.IsNewLook));
 
             EditAndResendMenuItem.Header = Localization.GetLocalizedString("COMPOSER_TITLE");
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
@@ -163,7 +172,7 @@ namespace XMAT.WebServiceCapture
             ShapingButton.Content = Localization.GetLocalizedString("SHAPING_TITLE");
             AnalyzeButton.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearButton.Content = Localization.GetLocalizedString("WEBCAP_CLEAR");
-            AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
+            ToolbarAutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
             FiltersText.Text = Localization.GetLocalizedString("GENERIC_FILTERS");
 
             StatusFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_STATUS");
@@ -183,11 +192,8 @@ namespace XMAT.WebServiceCapture
             RequestViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_REQUEST");
             ResponseViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_RESPONSE");
 
-            RequestIdLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
             ReplayOfLabel.Text = Localization.GetLocalizedString("REPLAY_OF_LABEL");
             ViewVerifyDiffButton.Content = Localization.GetLocalizedString("VERIFY_DIFF_VIEW");
-            TimeLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
-            DurationLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
 
             ConnectionList.Columns[0].Header = Localization.GetLocalizedString("WEBCAP_HEADER_NUMBER");
             ConnectionList.Columns[1].Header = Localization.GetLocalizedString("WEBCAP_HEADER_STATUS");
@@ -196,6 +202,20 @@ namespace XMAT.WebServiceCapture
             ConnectionList.Columns[4].Header = Localization.GetLocalizedString("WEBCAP_HEADER_HOST");
             ConnectionList.Columns[5].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PROCESS");
             ConnectionList.Columns[6].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PATH");
+            DataGridColumnInfo.SetDescription(ConnectionList.Columns[0], Localization.GetLocalizedString("A11Y_COLUMN_REQUEST_NUMBER"));
+            ColumnSummary.SetSource(ConnectionList, this);
+
+            AutomationProperties.SetName(ConnectionList, Localization.GetLocalizedString("A11Y_SESSIONS_TABLE"));
+            AutomationProperties.SetName(TimelineSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_TIMELINE"));
+            AutomationProperties.SetName(InspectorSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_INSPECTOR"));
+            AutomationProperties.SetName(RequestResponseSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_REQUEST_RESPONSE"));
+
+            // The process filter popup takes focus when it opens and keeps Tab inside it; Esc closes it and returns
+            // to the Process button.
+            ProcessFilterPopup.Opened += (_, _) =>
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => ProcessIncludeText.Focus()));
+            ProcessFilterPopup.PreviewKeyDown += ProcessFilterPopup_PreviewKeyDown;
+            ProcessFilterPopup.Closed += (_, _) => ReturnFocusFromProcessFilter();
         }
 
         private void EditAndResend_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -885,7 +905,7 @@ namespace XMAT.WebServiceCapture
                 {
                     ConnectionList.Items.Filter = null;
                 }
-                SetLiveProcessFiltering(false);
+                SetLiveFiltering(false, false);
                 if (releaseView)
                 {
                     ReleaseConnectionsView();
@@ -931,7 +951,7 @@ namespace XMAT.WebServiceCapture
             {
                 view.MoveCurrentTo(_attachedController?.SelectedConnectionModel);
             }
-            SetLiveProcessFiltering(false);
+            SetLiveFiltering(false, false);
             ListCollectionView previous = _connectionsView;
             _connectionsView = view;
             ConnectionList.ItemsSource = view;
@@ -945,7 +965,7 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            SetLiveProcessFiltering(false);
+            SetLiveFiltering(false, false);
             _connectionsView = null;
             if (ReferenceEquals(ConnectionList.ItemsSource, retired))
             {
@@ -1009,6 +1029,7 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
+            RequestSearchCount();
             if (e.Action == NotifyCollectionChangedAction.Reset)
             {
                 DetachObservedItems();
@@ -1055,7 +1076,8 @@ namespace XMAT.WebServiceCapture
                 (!MethodFilters.IsFilterEnabled ||
                 _methodValues.IsChecked(model.Method)) &&
                 (_processMatcher == null ||
-                IsShownByProcessFilter(model));
+                IsShownByProcessFilter(model)) &&
+                (!_search.IsActive || _search.Matches(model));
         }
 
         private void CaptureConnectionView_ControllerChanged(object sender, PropertyChangedEventArgs args)
@@ -1130,7 +1152,20 @@ namespace XMAT.WebServiceCapture
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
+            UpdateActiveFilterCount();
             RequestFilterRefresh();
+        }
+
+        // The Filters button that stands in for a folded filter row shows how many filters are on.
+        private void UpdateActiveFilterCount()
+        {
+            if (FiltersHost != null)
+            {
+                FiltersHost.ActiveFilterCount =
+                    new[] { StatusFilters, HostFilters, MethodFilters }.Count(filter => filter is { IsFilterEnabled: true }) +
+                    (_attachedController != null && !ProcessFilter.IsEmpty(_processSpec) ? 1 : 0);
+            }
+            UpdateClearFilters();
         }
 
         private void RequestFilterRefresh()
@@ -1152,21 +1187,22 @@ namespace XMAT.WebServiceCapture
             }
             bool processFilterActive = _processMatcher != null;
             var filter = StatusFilters.IsFilterEnabled || HostFilters.IsFilterEnabled || MethodFilters.IsFilterEnabled ||
-                processFilterActive
+                processFilterActive || _search.IsActive
                 ? _connectionFilter
                 : null;
             // One refresh for the whole change, when the deferral ends: assigning the filter, even the one already set,
             // refreshes the view, and WPF refuses an explicit Refresh while the refresh is deferred. While a process
-            // filter is set, live filtering re-evaluates a row whose process resolves later, so that row is added or
-            // removed without refreshing the others.
+            // filter or a search is set, live filtering re-evaluates a row whose process resolves later, or whose
+            // status arrives, so that row is added or removed without refreshing the others.
             using (ConnectionList.Items.DeferRefresh())
             {
-                SetLiveProcessFiltering(processFilterActive);
+                SetLiveFiltering(processFilterActive, _search.IsActive);
                 if (filter != null || ConnectionList.Items.Filter != null)
                 {
                     ConnectionList.Items.Filter = filter;
                 }
             }
+            RequestSearchCount();
         }
 
         private void UpdateFilterSources()
@@ -1180,17 +1216,17 @@ namespace XMAT.WebServiceCapture
         {
             UpdateFilterSources();
             var controller = _attachedController;
-            _statusValues.EnsureValue(item.Status);
+            _statusValues.EnsureValue(item.Status, StatusFilters.NewValuesChecked);
             if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
             {
                 return;
             }
-            _hostValues.EnsureValue(item.Host);
+            _hostValues.EnsureValue(item.Host, HostFilters.NewValuesChecked);
             if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
             {
                 return;
             }
-            _methodValues.EnsureValue(item.Method);
+            _methodValues.EnsureValue(item.Method, MethodFilters.NewValuesChecked);
         }
 
         private void NetworkShaping_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -1743,30 +1779,43 @@ namespace XMAT.WebServiceCapture
                 (row.Item as ProxyConnectionModel)?.ActionableHost,
                 "HOST_LIST_NO_HOST",
                 row);
-            row.ContextMenu.Items.Add(new Separator());
-            row.ContextMenu.Items.Add(new MenuItem
+            if (LookState.Current.IsNewLook)
             {
-                Header = Localization.GetLocalizedString("COMPOSER_TITLE"),
-                Command = WebServiceProxyCommands.EditAndResend,
-                CommandTarget = this,
-                CommandParameter = row.Item
-            });
-            row.ContextMenu.Items.Add(CreateReplayMenu(CapturesFor(row)));
-            if (row.Item is ProxyConnectionModel { IsReplay: true } replay)
+                AddRequestGroup(row.ContextMenu, row);
+            }
+            else
             {
+                row.ContextMenu.Items.Add(new Separator());
                 row.ContextMenu.Items.Add(new MenuItem
                 {
-                    Header = Localization.GetLocalizedString("VERIFY_DIFF_VIEW"),
-                    Command = WebServiceProxyCommands.ViewVerifyDiff,
+                    Header = Localization.GetLocalizedString("COMPOSER_TITLE"),
+                    Command = WebServiceProxyCommands.EditAndResend,
                     CommandTarget = this,
-                    CommandParameter = replay,
+                    CommandParameter = row.Item
                 });
+                row.ContextMenu.Items.Add(CreateReplayMenu(CapturesFor(row)));
+                if (row.Item is ProxyConnectionModel { IsReplay: true } replay)
+                {
+                    row.ContextMenu.Items.Add(new MenuItem
+                    {
+                        Header = Localization.GetLocalizedString("VERIFY_DIFF_VIEW"),
+                        Command = WebServiceProxyCommands.ViewVerifyDiff,
+                        CommandTarget = this,
+                        CommandParameter = replay,
+                    });
+                }
             }
             CaptureProcessViewAdapter.AddMenuItems(
                 row.ContextMenu,
                 row.Item as ProxyConnectionModel,
                 controller.ProcessFilter,
                 row);
+            if (LookState.Current.IsNewLook)
+            {
+                AddSessionsGroup(row.ContextMenu, row, tab.IsReadOnly);
+                return;
+            }
+
             row.ContextMenu.Items.Add(new Separator());
             row.ContextMenu.Items.Add(CommandItem("WEBCAP_EXPORT_SELECTED", WebServiceProxyCommands.ExportSelectedSessions, row));
             row.ContextMenu.Items.Add(CommandItem("WEBCAP_EXPORT_VISIBLE", WebServiceProxyCommands.ExportVisibleSessions, row));
@@ -1780,6 +1829,57 @@ namespace XMAT.WebServiceCapture
 
         private static MenuItem CommandItem(string header, RoutedCommand command, IInputElement target) =>
             new() { Header = Localization.GetLocalizedString(header), CommandTarget = target, Command = command };
+
+        // The new look's Request group: edit and resend the request, replay the selection, and for a row of the Replays
+        // tab, view the differences its verification found.
+        private void AddRequestGroup(ContextMenu menu, DataGridRow row)
+        {
+            GroupedMenu.AddGroup(menu, Localization.GetLocalizedString("MENU_GROUP_REQUEST"), null);
+            MenuItem edit = GroupedMenu.Item(Localization.GetLocalizedString("COMPOSER_TITLE"), MenuGlyphs.Edit);
+            edit.Command = WebServiceProxyCommands.EditAndResend;
+            edit.CommandTarget = this;
+            edit.CommandParameter = row.Item;
+            menu.Items.Add(edit);
+
+            MenuItem replay = CreateReplayMenu(CapturesFor(row));
+            MenuRow.SetGlyph(replay, MenuGlyphs.Replay);
+            menu.Items.Add(replay);
+
+            if (row.Item is ProxyConnectionModel { IsReplay: true } replayed)
+            {
+                MenuItem verify = GroupedMenu.Item(Localization.GetLocalizedString("VERIFY_DIFF_VIEW"), MenuGlyphs.Verify);
+                verify.Command = WebServiceProxyCommands.ViewVerifyDiff;
+                verify.CommandTarget = this;
+                verify.CommandParameter = replayed;
+                menu.Items.Add(verify);
+            }
+        }
+
+        // The new look's Sessions group: short labels under the group's header; the accessible names say "sessions".
+        private static void AddSessionsGroup(ContextMenu menu, IInputElement target, bool readOnly)
+        {
+            GroupedMenu.AddGroup(menu, Localization.GetLocalizedString("MENU_GROUP_SESSIONS"), null);
+            menu.Items.Add(SessionsItem("MENU_EXPORT_SELECTED", MenuGlyphs.Export, WebServiceProxyCommands.ExportSelectedSessions, target));
+            menu.Items.Add(SessionsItem("MENU_EXPORT_VISIBLE", MenuGlyphs.Export, WebServiceProxyCommands.ExportVisibleSessions, target));
+            string why = readOnly ? Localization.GetLocalizedString("CAPTURE_DELETE_READ_ONLY") : null;
+            menu.Items.Add(WithDeleteKey(
+                SessionsItem("MENU_DELETE_SELECTED", MenuGlyphs.Delete, WebServiceProxyCommands.DeleteSelectedSessions, target),
+                ModifierKeys.None,
+                why));
+            menu.Items.Add(WithDeleteKey(
+                SessionsItem("MENU_DELETE_UNSELECTED", MenuGlyphs.Delete, WebServiceProxyCommands.DeleteUnselectedSessions, target),
+                ModifierKeys.Shift,
+                why));
+        }
+
+        private static MenuItem SessionsItem(string key, string glyph, RoutedCommand command, IInputElement target)
+        {
+            MenuItem item = GroupedMenu.Item(
+                Localization.GetLocalizedString(key), glyph, Localization.GetLocalizedString(key + "_NAME"));
+            item.CommandTarget = target;
+            item.Command = command;
+            return item;
+        }
 
         private void ExportSessions_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {

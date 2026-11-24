@@ -208,6 +208,9 @@ namespace XMAT.WebServiceCapture
 
         internal bool HasRecordingTarget => _recording != null;
 
+        // The label of the new look's Details toggle, which shows the whole notice under its summary.
+        public static string NoticeDetailsToggleText => Localization.GetLocalizedString("COMPOSER_NOTICE_DETAILS");
+
         private RequestComposerWindow(
             RequestReplayDraft draft,
             RequestReplayClient client,
@@ -225,6 +228,7 @@ namespace XMAT.WebServiceCapture
 
             Title = Localization.GetLocalizedString("COMPOSER_TITLE");
             ReplayNotice.Text = Localization.GetLocalizedString("COMPOSER_NOTICE");
+            NoticeDetails.Header = Localization.GetLocalizedString("COMPOSER_NOTICE_SUMMARY");
             MethodLabel.Content = Localization.GetLocalizedString("COMPOSER_METHOD");
             UrlLabel.Content = Localization.GetLocalizedString("COMPOSER_URL");
             UrlBox.ToolTip = Localization.GetLocalizedString("COMPOSER_URL_HINT");
@@ -3410,6 +3414,7 @@ namespace XMAT.WebServiceCapture
             ModeButton.ToolTip = modeHint;
             AutomationProperties.SetHelpText(ModeButton, modeHint);
             ReplayNotice.Text = Hint(raw, "COMPOSER_RAW_NOTICE", "COMPOSER_NOTICE");
+            NoticeDetails.Header = Hint(raw, "COMPOSER_RAW_NOTICE_SUMMARY", "COMPOSER_NOTICE_SUMMARY");
             RawWarningPanel.Visibility = rawOnly;
             MethodLabel.Visibility = parsedOnly;
             MethodBox.Visibility = parsedOnly;

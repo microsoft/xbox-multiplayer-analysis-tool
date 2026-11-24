@@ -19,26 +19,49 @@ namespace XMAT.Tests
 
         public HostListManagerWindowTests(CaptureUiApplicationFixture application) => _application = application;
 
-        // Capture tabs show each list's scope note; in the manager its intro states it once instead.
+        // Capture tabs state each list's scope: the original look in a note, the new look in the list's description. In the
+        // manager its intro states it once instead: in the new look a lead sentence and the facts that apply to both lists,
+        // in the original look one paragraph. Each list then says only what it does.
         [Fact]
-        public void Manager_StatesTheScopeInItsIntroAndHidesEachListsScopeNote()
+        public void Manager_StatesTheScopeInItsIntroInsteadOfInEachList()
         {
             _application.Run(_ =>
             {
                 var manager = new HostListManagerWindow(new HostListPolicy());
+                bool newLook = LookState.Current.IsNewLook;
                 try
                 {
+                    LookState.Current.IsNewLook = true;
                     manager.Show();
                     WpfTestHost.Pump();
                     var intro = (TextBlock)manager.FindName("IntroText");
+                    Assert.False(intro.IsVisible);
+                    foreach ((string name, string key) in new[]
+                    {
+                        ("IntroLeadText", "HOST_LISTS_WINDOW_LEAD"),
+                        ("ChangesFactText", "HOST_LISTS_WINDOW_FACT_CHANGES"),
+                        ("BlockFactText", "HOST_LISTS_WINDOW_FACT_BLOCK"),
+                        ("ExitFactText", "HOST_LISTS_WINDOW_FACT_EXIT"),
+                    })
+                    {
+                        var text = (TextBlock)manager.FindName(name);
+                        Assert.True(text.IsVisible);
+                        Assert.Equal(Localization.GetLocalizedString(key), text.Text);
+                        Assert.DoesNotContain("NO_IMPL_", text.Text);
+                    }
+                    AssertListsLeaveTheScopeToTheIntro(manager);
+
+                    LookState.Current.IsNewLook = false;
+                    WpfTestHost.Pump();
                     Assert.True(intro.IsVisible);
                     Assert.Equal(Localization.GetLocalizedString("HOST_LISTS_WINDOW_INTRO"), intro.Text);
                     Assert.DoesNotContain("NO_IMPL_", intro.Text);
-                    Assert.Equal(Visibility.Collapsed, ScopeNote(manager, "BlockListEditor").Visibility);
-                    Assert.Equal(Visibility.Collapsed, ScopeNote(manager, "BypassListEditor").Visibility);
+                    Assert.False(((FrameworkElement)manager.FindName("IntroLeadText")).IsVisible);
+                    AssertListsLeaveTheScopeToTheIntro(manager);
                 }
                 finally
                 {
+                    LookState.Current.IsNewLook = newLook;
                     manager.Close();
                     WpfTestHost.Pump();
                 }
@@ -112,7 +135,21 @@ namespace XMAT.Tests
             Assert.Same(policy.BypassList, ((BypassListView)manager.FindName("BypassListEditor")).BypassList);
         }
 
-        private static TextBlock ScopeNote(HostListManagerWindow manager, string editor) =>
-            (TextBlock)((FrameworkElement)manager.FindName(editor)).FindName("ScopeText");
+        // The original look's scope notes are hidden, and the new look's descriptions keep only their first sentence.
+        private static void AssertListsLeaveTheScopeToTheIntro(HostListManagerWindow manager)
+        {
+            foreach ((string editor, string summaryKey) in new[]
+            {
+                ("BlockListEditor", "HOST_LIST_BLOCK_SUMMARY"),
+                ("BypassListEditor", "HOST_LIST_BYPASS_SUMMARY"),
+            })
+            {
+                var view = (FrameworkElement)manager.FindName(editor);
+                Assert.Equal(Visibility.Collapsed, ((TextBlock)view.FindName("ScopeText")).Visibility);
+                string summary = ((TextBlock)view.FindName("DescriptionText")).Text;
+                Assert.Equal(Localization.GetLocalizedString(summaryKey), summary);
+                Assert.DoesNotContain("NO_IMPL_", summary);
+            }
+        }
     }
 }

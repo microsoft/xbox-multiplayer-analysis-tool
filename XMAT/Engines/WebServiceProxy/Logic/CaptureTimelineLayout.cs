@@ -17,7 +17,7 @@ namespace XMAT.WebServiceCapture
     {
         internal const double RowHeight = 16;
         internal const double HostLabelHeight = 18;
-        internal const double AxisHeight = 20;
+        internal const double MinimumAxisHeight = 20;
         internal const double MinimumBarWidth = 3;
         private const double HostGap = 4;
         private const double Overscan = RowHeight * 2;
@@ -39,6 +39,8 @@ namespace XMAT.WebServiceCapture
 
         internal int Count => _rows.Count;
         internal int ResetCount { get; private set; }
+        // Requests per second of the shown requests, for the Volume view; kept with the rows.
+        internal CaptureVolumeSeries Volume { get; } = new();
         internal DateTime Origin => Count == 0 ? DateTime.MinValue : _rows[0].Start;
         internal double SpanMilliseconds => Count == 0 ? 1 : Math.Max((_ends.Max.End - OriginAt).TotalMilliseconds, 1);
         internal double Width => Math.Max(SpanMilliseconds * 0.5, 200);
@@ -62,6 +64,7 @@ namespace XMAT.WebServiceCapture
             _hosts.Clear();
             _groups.Clear();
             _groupHeights.Clear();
+            Volume.Clear();
             _nextSequence = 0;
             _nextGroupSequence = 0;
             foreach (var model in models)
@@ -99,6 +102,7 @@ namespace XMAT.WebServiceCapture
             _hosts.Clear();
             _groups.Clear();
             _groupHeights.Clear();
+            Volume.Clear();
             _nextGroupSequence = 0;
             foreach (var entry in _entries.Values.OrderBy(item => item.Sequence))
             {
@@ -224,6 +228,26 @@ namespace XMAT.WebServiceCapture
             ((ProxyConnectionModel.InstantOf(row.Start) - OriginAt).TotalMilliseconds * Scale,
                 Math.Max(row.Duration.TotalMilliseconds * Scale, MinimumBarWidth));
 
+        // The earliest shown request from START up to END, or null if there is none.
+        internal ProxyConnectionModel FirstRequestBetween(DateTime start, DateTime end)
+        {
+            var low = 0;
+            var high = _rows.Count;
+            while (low < high)
+            {
+                var middle = (low + high) / 2;
+                if (_rows[middle].Start < start)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            return low < _rows.Count && _rows[low].Start < end ? _rows[low].Model : null;
+        }
+
         private static void AddVisibleRows(List<Entry> rows, double origin, double top, double bottom, List<Row> result)
         {
             var first = (int)Math.Clamp(Math.Floor((top - origin) / RowHeight), 0, rows.Count);
@@ -240,6 +264,7 @@ namespace XMAT.WebServiceCapture
         {
             Insert(_rows, entry, EntryOrder);
             _ends.Add((entry.End, entry.Sequence));
+            Volume.Add(entry.Start);
             var key = new HostKey(entry.Host);
             if (!_hosts.TryGetValue(key, out var group))
             {
@@ -276,6 +301,7 @@ namespace XMAT.WebServiceCapture
         {
             _rows.RemoveAt(_rows.BinarySearch(entry, EntryOrder));
             _ends.Remove((entry.End, entry.Sequence));
+            Volume.Remove(entry.Start);
             var key = new HostKey(entry.Host);
             var group = _hosts[key];
             var first = group.Rows[0].At;

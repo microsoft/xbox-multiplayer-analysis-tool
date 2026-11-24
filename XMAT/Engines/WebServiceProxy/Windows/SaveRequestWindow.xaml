@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Save request" Width="560" SizeToContent="Height" ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
-        Background="{DynamicResource PanelBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}">
+        Background="{DynamicResource SurfacePanelBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}">
   <!-- Asks how to save one request: a template unless the user includes the captured content, for this save only
        (SaveRequestWindow.xaml.cs). -->
   <StackPanel Margin="12">

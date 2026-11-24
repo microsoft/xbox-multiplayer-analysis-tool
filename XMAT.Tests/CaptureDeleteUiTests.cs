@@ -4,11 +4,16 @@
 
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Cli;
@@ -309,6 +314,117 @@ namespace XMAT.Tests
             });
         }
 
+        // DIALOG-1: in the new look, Delete asks a question that names the action and the count, then says what stays,
+        // naming the sessions that filters hide only when there are some, and the red button says the action again.
+        // Cancel is the default and the cancel answer and has the focus; only the action's button answers yes.
+        [Theory]
+        [InlineData(false, 12, 30, 0, 3, 0, "Delete {0} sessions?", "Delete {0} sessions")]
+        [InlineData(false, 1, 5, 1, 0, 1, "Delete {0} session?", "Delete {0} session")]
+        [InlineData(false, 1234, 2, 1234, 0, 0, "Delete {0} sessions?", "Delete {0} sessions")]
+        [InlineData(true, 4, 5, 2, 3, 0, "Delete the {0} sessions that aren't selected?", "Delete {0} sessions")]
+        [InlineData(true, 1, 6, 4, 2, 0, "Delete the {0} session that isn't selected?", "Delete {0} session")]
+        [InlineData(true, 2, 3, 3, 0, 0, "Delete the {0} sessions that aren't selected?", "Delete {0} sessions")]
+        public void NewLookConfirmation_NamesTheActionAndCount_WithARedButton_AndCancelsByDefault(
+            bool unselected, int sessions, int kept, int selected, int hidden, int incomplete, string question, string action)
+        {
+            static string Count(int value) => value.ToString("N0", CultureInfo.CurrentCulture);
+            var prompt = new CaptureDeletePrompt(unselected, sessions, kept, selected, hidden, incomplete);
+            _application.Run(_ =>
+            {
+                ConfirmPanel panel = MainWindow.DeleteConfirmationPanel(prompt);
+                string expectedQuestion = string.Format(CultureInfo.InvariantCulture, question, Count(sessions));
+                string expectedAction = string.Format(CultureInfo.InvariantCulture, action, Count(sessions));
+                Assert.True(panel.Heading == expectedQuestion, $"DIALOG-1: the question is \"{panel.Heading}\", not \"{expectedQuestion}\".");
+                Assert.True(panel.ConfirmText == expectedAction, $"DIALOG-1: the button says \"{panel.ConfirmText}\", not \"{expectedAction}\".");
+                Assert.Equal("This can't be undone.", panel.Message);
+                var details = new List<string>();
+                if (unselected)
+                {
+                    details.Add($"Selected sessions, which stay: {Count(selected)}");
+                    if (hidden > 0)
+                    {
+                        details.Add($"Sessions that filters hide, which stay: {Count(hidden)}");
+                    }
+                }
+                else
+                {
+                    details.Add(hidden > 0
+                        ? $"Sessions that stay: {Count(kept)}, including {Count(hidden)} that filters hide"
+                        : $"Sessions that stay: {Count(kept)}");
+                }
+
+                if (incomplete > 0)
+                {
+                    details.Add(Localization.GetLocalizedString("CAPTURE_DELETE_INCOMPLETE", Count(incomplete)));
+                }
+
+                Assert.Equal(details, panel.Details);
+                Assert.True(panel.IsDestructive && ReferenceEquals(panel.ConfirmButton.Style, panel.TryFindResource("DangerButtonStyle")),
+                    "DIALOG-1: the action's button isn't the red DangerButtonStyle.");
+                Assert.True(panel.CancelButton.IsDefault && panel.CancelButton.IsCancel &&
+                    !panel.ConfirmButton.IsDefault && !panel.ConfirmButton.IsCancel,
+                    "DIALOG-1: Cancel isn't the answer for both Enter and Esc.");
+
+                foreach (bool confirm in new[] { false, true })
+                {
+                    var window = new ConfirmWindow(MainWindow.DeleteConfirmationPanel(prompt), "Delete Sessions");
+                    object focused = null;
+                    Color? label = null, onFill = null;
+                    Exception failure = null;
+                    window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+                    {
+                        try
+                        {
+                            focused = FocusManager.GetFocusedElement(window);
+                            Button deleteButton = window.Panel.ConfirmButton;
+                            label = (VisualDescendants(deleteButton).OfType<TextBlock>().Single().Foreground as SolidColorBrush)?.Color;
+                            onFill = (deleteButton.TryFindResource("ErrorOnFillBrush") as SolidColorBrush)?.Color;
+                            Button answer = confirm ? deleteButton : window.Panel.CancelButton;
+                            ((IInvokeProvider)new ButtonAutomationPeer(answer).GetPattern(PatternInterface.Invoke)).Invoke();
+                        }
+                        catch (Exception exception)
+                        {
+                            failure = exception;
+                        }
+                        finally
+                        {
+                            // Only if the answer didn't close it, so a failure can't hang the run.
+                            window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+                            {
+                                if (window.IsVisible)
+                                {
+                                    window.Close();
+                                }
+                            }));
+                        }
+                    }));
+                    bool? answered = window.ShowDialog();
+                    if (failure != null)
+                    {
+                        ExceptionDispatchInfo.Capture(failure).Throw();
+                    }
+
+                    Assert.True(ReferenceEquals(window.Panel.CancelButton, focused), "DIALOG-1: Cancel doesn't have the focus when the confirmation opens.");
+                    Assert.True(onFill != null && label == onFill,
+                        $"DIALOG-1: the red button's label is {label}, not the label color on red, {onFill}.");
+                    Assert.True(answered == confirm, $"DIALOG-1: {(confirm ? "the action's button" : "Cancel")} answered {answered?.ToString() ?? "nothing"}.");
+                }
+            });
+        }
+
+        private static IEnumerable<DependencyObject> VisualDescendants(DependencyObject parent)
+        {
+            for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(parent, index);
+                yield return child;
+                foreach (DependencyObject descendant in VisualDescendants(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
         private static (CaptureConnectionView View, DataGrid Grid, RecordingDeleteDialogs Dialogs) Show(Window window, ICaptureDeviceContext tab)
         {
             var dialogs = new RecordingDeleteDialogs();
@@ -360,8 +476,8 @@ namespace XMAT.Tests
             WpfTestHost.Pump();
         }
 
-        // The confirmation states the prompt's counts and, only when there are some, the sessions without a complete
-        // response; Cancel is its default answer.
+        // The original look's confirmation states the prompt's counts and, only when there are some, the sessions without a
+        // complete response; Cancel is its default answer.
         private static void AssertConfirmation(CaptureDeletePrompt prompt)
         {
             var dialog = MainWindow.DeleteConfirmation(prompt);

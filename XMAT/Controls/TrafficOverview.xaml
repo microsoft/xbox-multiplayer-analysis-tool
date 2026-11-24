@@ -1,0 +1,151 @@
+<UserControl x:Class="XMAT.TrafficOverview"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:XMAT"
+             x:Name="Overview">
+    <!-- Its looks are in Styles/TrafficOverview.xaml, which only the new look merges. -->
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="VisibleWhenTrue"/>
+
+        <!-- A status class or host that filters the table is a button; No status, which can't filter, only informs. -->
+        <DataTemplate x:Key="LegendButton">
+            <Button Click="Part_Click" Style="{DynamicResource TrafficOverviewLegendItemStyle}"
+                    AutomationProperties.Name="{Binding Name}" ToolTip="{Binding ToolTip}"/>
+        </DataTemplate>
+        <DataTemplate x:Key="LegendInformation">
+            <ContentControl Focusable="False" Style="{DynamicResource TrafficOverviewLegendItemStyle}"
+                            ToolTip="{Binding ToolTip}"/>
+        </DataTemplate>
+        <local:TrafficPartTemplateSelector x:Key="LegendTemplates"
+                                           Selectable="{StaticResource LegendButton}"
+                                           Information="{StaticResource LegendInformation}"/>
+
+        <DataTemplate x:Key="TextButton">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{DynamicResource TrafficOverviewTextSeparatorStyle}"
+                           Visibility="{Binding ShowSeparator, Converter={StaticResource VisibleWhenTrue}}"/>
+                <Button Click="Part_Click" Style="{DynamicResource TrafficOverviewTextItemStyle}"
+                        AutomationProperties.Name="{Binding Name}" ToolTip="{Binding ToolTip}"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="TextInformation">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{DynamicResource TrafficOverviewTextSeparatorStyle}"
+                           Visibility="{Binding ShowSeparator, Converter={StaticResource VisibleWhenTrue}}"/>
+                <ContentControl Focusable="False" Style="{DynamicResource TrafficOverviewTextItemStyle}"/>
+            </StackPanel>
+        </DataTemplate>
+        <local:TrafficPartTemplateSelector x:Key="TextTemplates"
+                                           Selectable="{StaticResource TextButton}"
+                                           Information="{StaticResource TextInformation}"/>
+
+        <DataTemplate x:Key="HostButton">
+            <Button Click="Part_Click" Style="{DynamicResource TrafficOverviewHostItemStyle}"
+                    AutomationProperties.Name="{Binding Name}" ToolTip="{Binding ToolTip}"/>
+        </DataTemplate>
+
+        <ItemsPanelTemplate x:Key="PartRow">
+            <StackPanel Orientation="Horizontal"/>
+        </ItemsPanelTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Border x:Name="Strip" Style="{DynamicResource TrafficOverviewStripStyle}">
+            <Grid>
+                <!-- The two requests cells share their rows' heights, so the count lines up with its line. -->
+                <local:TrafficOverviewPanel x:Name="Cells" Style="{DynamicResource TrafficOverviewCellsStyle}"
+                                            Grid.IsSharedSizeScope="True">
+                    <!-- Requests: the count. Screen readers read the cell as one line from the count. -->
+                    <Grid x:Name="RequestsCell" local:TrafficOverviewPanel.Column="0" VerticalAlignment="Top">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
+                        </Grid.RowDefinitions>
+                        <!-- While the line shows, the label runs over it, so the count keeps the line 10px away. -->
+                        <DockPanel Style="{DynamicResource TrafficOverviewLabelRowStyle}">
+                            <local:OverhangDecorator Overhangs="{Binding IsVisible, ElementName=RequestsLineCell}">
+                                <TextBlock x:Name="RequestsLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                            </local:OverhangDecorator>
+                        </DockPanel>
+                        <TextBlock x:Name="TotalText" Grid.Row="1" Style="{DynamicResource TrafficOverviewTotalStyle}"
+                                   Text="{Binding TotalText}" AutomationProperties.Name="{Binding RequestsName}"/>
+                    </Grid>
+                    <!-- Requests per second over the capture, with the rate in the last second above the line's end while
+                         capturing. It is the last to go, when even the status as text doesn't fit. The line stretches to
+                         fill the column. -->
+                    <Grid x:Name="RequestsLineCell" local:TrafficOverviewPanel.Cell="RequestsLine"
+                          local:TrafficOverviewPanel.Column="0" VerticalAlignment="Top">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsLabelRow"/>
+                            <RowDefinition Height="Auto" SharedSizeGroup="RequestsValueRow"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Style="{DynamicResource TrafficOverviewLabelRowStyle}">
+                            <TextBlock x:Name="RateText" DockPanel.Dock="Right" Style="{DynamicResource TrafficOverviewRateStyle}"
+                                       Text="{Binding RateText}"
+                                       Visibility="{Binding IsRateShown, Converter={StaticResource VisibleWhenTrue}}"/>
+                        </DockPanel>
+                        <local:TrafficSparkline x:Name="Sparkline" Grid.Row="1"
+                                                Style="{DynamicResource TrafficOverviewSparklineStyle}"
+                                                Values="{Binding RequestsPerSecond}"/>
+                    </Grid>
+                    <Border Style="{DynamicResource TrafficOverviewDividerStyle}"/>
+
+                    <!-- Status: a bar of the status classes, as wide as the column, over a legend of their counts. -->
+                    <StackPanel x:Name="StatusChart" local:TrafficOverviewPanel.Cell="Chart" local:TrafficOverviewPanel.Column="1"
+                                VerticalAlignment="Top">
+                        <TextBlock x:Name="StatusLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                        <local:TrafficStatusBar x:Name="StatusBar" Style="{DynamicResource TrafficOverviewStatusBarStyle}"
+                                                Counts="{Binding ClassCounts}"/>
+                        <!-- Tab enters each group of parts once; the arrow keys move within it and Enter selects. -->
+                        <ItemsControl x:Name="StatusLegend" Style="{DynamicResource TrafficOverviewLegendStyle}"
+                                      Focusable="False" KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Cycle"
+                                      ItemsPanel="{StaticResource PartRow}" ItemsSource="{Binding StatusParts}"
+                                      ItemTemplateSelector="{StaticResource LegendTemplates}"/>
+                    </StackPanel>
+
+                    <!-- The same without No status, which leaves first to make room for the busiest hosts. -->
+                    <StackPanel x:Name="CompactChart" local:TrafficOverviewPanel.Cell="CompactChart"
+                                local:TrafficOverviewPanel.Column="1" VerticalAlignment="Top">
+                        <TextBlock x:Name="CompactStatusLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                        <local:TrafficStatusBar x:Name="CompactBar" Style="{DynamicResource TrafficOverviewStatusBarStyle}"
+                                                Counts="{Binding CompactClassCounts}"/>
+                        <ItemsControl x:Name="CompactLegend" Style="{DynamicResource TrafficOverviewLegendStyle}"
+                                      Focusable="False" KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Cycle"
+                                      ItemsPanel="{StaticResource PartRow}" ItemsSource="{Binding CompactParts}"
+                                      ItemTemplateSelector="{StaticResource LegendTemplates}"/>
+                    </StackPanel>
+
+                    <!-- At narrow widths the status is one line of text: successes and errors. -->
+                    <StackPanel x:Name="StatusTextCell" local:TrafficOverviewPanel.Cell="Text"
+                                local:TrafficOverviewPanel.Column="1" VerticalAlignment="Top">
+                        <TextBlock x:Name="StatusTextLabel" Style="{DynamicResource TrafficOverviewLabelStyle}"/>
+                        <ItemsControl x:Name="StatusText" Style="{DynamicResource TrafficOverviewStatusTextStyle}"
+                                      Focusable="False" KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Cycle"
+                                      ItemsPanel="{StaticResource PartRow}" ItemsSource="{Binding TextParts}"
+                                      ItemTemplateSelector="{StaticResource TextTemplates}"/>
+                    </StackPanel>
+
+                    <!-- The three busiest hosts, each with a bar in proportion to the busiest, as wide as the column allows. -->
+                    <Border local:TrafficOverviewPanel.Cell="Hosts" Style="{DynamicResource TrafficOverviewDividerStyle}"/>
+                    <DockPanel x:Name="HostsCell" local:TrafficOverviewPanel.Cell="Hosts" local:TrafficOverviewPanel.Column="2"
+                               VerticalAlignment="Top">
+                        <TextBlock x:Name="HostsLabel" Style="{DynamicResource TrafficOverviewHostsLabelStyle}"/>
+                        <ItemsControl x:Name="HostList" Grid.IsSharedSizeScope="True"
+                                      Focusable="False" KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Cycle"
+                                      ItemsSource="{Binding HostParts}" ItemTemplate="{StaticResource HostButton}"/>
+                    </DockPanel>
+                </local:TrafficOverviewPanel>
+
+                <Button x:Name="HideButton" Click="Hide_Click" Style="{DynamicResource TrafficOverviewHideButtonStyle}"/>
+            </Grid>
+        </Border>
+
+        <!-- While the overview is hidden, this brings it back. -->
+        <Button x:Name="ShowButton" Click="Show_Click" Visibility="Collapsed"
+                Style="{DynamicResource TrafficOverviewShowButtonStyle}"/>
+    </Grid>
+</UserControl>

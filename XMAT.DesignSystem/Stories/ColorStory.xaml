@@ -1,0 +1,140 @@
+<ds:Story x:Class="XMAT.DesignSystem.ColorStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Color"
+          Summary="XMAT's colors come in three layers: five base colors, the palette they generate, and the roles that views and styles use. This page reads the theme files, so it shows the colors XMAT is built with. Change a color in the themes and it changes here and in XMAT. The design system tests check that every color the themes define is listed here, and that text stays readable."
+          Section="Foundations"
+          DefinedIn="XMAT/Themes/Palette.json, XMAT/Themes/LightTheme.xaml, XMAT/Themes/DarkTheme.xaml, XMAT/Themes/HighContrastTheme.xaml, XMAT.DesignSystem/Foundations/ColorCatalog.cs">
+    <ds:Story.Resources>
+        <ItemsPanelTemplate x:Key="WrapItemsPanel">
+            <WrapPanel/>
+        </ItemsPanelTemplate>
+
+        <!-- A step of a ramp: its color, its number and its value. The base color is outlined. -->
+        <DataTemplate x:Key="PaletteStepTemplate">
+            <StackPanel Width="46" Margin="0,0,2,8">
+                <Border x:Name="Swatch" Height="32" CornerRadius="3" BorderThickness="1" Background="{Binding Fill}"
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" SnapsToDevicePixels="True"/>
+                <TextBlock Text="{Binding Number}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding Hex}" HorizontalAlignment="Center" FontSize="{DynamicResource MetadataFontSize}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsBase}" Value="True">
+                    <Setter TargetName="Swatch" Property="BorderThickness" Value="2"/>
+                    <Setter TargetName="Swatch" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- A color in a theme, shown on that theme's panel color, so a clear or partly clear color shows as it does
+             in XMAT. -->
+        <DataTemplate x:Key="ThemeSwatchTemplate">
+            <Border Width="28" Height="28" Padding="4" CornerRadius="4" BorderThickness="1" SnapsToDevicePixels="True"
+                    Background="{Binding Panel}" BorderBrush="{Binding Edge}" ToolTip="{Binding Name}">
+                <Border CornerRadius="2" Background="{Binding Fill}"/>
+            </Border>
+        </DataTemplate>
+
+        <!-- A role or component color: its Light and Dark colors, its name, what it's for and each theme's value. -->
+        <DataTemplate x:Key="ColorRowTemplate">
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,2,12,0">
+                    <ContentPresenter Content="{Binding Light}" ContentTemplate="{StaticResource ThemeSwatchTemplate}"
+                                      Margin="0,0,4,0"/>
+                    <ContentPresenter Content="{Binding Dark}" ContentTemplate="{StaticResource ThemeSwatchTemplate}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Key}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Use}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Values}" Margin="0,2,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- A color on a surface in one theme, showing their contrast: text in the color, or, for an outline, a frame in
+             the color around the theme's text. -->
+        <DataTemplate x:Key="ContrastSampleTemplate">
+            <Border Width="58" Height="28" CornerRadius="3" BorderThickness="1" SnapsToDevicePixels="True"
+                    Background="{Binding Surface}" BorderBrush="{Binding Edge}" ToolTip="{Binding Name}">
+                <Border Margin="4,3" CornerRadius="2" BorderThickness="1" BorderBrush="{Binding Outline}">
+                    <TextBlock Text="{Binding Ratio}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{Binding Text}"/>
+                </Border>
+            </Border>
+        </DataTemplate>
+
+        <!-- A cell of a contrast grid: the pair in Light, then in Dark. -->
+        <DataTemplate x:Key="ContrastCellTemplate">
+            <StackPanel Orientation="Horizontal" Margin="0,0,12,8">
+                <ContentPresenter Content="{Binding Light}" ContentTemplate="{StaticResource ContrastSampleTemplate}"
+                                  Margin="0,0,4,0"/>
+                <ContentPresenter Content="{Binding Dark}" ContentTemplate="{StaticResource ContrastSampleTemplate}"/>
+            </StackPanel>
+        </DataTemplate>
+    </ds:Story.Resources>
+
+    <StackPanel>
+        <ds:StorySection x:Name="PaletteSection" Title="Palette"
+                         Description="Five base colors generate the palette. Each becomes a ramp of steps from lightest to darkest and is itself one of the steps, outlined here; gray is a ramp of its own. The themes give roles these steps, and views and styles never use a step directly. To change a base color, edit Palette.json and regenerate Palette.xaml, as docs/design-system.md describes."/>
+
+        <ds:StorySection x:Name="RolesSection" Title="Roles" StyleName="Surface, Text, Border, Accent and status …Brush"
+                         Description="The colors views and styles use: a few surfaces, three text colors and three borders, then the accent and the status colors. Each role does one job, so a view picks the role for what it shows, never a color. Light and Dark, shown side by side, give each role a palette step, and High Contrast one of the colors of the person's Windows contrast theme, named as in Settings."/>
+
+        <ds:StorySection x:Name="ContrastSection" Title="Contrast" StyleName="ColorCatalog.ContrastGroups"
+                         Description="Text stands out from the surfaces it appears on by 4.5:1, and the outlines that identify controls by 3:1. Each cell shows a color on a surface in Light, then in Dark, with their contrast, worked out from the themes; the design system tests fail if one falls short. High contrast takes the person's own colors."/>
+
+        <ds:StorySection x:Name="ComponentSection" Title="Component colors" StyleName="ColorCatalog.ComponentColorGroups"
+                         Description="Colors that belong to one component keep their own names. They follow the rules roles do: Light and Dark take palette steps, and High Contrast a contrast theme color."/>
+
+        <ds:StoryRules Description="What every view, style and theme follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID. A Should rule is checked in review.">
+            <ds:StoryRule RuleId="COLOR-1">
+                <ds:RuleExample Kind="Do" Caption="SurfacePanelBrush and TextPrimaryBrush, so it's right in Light, Dark and high contrast.">
+                    <Border Padding="12,8" CornerRadius="4" BorderThickness="1"
+                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}">
+                        <TextBlock Text="Request 59 · 200 OK" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                    </Border>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="White and black written in, so it stays white in Dark and in a contrast theme.">
+                    <Border Padding="12,8" CornerRadius="4" BorderThickness="1" Background="White" BorderBrush="#FFD1D1D1">
+                        <TextBlock Text="Request 59 · 200 OK" Foreground="Black"/>
+                    </Border>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="COLOR-2"/>
+            <ds:StoryRule RuleId="COLOR-3">
+                <ds:RuleExample Kind="Do" Caption="A text color on its surface: TextSecondaryBrush on the panel.">
+                    <TextBlock Text="Duration: 89 ms" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="A border color used for text, far short of 4.5:1 in every theme.">
+                    <TextBlock Text="Duration: 89 ms" Foreground="{DynamicResource BorderSubtleBrush}"/>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="COLOR-4"/>
+            <ds:StoryRule RuleId="COLOR-5"/>
+            <ds:StoryRule RuleId="COLOR-6"/>
+            <ds:StoryRule RuleId="COLOR-7">
+                <ds:RuleExample Kind="Do" Caption="The icon and the words say it's a warning, whatever the colors.">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7BA;" Margin="0,0,6,0" VerticalAlignment="Center" FontFamily="Segoe MDL2 Assets"
+                                   Foreground="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="429 Too many requests" Foreground="{DynamicResource WarningTextBrush}"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Only the dot's color says it's a warning, which is lost without color vision or in a contrast theme.">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{DynamicResource WarningFillBrush}"/>
+                        <TextBlock Text="Request 63"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
+    </StackPanel>
+</ds:Story>

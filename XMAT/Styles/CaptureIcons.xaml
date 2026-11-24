@@ -1,0 +1,89 @@
+<!-- Pictures of the devices XMAT captures from and the ways it captures, for New Capture's choice cards: 1.5px strokes on
+     a 40px square, which a card colors (Styles/ChoiceCards.xaml). The note icons are 1.25px strokes on a 14px square.
+     A dot is a circle with a 0.25px radius, which the stroke fills. Looks/NewLook.xaml merges this dictionary. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Devices -->
+    <!-- This PC: a monitor on its stand. -->
+    <GeometryGroup x:Key="ThisPcPicture">
+        <RectangleGeometry Rect="5,7,30,20" RadiusX="2" RadiusY="2"/>
+        <PathGeometry Figures="M20,27.75 V32.5 M14,32.5 H26"/>
+    </GeometryGroup>
+
+    <!-- The default Xbox console: a console standing upright. -->
+    <GeometryGroup x:Key="DefaultConsolePicture">
+        <RectangleGeometry Rect="13,4,14,32" RadiusX="2" RadiusY="2"/>
+        <EllipseGeometry Center="17.5,9" RadiusX="1.5" RadiusY="1.5"/>
+        <PathGeometry Figures="M17.5,31 H22.5"/>
+    </GeometryGroup>
+
+    <!-- An Xbox console by address: the console with a globe at its corner. -->
+    <GeometryGroup x:Key="ConsoleByAddressPicture">
+        <PathGeometry Figures="M23,21 V6 A2,2 0 0 0 21,4 H11 A2,2 0 0 0 9,6 V34 A2,2 0 0 0 11,36 H21 A2,2 0 0 0 23,34"/>
+        <EllipseGeometry Center="13.5,9" RadiusX="1.5" RadiusY="1.5"/>
+        <PathGeometry Figures="M13.5,31 H18.5"/>
+        <EllipseGeometry Center="28.5,27.5" RadiusX="6.5" RadiusY="6.5"/>
+        <EllipseGeometry Center="28.5,27.5" RadiusX="2.75" RadiusY="6.5"/>
+        <PathGeometry Figures="M22,27.5 H35"/>
+    </GeometryGroup>
+
+    <!-- A generic device: a phone with a certificate. -->
+    <GeometryGroup x:Key="GenericDevicePicture">
+        <RectangleGeometry Rect="5,4,16,32" RadiusX="3" RadiusY="3"/>
+        <PathGeometry Figures="M11,8 H15 M11.5,31.5 H14.5"/>
+        <EllipseGeometry Center="30,20" RadiusX="5" RadiusY="5"/>
+        <PathGeometry Figures="M27.3,24.2 L26.2,31.5 L30,29.3 L33.8,31.5 L32.7,24.2"/>
+    </GeometryGroup>
+
+    <!-- A Windows handheld or remote PC: a handheld gaming PC. -->
+    <GeometryGroup x:Key="HandheldPicture">
+        <RectangleGeometry Rect="3,11,34,18" RadiusX="6" RadiusY="6"/>
+        <RectangleGeometry Rect="11,14,18,12" RadiusX="1" RadiusY="1"/>
+        <EllipseGeometry Center="7,16" RadiusX="1.6" RadiusY="1.6"/>
+        <EllipseGeometry Center="33,23.5" RadiusX="1.6" RadiusY="1.6"/>
+        <PathGeometry Figures="M5.5,23.5 H8.5 M7,22 V25 M31.9,14.9 L34.1,17.1 M34.1,14.9 L31.9,17.1"/>
+    </GeometryGroup>
+
+    <!-- Capture types -->
+    <!-- Web Proxy: requests and responses passing through the proxy. -->
+    <GeometryGroup x:Key="WebProxyPicture">
+        <RectangleGeometry Rect="16,6,8,28" RadiusX="2" RadiusY="2"/>
+        <PathGeometry Figures="M4,14 H12.5 M18.5,14 H21.5 M27.5,14 H35.5 M32.5,11 L35.5,14 L32.5,17 M36,26 H27.5 M21.5,26 H18.5 M12.5,26 H4.5 M7.5,23 L4.5,26 L7.5,29"/>
+    </GeometryGroup>
+
+    <!-- Network Trace: packets over time. -->
+    <GeometryGroup x:Key="NetworkTracePicture">
+        <PathGeometry Figures="M4,32 H36 M8,32 V24 M12,32 V16 M16,32 V27 M20,32 V10 M24,32 V20 M28,32 V14 M32,32 V23"/>
+    </GeometryGroup>
+
+    <!-- Note icons -->
+    <!-- The device restarts. -->
+    <GeometryGroup x:Key="RestartNoteIcon">
+        <PathGeometry Figures="M11.6,7.6 A4.6,4.6 0 1 1 10.2,3.4"/>
+        <PathGeometry Figures="M10.6,1.2 V3.8 H8"/>
+    </GeometryGroup>
+
+    <!-- XMAT downloads something. -->
+    <GeometryGroup x:Key="DownloadNoteIcon">
+        <PathGeometry Figures="M7,1.5 V8.8 M4,6 L7,9 L10,6 M2,12.25 H12"/>
+    </GeometryGroup>
+
+    <!-- A certificate is needed. -->
+    <GeometryGroup x:Key="CertificateNoteIcon">
+        <EllipseGeometry Center="7,5.2" RadiusX="3.6" RadiusY="3.6"/>
+        <PathGeometry Figures="M4.9,8.1 L4.3,12.8 L7,11.3 L9.7,12.8 L9.1,8.1"/>
+    </GeometryGroup>
+
+    <!-- Administrator rights are needed: a shield. -->
+    <GeometryGroup x:Key="AdministratorNoteIcon">
+        <PathGeometry Figures="M7,1.5 L11.5,3.2 V7 C11.5,9.6 9.6,11.6 7,12.5 C4.4,11.6 2.5,9.6 2.5,7 V3.2 Z"/>
+    </GeometryGroup>
+
+    <!-- Why an option isn't available. -->
+    <GeometryGroup x:Key="InfoNoteIcon">
+        <EllipseGeometry Center="7,7" RadiusX="6.1" RadiusY="6.1"/>
+        <PathGeometry Figures="M7,6.3 V10.1"/>
+        <EllipseGeometry Center="7,4.1" RadiusX="0.25" RadiusY="0.25"/>
+    </GeometryGroup>
+</ResourceDictionary>

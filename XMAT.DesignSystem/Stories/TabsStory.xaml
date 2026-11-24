@@ -1,0 +1,144 @@
+<ds:Story x:Class="XMAT.DesignSystem.TabsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Tabs"
+          Summary="Capture tabs hold the open captures; inspector tabs switch the views beside the traffic; format tabs show a request or response as headers, body or JSON. A row of tabs that doesn't fit ends in More, which lists the rest."
+          Section="Components"
+          DefinedIn="XMAT/Styles/Tabs.xaml">
+    <ds:Story.Resources>
+        <!-- The capture tab row as Controls/AllCaptureDevicesTabControl.xaml lays it out in the new look: New capture,
+             the tabs in a recessed strip, and More when they don't fit, above the selected capture's surface. -->
+        <ControlTemplate x:Key="CaptureTabsTemplate" TargetType="TabControl">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Border Style="{DynamicResource CaptureTabStripStyle}" Panel.ZIndex="1">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Style="{DynamicResource SoftIconButtonStyle}" Margin="0,0,8,0" VerticalAlignment="Center"
+                                ToolTip="New capture" AutomationProperties.Name="New capture">
+                            <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        </Button>
+                        <local:OverflowTabPanel x:Name="HeaderPanel" Grid.Column="1" IsItemsHost="True"
+                                                Background="Transparent" Panel.ZIndex="1"
+                                                OverflowButtonWidth="{Binding ActualWidth, ElementName=MoreButton}"/>
+                        <Canvas Grid.Column="1" Panel.ZIndex="2">
+                            <local:TabOverflowButton x:Name="MoreButton" Visibility="Hidden"
+                                                     Style="{DynamicResource CaptureOverflowButtonStyle}"
+                                                     OverflowPanel="{Binding ElementName=HeaderPanel}"
+                                                     Canvas.Left="{Binding OverflowButtonOffset, ElementName=HeaderPanel}"
+                                                     Height="{Binding ActualHeight, ElementName=HeaderPanel}"/>
+                        </Canvas>
+                    </Grid>
+                </Border>
+                <!-- The capture's surface, outlined here so the selected tab can be seen to join it. -->
+                <Border Grid.Row="1" Background="{TemplateBinding Background}" BorderThickness="1,0,1,1"
+                        BorderBrush="{DynamicResource BorderSubtleBrush}">
+                    <ContentPresenter ContentSource="SelectedContent" Margin="12"/>
+                </Border>
+            </Grid>
+            <ControlTemplate.Triggers>
+                <Trigger SourceName="HeaderPanel" Property="local:OverflowTabPanel.HasOverflow" Value="True">
+                    <Setter TargetName="MoreButton" Property="Visibility" Value="Visible"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <!-- A capture tab's label and its close button, as the capture tabs show them. -->
+        <DataTemplate x:Key="CaptureTabHeaderTemplate">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                <Button Style="{DynamicResource TabCloseButtonStyle}" Margin="10,-2,-2,-2" Content="&#xE894;"
+                        FontFamily="Segoe MDL2 Assets" AutomationProperties.Name="Close tab"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- The same for a capture that is running: the red dot leads the label. -->
+        <DataTemplate x:Key="RunningCaptureTabHeaderTemplate">
+            <StackPanel Orientation="Horizontal">
+                <local:RecordingIndicator Style="{DynamicResource TabRecordingDotStyle}" IsActive="True"/>
+                <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                <Button Style="{DynamicResource TabCloseButtonStyle}" Margin="10,-2,-2,-2" Content="&#xE894;"
+                        FontFamily="Segoe MDL2 Assets" AutomationProperties.Name="Close tab"/>
+            </StackPanel>
+        </DataTemplate>
+
+    </ds:Story.Resources>
+
+    <StackPanel>
+        <ds:StorySection Title="Capture tabs" StyleName="TabItem (default style), CaptureTabStripStyle, CaptureOverflowButtonStyle, TabRecordingDotStyle"
+                         Description="Open captures, in a recessed strip after New capture. The selected tab joins the capture's surface below; the others sit behind. Each has a close button. While a capture runs, its tab starts with the red dot that fades in and out, so the tabs show which captures are running.">
+            <ds:StoryExample Caption="All tabs fit">
+                <TabControl Template="{StaticResource CaptureTabsTemplate}" Width="640" Height="96"
+                            SelectedIndex="1" Background="{DynamicResource SurfacePanelBrush}">
+                    <TabItem Header="Local PC : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Xbox : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Network trace" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                </TabControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Two captures running">
+                <TabControl Template="{StaticResource CaptureTabsTemplate}" Width="640" Height="96"
+                            SelectedIndex="1" Background="{DynamicResource SurfacePanelBrush}">
+                    <TabItem Header="Local PC : WebProxy" HeaderTemplate="{StaticResource RunningCaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Xbox : WebProxy" HeaderTemplate="{StaticResource RunningCaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Network trace" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                </TabControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Narrow: More lists the tabs that don't fit">
+                <TabControl Template="{StaticResource CaptureTabsTemplate}" Width="420" Height="96"
+                            SelectedIndex="0" Background="{DynamicResource SurfacePanelBrush}">
+                    <TabItem Header="Local PC : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Xbox : WebProxy" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                    <TabItem Header="Network trace" HeaderTemplate="{StaticResource CaptureTabHeaderTemplate}"/>
+                </TabControl>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Inspector tabs" StyleName="InspectorTabControlStyle, InspectorTabItemStyle, InspectorOverflowButtonStyle"
+                         Description="Quiet labels in one row that never scrolls or wraps; the selected tab is semibold, with an accent underline. When the row is too narrow, labels shrink first, then the tabs that still don't fit move to More.">
+            <ds:StoryExample Caption="All tabs fit">
+                <TabControl Style="{DynamicResource InspectorTabControlStyle}" Width="520">
+                    <TabItem Header="Request/Response" Style="{DynamicResource InspectorTabItemStyle}"/>
+                    <TabItem Header="WebSockets" Style="{DynamicResource InspectorTabItemStyle}"/>
+                    <TabItem Header="Script Editor" Style="{DynamicResource InspectorTabItemStyle}"/>
+                </TabControl>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Narrow: More lists the tabs that don't fit">
+                <TabControl Style="{DynamicResource InspectorTabControlStyle}" Width="300">
+                    <TabItem Header="Request/Response" Style="{DynamicResource InspectorTabItemStyle}"/>
+                    <TabItem Header="WebSockets" Style="{DynamicResource InspectorTabItemStyle}"/>
+                    <TabItem Header="Script Editor" Style="{DynamicResource InspectorTabItemStyle}"/>
+                </TabControl>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Format tabs" StyleName="FormatTabControlStyle, FormatTabItemStyle"
+                         Description="Headers, Body and JSON above a request or response. The selected tab takes the well's color and joins the well below it.">
+            <ds:StoryExample Caption="Headers selected">
+                <TabControl Style="{DynamicResource FormatTabControlStyle}" Width="460">
+                    <TabItem Header="Headers" Style="{DynamicResource FormatTabItemStyle}">
+                        <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Height="88">
+                            <ScrollViewer>
+                                <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                         TextWrapping="Wrap" FontFamily="Consolas"
+                                         AutomationProperties.Name="Response headers"
+                                         Text="HTTP/1.1 200 OK&#x0a;Content-Type: application/json&#x0a;Content-Length: 512"/>
+                            </ScrollViewer>
+                        </ContentControl>
+                    </TabItem>
+                    <TabItem Header="Body" Style="{DynamicResource FormatTabItemStyle}"/>
+                    <TabItem Header="JSON" Style="{DynamicResource FormatTabItemStyle}"/>
+                </TabControl>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

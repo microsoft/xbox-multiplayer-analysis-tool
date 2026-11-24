@@ -4,49 +4,65 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             xmlns:app="clr-namespace:XMAT"
              x:Name="Root"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="800">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="30"/>
+            <RowDefinition Height="{app:Look New=Auto, Original=30}"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal"
-                    Background="{DynamicResource PanelBackgroundBrush}">
-            <TextBlock Text="Direction" FontWeight="Bold" Margin="8,0,4,0"
-                       VerticalAlignment="Center"/>
-            <ComboBox x:Name="DirectionFilter" Width="130" Margin="0,3,12,3"
-                      SelectionChanged="Filter_Changed">
-                <ComboBoxItem Content="All" IsSelected="True"/>
-                <ComboBoxItem Content="Client → Server"/>
-                <ComboBoxItem Content="Server → Client"/>
-            </ComboBox>
-            <TextBlock Text="Type" FontWeight="Bold" Margin="0,0,4,0"
-                       VerticalAlignment="Center"/>
-            <ComboBox x:Name="MessageTypeFilter" Width="90" Margin="0,3,0,3"
-                      SelectionChanged="Filter_Changed">
-                <ComboBoxItem Content="All" IsSelected="True"/>
-                <ComboBoxItem Content="Text"/>
-                <ComboBoxItem Content="Binary"/>
-            </ComboBox>
-        </StackPanel>
+        <!-- Each filter keeps its label; the second filter moves to a new line when the pane is narrow. -->
+        <WrapPanel Grid.Row="0" Orientation="Horizontal" Background="{DynamicResource SurfacePanelBrush}"
+                   Margin="{app:Look New='0,0,0,8', Original='0'}">
+            <StackPanel Orientation="Horizontal" Margin="{app:Look New='0,0,16,0', Original='0'}">
+                <TextBlock x:Name="DirectionLabel" Text="Direction" Style="{DynamicResource FilterLabelStyle}"
+                           Margin="{app:Look New='0,0,8,0', Original='8,0,4,0'}"/>
+                <ComboBox x:Name="DirectionFilter" Width="130" Margin="{app:Look New='0,2', Original='0,3,12,3'}"
+                          AutomationProperties.LabeledBy="{Binding ElementName=DirectionLabel}"
+                          SelectionChanged="Filter_Changed">
+                    <ComboBoxItem Content="All" IsSelected="True"/>
+                    <ComboBoxItem Content="Client → Server"/>
+                    <ComboBoxItem Content="Server → Client"/>
+                </ComboBox>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="TypeLabel" Text="Type" Style="{DynamicResource FilterLabelStyle}"
+                           Margin="{app:Look New='0,0,8,0', Original='0,0,4,0'}"/>
+                <ComboBox x:Name="MessageTypeFilter" Width="90" Margin="{app:Look New='0,2', Original='0,3,0,3'}"
+                          AutomationProperties.LabeledBy="{Binding ElementName=TypeLabel}"
+                          SelectionChanged="Filter_Changed">
+                    <ComboBoxItem Content="All" IsSelected="True"/>
+                    <ComboBoxItem Content="Text"/>
+                    <ComboBoxItem Content="Binary"/>
+                </ComboBox>
+            </StackPanel>
+        </WrapPanel>
 
+        <!-- The new look stacks the messages above the selected message, so both stay readable in a narrow pane;
+             the original look keeps them side by side. -->
         <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="{app:Look New=2*, Original=*}"/>
+                <RowDefinition Height="{app:Look New=12, Original=0}"/>
+                <RowDefinition Height="{app:Look New=3*, Original=0}"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="4"/>
-                <ColumnDefinition Width="3*"/>
+                <ColumnDefinition Width="{app:Look New=*, Original=2*}"/>
+                <ColumnDefinition Width="{app:Look New=0, Original=4}"/>
+                <ColumnDefinition Width="{app:Look New=0, Original=3*}"/>
             </Grid.ColumnDefinitions>
 
-            <DataGrid x:Name="MessagesGrid" Grid.Column="0"
+            <DataGrid x:Name="MessagesGrid" Grid.Row="0" Grid.Column="0"
                       ItemsSource="{Binding ItemsSource, ElementName=Root}"
                       SelectedItem="{Binding SelectedItem, ElementName=Root, Mode=TwoWay}"
                       AutoGenerateColumns="False"
                       IsReadOnly="True"
                       GridLinesVisibility="None"
-                      SelectionMode="Single">
+                      SelectionMode="Single"
+                      ColumnHeaderStyle="{DynamicResource MessageGridHeaderStyle}">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="TIME" Binding="{Binding Timestamp, StringFormat=HH:mm:ss.fff}" Width="95"/>
                     <DataGridTextColumn Header="#" Binding="{Binding RequestNumber}" Width="45"/>
@@ -57,34 +73,38 @@
                 </DataGrid.Columns>
             </DataGrid>
 
-            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
-                          ResizeDirection="Columns"/>
+            <GridSplitter x:Name="MessagesSplitter" Grid.Row="{app:Look New=1, Original=0}" Grid.Column="{app:Look New=0, Original=1}"
+                          Width="{app:Look New=Auto, Original=4}" Height="{app:Look New=12, Original=Auto}"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          ResizeDirection="{app:Look New=Rows, Original=Columns}"/>
 
             <!-- The Text, JSON and Hex tabs show one preview of the selected message, made in the background
                  (WebSocketMessagesView.xaml.cs); what it says about the payload is in the message bar, apart from it. -->
-            <Grid Grid.Column="2">
+            <Grid Grid.Row="{app:Look New=2, Original=0}" Grid.Column="{app:Look New=0, Original=2}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock x:Name="PreviewMessage" Grid.Row="0"
-                           Foreground="DarkOrange"
-                           TextWrapping="Wrap"
-                           Margin="6"
-                           Visibility="Collapsed"/>
-                <TabControl Grid.Row="1">
-                    <TabItem Header="Text">
-                        <TextBox x:Name="PayloadTextBox"
-                                 IsReadOnly="True" TextWrapping="NoWrap"
-                                 FontFamily="Consolas"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto"/>
+                <TextBlock x:Name="PreviewMessage" Grid.Row="0" Style="{DynamicResource NoticeTextStyle}"
+                           Foreground="{DynamicResource WarningTextBrush}" TextWrapping="Wrap"
+                           Margin="{app:Look New='0,0,0,8', Original='6'}" Visibility="Collapsed"/>
+                <TabControl Grid.Row="1" Style="{DynamicResource FormatTabControlStyle}">
+                    <TabItem Header="Text" Style="{DynamicResource FormatTabItemStyle}">
+                        <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                            <TextBox x:Name="PayloadTextBox" Style="{DynamicResource InspectorTextBoxStyle}"
+                                     IsReadOnly="True" TextWrapping="NoWrap"
+                                     FontFamily="Consolas"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"/>
+                        </ContentControl>
                     </TabItem>
-                    <TabItem Header="JSON">
-                        <DockPanel>
-                            <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap"
-                                       FontStyle="Italic" Visibility="Collapsed"/>
-                            <TreeView x:Name="PayloadJsonTree" VirtualizingPanel.IsVirtualizing="True">
+                    <TabItem Header="JSON" Style="{DynamicResource FormatTabItemStyle}">
+                        <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                            <DockPanel>
+                                <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap"
+                                           FontStyle="Italic" Visibility="Collapsed"/>
+                                <TreeView x:Name="PayloadJsonTree" Style="{DynamicResource InspectorTreeViewStyle}"
+                                          VirtualizingPanel.IsVirtualizing="True">
                                 <TreeView.ItemTemplate>
                                     <HierarchicalDataTemplate DataType="{x:Type local:JsonTreeViewItem}"
                                                               ItemsSource="{Binding JsonTreeViewItems}">
@@ -97,14 +117,17 @@
                                     </Style>
                                 </TreeView.ItemContainerStyle>
                             </TreeView>
-                        </DockPanel>
+                            </DockPanel>
+                        </ContentControl>
                     </TabItem>
-                    <TabItem Header="Hex">
-                        <TextBox x:Name="PayloadHexBox"
-                                 IsReadOnly="True" TextWrapping="NoWrap"
-                                 FontFamily="Consolas"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto"/>
+                    <TabItem Header="Hex" Style="{DynamicResource FormatTabItemStyle}">
+                        <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                            <TextBox x:Name="PayloadHexBox" Style="{DynamicResource InspectorTextBoxStyle}"
+                                     IsReadOnly="True" TextWrapping="NoWrap"
+                                     FontFamily="Consolas"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"/>
+                        </ContentControl>
                     </TabItem>
                 </TabControl>
             </Grid>

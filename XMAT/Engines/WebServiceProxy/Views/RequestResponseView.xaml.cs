@@ -54,6 +54,15 @@ namespace XMAT.WebServiceCapture
     {
         private readonly BodyPreviewPipeline _preview;
 
+        public static readonly DependencyProperty HeaderContentProperty =
+            DependencyProperty.Register(nameof(HeaderContent), typeof(object), typeof(RequestResponseView));
+
+        public object HeaderContent
+        {
+            get => GetValue(HeaderContentProperty);
+            set => SetValue(HeaderContentProperty, value);
+        }
+
         public string Title
         {
             get { return (string)GetValue(TitleProperty); }
@@ -144,7 +153,8 @@ namespace XMAT.WebServiceCapture
         public static readonly DependencyProperty NoticeProperty =
             DependencyProperty.Register(nameof(Notice), typeof(string), typeof(RequestResponseView));
 
-        // Trailer lines that followed the body; their section is hidden when empty.
+        // Trailer lines that followed the body; their section is hidden when empty. The section takes the look's
+        // inspector text style, so its visibility is set here rather than by a style of its own.
         public string Trailers
         {
             get => (string)GetValue(TrailersProperty);
@@ -152,7 +162,9 @@ namespace XMAT.WebServiceCapture
         }
 
         public static readonly DependencyProperty TrailersProperty =
-            DependencyProperty.Register(nameof(Trailers), typeof(string), typeof(RequestResponseView));
+            DependencyProperty.Register(nameof(Trailers), typeof(string), typeof(RequestResponseView),
+                new PropertyMetadata(null, (view, e) => ((RequestResponseView)view).TrailersText.Visibility =
+                    string.IsNullOrEmpty((string)e.NewValue) ? Visibility.Collapsed : Visibility.Visible));
 
         public RequestResponseView()
         {
@@ -162,6 +174,7 @@ namespace XMAT.WebServiceCapture
             HeadersTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_HEADERS");
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
+            System.Windows.Automation.AutomationProperties.SetName(JsonTree, Localization.GetLocalizedString("A11Y_JSON_TREE"));
             TrailersLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_TRAILERS");
 
             Loaded += (_, _) => StartPreviews();

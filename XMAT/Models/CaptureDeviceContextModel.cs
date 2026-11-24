@@ -119,6 +119,11 @@ namespace XMAT.Models
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
 
+        // Screen readers name a capture tab after its item, so this matches the tab's label.
+        public override string ToString() =>
+            $"{DeviceName}: {CaptureTypeString}" +
+            (IsReadOnly ? Localization.GetLocalizedString("CAPTURE_DEVICES_TAB_READONLY") : string.Empty);
+
         private void AssignDeviceColor()
         {
             int nameHash = DeviceName.GetHashCode();

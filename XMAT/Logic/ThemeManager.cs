@@ -13,8 +13,9 @@ namespace XMAT
     {
         private const string LightThemeUri = "Themes/LightTheme.xaml";
         private const string DarkThemeUri = "Themes/DarkTheme.xaml";
-
-        private static ResourceDictionary _currentThemeDictionary;
+        private const string OriginalLightThemeUri = "Themes/Original/LightTheme.xaml";
+        private const string OriginalDarkThemeUri = "Themes/Original/DarkTheme.xaml";
+        private const string HighContrastThemeUri = "Themes/HighContrastTheme.xaml";
 
         private static readonly ResourceKey[] SystemColorKeys =
         {
@@ -32,84 +33,103 @@ namespace XMAT
         };
 
         public static string CurrentTheme { get; private set; } = "Light";
+        public static event EventHandler ThemeChanged;
 
+        private const string NewLookUri =
+            "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/NewLook.xaml";
+        private const string OriginalLookUri =
+            "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/OriginalLook.xaml";
+
+        // Applies THEME to the application's resources and announces it.
         public static void ApplyTheme(string theme)
         {
-            string uri = theme == "Dark" ? DarkThemeUri : LightThemeUri;
+            var app = Application.Current;
+            PrepareTheme(app.Resources, theme, LookState.Current.IsNewLook);
+            RaiseThemeChanged();
+        }
+
+        // A look's resources for Application.Resources or a window's Resources: a dictionary that merges the look's
+        // file (Looks/NewLook.xaml or Looks/OriginalLook.xaml), ready for a theme. A dictionary loaded from a file
+        // doesn't tell the views that use it when its merged dictionaries change, so a theme put into it later wouldn't
+        // show; a theme put into this one does. App.xaml declares the new look's the same way.
+        internal static ResourceDictionary CreateLook(bool newLook) => new()
+        {
+            MergedDictionaries = { new ResourceDictionary { Source = new Uri(newLook ? NewLookUri : OriginalLookUri) } }
+        };
+
+        // Puts THEME into RESOURCES, a look's resources from CreateLook or App.xaml, without announcing it. A look's
+        // resources are prepared this way before they replace the application's resources, so views never resolve a mix
+        // of two themes; raise ThemeChanged once they are shown.
+        public static void PrepareTheme(ResourceDictionary resources, string theme, bool newLook) =>
+            PrepareTheme(resources, theme, newLook, SystemParameters.HighContrast);
+
+        // While Windows high contrast is on, both looks use the high contrast theme, whose colors are the system's.
+        // THEME stays the saved choice and returns when high contrast is turned off.
+        public static void PrepareTheme(ResourceDictionary resources, string theme, bool newLook, bool highContrast)
+        {
+            LoadTheme(resources, theme, newLook, highContrast);
+            CurrentTheme = theme;
+        }
+
+        // Puts THEME into RESOURCES like PrepareTheme, without making it the application's theme: the design system app
+        // shows any theme in its window's resources, and its tests share the application with XMAT's.
+        internal static void LoadTheme(ResourceDictionary resources, string theme, bool newLook, bool highContrast)
+        {
+            string uri = theme switch
+            {
+                "Light" => newLook ? LightThemeUri : OriginalLightThemeUri,
+                "Dark" => newLook ? DarkThemeUri : OriginalDarkThemeUri,
+                _ => throw new ArgumentOutOfRangeException(nameof(theme), theme, "Unknown appearance theme.")
+            };
+            if (highContrast)
+            {
+                uri = HighContrastThemeUri;
+            }
 
             var newTheme = new ResourceDictionary
             {
-                Source = new Uri(uri, UriKind.Relative)
+                Source = new Uri($"pack://application:,,,/XboxMultiplayerAnalysisTool;component/{uri}")
             };
 
-            var app = Application.Current;
-
-            if (_currentThemeDictionary != null)
+            // Each look's file declares a theme of its own, so remove every theme dictionary, in RESOURCES and in the
+            // dictionaries it merges, rather than tracking the one added last: a theme left behind would still supply
+            // system colors that high contrast must leave to Windows.
+            RemoveThemes(resources);
+            foreach (var merged in resources.MergedDictionaries)
             {
-                app.Resources.MergedDictionaries.Remove(_currentThemeDictionary);
-            }
-            else
-            {
-                // First call: remove the XAML-declared theme dictionary
-                var existing = app.Resources.MergedDictionaries
-                    .FirstOrDefault(d => d.Source != null &&
-                        (d.Source.OriginalString.Contains("LightTheme") ||
-                         d.Source.OriginalString.Contains("DarkTheme")));
-                if (existing != null)
-                {
-                    app.Resources.MergedDictionaries.Remove(existing);
-                }
+                RemoveThemes(merged);
             }
 
-            app.Resources.MergedDictionaries.Add(newTheme);
-            _currentThemeDictionary = newTheme;
-            CurrentTheme = theme;
-
-            ApplySystemColorOverrides(theme == "Dark");
+            resources.MergedDictionaries.Add(newTheme);
+            ApplySystemColorOverrides(resources, newTheme);
         }
 
-        private static void ApplySystemColorOverrides(bool dark)
+        private static void RemoveThemes(ResourceDictionary resources)
         {
-            var res = Application.Current.Resources;
-
-            if (dark)
+            foreach (var existing in resources.MergedDictionaries
+                .Where(d => d.Source != null && d.Source.OriginalString.EndsWith("Theme.xaml", StringComparison.Ordinal))
+                .ToList())
             {
-                res[SystemColors.ControlBrushKey] = Frozen(0x2D, 0x2D, 0x30);
-                res[SystemColors.ControlTextBrushKey] = Frozen(0xD4, 0xD4, 0xD4);
-                res[SystemColors.WindowBrushKey] = Frozen(0x1E, 0x1E, 0x1E);
-                res[SystemColors.WindowTextBrushKey] = Frozen(0xD4, 0xD4, 0xD4);
-                res[SystemColors.HighlightBrushKey] = Frozen(0x26, 0x4F, 0x78);
-                res[SystemColors.HighlightTextBrushKey] = Frozen(0xFF, 0xFF, 0xFF);
-                res[SystemColors.InactiveSelectionHighlightBrushKey] = Frozen(0x3E, 0x3E, 0x42);
-                res[SystemColors.InactiveSelectionHighlightTextBrushKey] = Frozen(0xD4, 0xD4, 0xD4);
-                res[SystemColors.GrayTextBrushKey] = Frozen(0x65, 0x65, 0x65);
-                res[SystemColors.MenuBrushKey] = Frozen(0x2D, 0x2D, 0x30);
-                res[SystemColors.MenuTextBrushKey] = Frozen(0xD4, 0xD4, 0xD4);
-                res[SystemColors.MenuHighlightBrushKey] = Frozen(0x3E, 0x3E, 0x42);
-                res[SystemColors.ControlLightBrushKey] = Frozen(0x33, 0x33, 0x37);
-                res[SystemColors.ControlLightLightBrushKey] = Frozen(0x25, 0x25, 0x26);
-                res[SystemColors.ControlDarkBrushKey] = Frozen(0x3F, 0x3F, 0x46);
-                res[SystemColors.ControlDarkDarkBrushKey] = Frozen(0x1E, 0x1E, 0x1E);
-                res[SystemColors.ActiveBorderBrushKey] = Frozen(0x3F, 0x3F, 0x46);
-                res[SystemColors.InactiveBorderBrushKey] = Frozen(0x3F, 0x3F, 0x46);
-                res[SystemColors.InfoBrushKey] = Frozen(0x2D, 0x2D, 0x30);
-                res[SystemColors.InfoTextBrushKey] = Frozen(0xD4, 0xD4, 0xD4);
-                res[SystemColors.ScrollBarBrushKey] = Frozen(0x1E, 0x1E, 0x1E);
-            }
-            else
-            {
-                foreach (var key in SystemColorKeys)
-                {
-                    res.Remove(key);
-                }
+                resources.MergedDictionaries.Remove(existing);
             }
         }
 
-        private static SolidColorBrush Frozen(byte r, byte g, byte b)
+        public static void RaiseThemeChanged() => ThemeChanged?.Invoke(null, EventArgs.Empty);
+
+        // The high contrast theme defines no system colors, so it removes every override and Windows' colors apply.
+        private static void ApplySystemColorOverrides(ResourceDictionary resources, ResourceDictionary theme)
         {
-            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
-            brush.Freeze();
-            return brush;
+            foreach (var key in SystemColorKeys)
+            {
+                if (theme[key] is SolidColorBrush brush)
+                {
+                    resources[key] = brush;
+                }
+                else
+                {
+                    resources.Remove(key);
+                }
+            }
         }
     }
 }

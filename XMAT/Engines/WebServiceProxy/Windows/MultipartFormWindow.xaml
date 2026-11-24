@@ -4,8 +4,8 @@
         Title="Build form" Width="720" Height="660" MinWidth="560" MinHeight="500"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         FocusManager.FocusedElement="{Binding ElementName=NameBox}"
-        Background="{DynamicResource PanelBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}">
+        Background="{DynamicResource SurfacePanelBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}">
   <!-- Builds a multipart/form-data body for the composer's request from text and file parts, in order
        (MultipartFormWindow.xaml.cs). The Tab order is the order below: the parts, a new part, then the form. -->
   <Grid Margin="12">

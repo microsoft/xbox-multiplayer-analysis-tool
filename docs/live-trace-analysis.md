@@ -65,8 +65,9 @@ to `application.log`. See [Troubleshooting](troubleshooting.md#collect-debug-log
 ## Read the Per Endpoint report
 
 The main report contains a summary matrix of service hosts against analysis-rule
-issue counts, followed by details. Green indicates no issues; brighter orange
-indicates issues were found.
+issue counts, followed by details. Each count is colored by its level: errors,
+warnings, or no issues. With **New look** on, a count also names its level, such as
+**3 errors**, and in both looks screen readers announce the rule and the level.
 
 ![Per Endpoint report with issue-count summary](../ReadmeImages/18.png)
 
@@ -92,6 +93,35 @@ with the same name. A button is disabled while that tab has no request, or more 
 with its number. Once that tab is closed, or its sessions are deleted, cleared or reloaded,
 the analysis says that its results are historical and the buttons are disabled; analyze
 the capture again to link to its current sessions.
+
+### Call rate against rule limits
+
+With **New look** on, a **Call frequency** section follows the summary. It has a row for
+each endpoint with a Call Frequency rule, busiest first (an endpoint whose calls fall under
+more than one set of limits, such as presence reads and writes, gets a row for each), with:
+
+- **Calls**: the calls the limits count.
+- **Over limit**: how many times the analyzer found the calls over the limit, with its
+  level, such as **1 warning**, **3 warnings** or **1 error**, in the report's issue
+  colors: burst findings are warnings, and sustained ones are errors at ten times the limit
+  or more. **None** when it found none.
+- **Call rate**: a chart of the calls in the rule's window, measured every second of the
+  capture as the analyzer counts them (each point is the most the window held during that
+  second), against a dashed line at the limit, labeled such as `10 / 15 s`. Stretches over
+  the limit are shaded and drawn in a thicker line. The charts share one time axis (m:ss)
+  under the last row.
+
+The table fills the width of the report: the **Call rate** column takes what the others
+leave, at least 200 pixels, and the charts and their axis stretch with it. In a narrow
+report the **Endpoint** column narrows from 190 to 160 pixels and trims long names with
+an ellipsis.
+
+**Burst** and **Sustained** switch every chart between the rules' burst window (15 s)
+and sustained window (5 min). Hover a chart to read the time, the calls in the window and
+the limit. Screen readers read each row as one sentence, such as "profile.xboxlive.com
+went over its burst limit once; the most was 12 calls in 15 seconds, against a limit of
+10." Captures longer than a day are measured every few seconds. The charts aren't part of
+the report files.
 
 ## Read the Statistics report
 

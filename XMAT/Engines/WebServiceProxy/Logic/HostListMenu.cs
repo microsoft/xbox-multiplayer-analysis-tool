@@ -185,7 +185,8 @@ namespace XMAT.WebServiceCapture
 
         /// <summary>
         /// Replaces the menu items with actions for the snapshotted host, or with a disabled
-        /// explanation when there is no single valid host for the clicked item.
+        /// explanation when there is no single valid host for the clicked item. The new look
+        /// shows them as the menu's Host group.
         /// </summary>
         internal static void Populate(
             ContextMenu menu,
@@ -195,7 +196,14 @@ namespace XMAT.WebServiceCapture
             IInputElement commandTarget)
         {
             menu.Items.Clear();
+            GroupedMenu.ApplyLook(menu);
             HostListMenu model = HostListMenu.Create(policy, host);
+            if (LookState.Current.IsNewLook)
+            {
+                AddHostGroup(menu, policy, model, unavailableKey, commandTarget);
+                return;
+            }
+
             if (model == null)
             {
                 menu.Items.Add(Note(Localization.GetLocalizedString(unavailableKey)));
@@ -235,6 +243,65 @@ namespace XMAT.WebServiceCapture
                 CommandTarget = commandTarget
             });
         }
+
+        // The new look's Host group. Its header names the host once, so the rows leave it out of their labels, and their
+        // accessible names keep it. Each list's notes follow its action.
+        private static void AddHostGroup(
+            ContextMenu menu,
+            HostListPolicy policy,
+            HostListMenu model,
+            string unavailableKey,
+            IInputElement commandTarget)
+        {
+            GroupedMenu.AddGroup(menu, Localization.GetLocalizedString("MENU_GROUP_HOST"), model?.Host);
+            if (model == null)
+            {
+                menu.Items.Add(GroupedMenu.Note(Localization.GetLocalizedString(unavailableKey)));
+            }
+            else
+            {
+                foreach (HostListAction action in model.Actions)
+                {
+                    string key = GroupedKey(action);
+                    MenuItem item = GroupedMenu.Item(
+                        Localization.GetLocalizedString(key),
+                        action.List == HostListKind.Block ? MenuGlyphs.Block : MenuGlyphs.Bypass,
+                        Localization.GetLocalizedString(key + "_NAME", action.Host));
+                    if (action.List == HostListKind.Bypass)
+                    {
+                        MenuRow.SetDescription(item, Localization.GetLocalizedString(
+                            action.Operation == HostListOperation.Add ? "MENU_BYPASS_DESCRIPTION" : "MENU_REMOVE_BYPASS_DESCRIPTION"));
+                    }
+                    item.CommandParameter = action;
+                    item.Command = HostListCommands.Apply;
+                    menu.Items.Add(item);
+                    bool block = action.List == HostListKind.Block;
+                    foreach (string rule in block ? model.CoveringBlockRules : model.CoveringBypassRules)
+                    {
+                        menu.Items.Add(GroupedMenu.Note(Localization.GetLocalizedString(
+                            block ? "MENU_ALSO_BLOCKED_BY" : "MENU_ALSO_BYPASSED_BY", rule)));
+                    }
+                }
+                if (policy.BlockList.IsBlocked(model.Host) && policy.BypassList.IsBypassed(model.Host))
+                {
+                    menu.Items.Add(GroupedMenu.Note(Localization.GetLocalizedString("HOST_LIST_BLOCK_WINS")));
+                }
+            }
+
+            MenuItem manage = GroupedMenu.Item(Localization.GetLocalizedString("MENU_MANAGE_HOST_LISTS"), MenuGlyphs.Settings);
+            manage.CommandTarget = commandTarget;
+            manage.Command = AppCommands.ManageHostLists;
+            menu.Items.Add(manage);
+        }
+
+        // The short label of an action under the Host header; with "_NAME", its accessible name, which names the host.
+        private static string GroupedKey(HostListAction action) => (action.List, action.Operation) switch
+        {
+            (HostListKind.Block, HostListOperation.Add) => "MENU_ADD_TO_BLOCK_LIST",
+            (HostListKind.Block, HostListOperation.Remove) => "MENU_REMOVE_FROM_BLOCK_LIST",
+            (HostListKind.Bypass, HostListOperation.Add) => "MENU_ADD_TO_BYPASS_LIST",
+            _ => "MENU_REMOVE_FROM_BYPASS_LIST"
+        };
 
         private static MenuItem Note(string text) => new() { Header = text, IsEnabled = false };
     }

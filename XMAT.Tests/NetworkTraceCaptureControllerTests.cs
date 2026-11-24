@@ -18,6 +18,13 @@ namespace XMAT.Tests
     [Collection(CaptureUiApplicationCollection.Name)]
     public class NetworkTraceCaptureControllerTests
     {
+        // A packet as a trace engine reports it: a NetBIOS name query.
+        private const string NetBiosPacket = """
+            {"event":{"processId":4,"threadId":308,"timestamp":"2026-01-01T12:00:00Z"},
+             "packet":{"mediaType":"ethernet","flags":["start","end","receive"],
+             "data":"////////xJ3tqEMCCABFAABOT/wAAIARZlDAqAEDwKgB/wCJAIkAOvm7/+ABEAABAAAAAAAAIEVKRUlGRUVQRUtFRUVPRUtGQkNBQ0FDQUNBQ0FDQUFBAAAgAAE="}}
+            """;
+
         private readonly CaptureUiApplicationFixture _application;
 
         public NetworkTraceCaptureControllerTests(CaptureUiApplicationFixture application)
@@ -236,6 +243,123 @@ namespace XMAT.Tests
             });
         }
 
+        // In the new look, a quiet divider separates the packets from their data, as it separates the traffic from the
+        // inspector in a web proxy capture.
+        [Fact]
+        public void PacketSplitter_DrawsTheNewLooksColumnDivider()
+        {
+            _application.Run(window =>
+            {
+                System.Windows.ResourceDictionary look = ThemeManager.CreateLook(newLook: true);
+                ThemeManager.LoadTheme(look, "Light", newLook: true, highContrast: false);
+                window.Resources = look;
+                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+                {
+                    NetworkTracePackets = new NetworkTracePacketsCollection()
+                };
+                var view = new NetworkTraceCaptureView { DataContext = new TestCaptureDeviceContext(controller) };
+                WpfTestHost.Show(window, view);
+
+                var splitter = (GridSplitter)view.FindName("PacketSplitter");
+                var line = Assert.IsType<Border>(splitter.Template.FindName("RestLine", splitter));
+                Assert.Equal(((System.Windows.Media.SolidColorBrush)look["ColumnDividerBrush"]).Color,
+                    Assert.IsType<System.Windows.Media.SolidColorBrush>(line.Background).Color);
+                Assert.True(line.ActualHeight > 0, "The divider has no height.");
+            });
+        }
+
+        // In the new look, as in the original, the packet table builds rows only for the packets in view, so a long
+        // trace shows as soon as it's read instead of freezing the window.
+        [Fact]
+        public void PacketTable_BuildsRowsOnlyForThePacketsInView_InTheNewLook()
+        {
+            _application.Run(window =>
+            {
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                NetworkTraceCaptureMethod.Method.Initialize(new CaptureAppModel { ActiveDatabase = database });
+                System.Windows.ResourceDictionary look = ThemeManager.CreateLook(newLook: true);
+                ThemeManager.LoadTheme(look, "Light", newLook: true, highContrast: false);
+                window.Resources = look;
+                window.Height = 400;
+                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+                {
+                    _networkTraceEngine = new TestTraceEngine { PacketOnDownload = NetBiosPacket, PacketCount = 200 }
+                };
+                controller.Initialize();
+                var view = new NetworkTraceCaptureView { DataContext = new TestCaptureDeviceContext(controller) };
+                WpfTestHost.Show(window, view);
+
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                WpfTestHost.Pump();
+
+                var grid = (DataGrid)view.FindName("PacketList");
+                Assert.Equal(200, grid.Items.Count);
+                int rows = Rows(grid);
+                Assert.True(rows < 50, $"The table built {rows} rows for 200 packets.");
+            });
+        }
+
+        // The packet table summarizes the columns whose values repeat, protocols by name, and choosing a PID, TID,
+        // protocol or address sets that filter to the value alone, as in a web proxy capture's traffic table.
+        [Fact]
+        public void ColumnSummaries_CoverRepeatedValues_AndChoosingOneFiltersThePackets()
+        {
+            _application.Run(window =>
+            {
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                NetworkTraceCaptureMethod.Method.Initialize(new CaptureAppModel { ActiveDatabase = database });
+                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+                {
+                    _networkTraceEngine = new TestTraceEngine
+                    {
+                        PacketOnDownload = NetBiosPacket,
+                        PacketCount = 2,
+                        OtherPacketsOnDownload = new[] { NetBiosPacket.Replace("\"processId\":4", "\"processId\":7", StringComparison.Ordinal) },
+                    }
+                };
+                controller.Initialize();
+                var view = new NetworkTraceCaptureView { DataContext = new TestCaptureDeviceContext(controller) };
+                WpfTestHost.Show(window, view);
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                WpfTestHost.Pump();
+
+                var grid = (DataGrid)view.FindName("PacketList");
+                Assert.Equal(
+                    new[] { "PROTO", "SRC IP", "DEST IP", "SRC MAC", "DEST MAC", "TYPE", "PID", "TID" },
+                    grid.Columns.Where(column => ColumnSummary.Describe(grid, column) != null).Select(column => (string)column.Header));
+                ColumnSummaryColumn protocol = ColumnSummary.Describe(grid, grid.Columns[1]);
+                Assert.Equal("UDP", protocol.ValueOf(grid.Items[0]));
+                Assert.Equal("3 packets", protocol.RowCountText(3));
+                Assert.Equal("Process ID", ColumnSummary.Title(grid.Columns[13]));
+
+                ColumnSummaryColumn processId = ColumnSummary.Describe(grid, grid.Columns[13]);
+                var seven = grid.Items.Cast<NetworkTracePacketDataModel>().Single(packet => packet.ProcessId == 7);
+                var entry = new ColumnSummaryValue("7", 1, seven);
+                Assert.True(processId.CanSelect(entry));
+                processId.Select(entry);
+                WpfTestHost.Pump();
+
+                Assert.True(((CheckBoxFilters)view.FindName("PidFilters")).IsFilterEnabled);
+                Assert.Equal(new[] { "7" }, controller.PidFilterList.Where(item => item.IsChecked).Select(item => item.Text));
+                Assert.Equal(new[] { seven }, grid.Items.Cast<NetworkTracePacketDataModel>());
+            });
+        }
+
+        private static int Rows(System.Windows.DependencyObject parent)
+        {
+            int rows = 0;
+            for (int child = 0; child < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); child++)
+            {
+                System.Windows.DependencyObject element = System.Windows.Media.VisualTreeHelper.GetChild(parent, child);
+                rows += (element is DataGridRow ? 1 : 0) + Rows(element);
+            }
+
+            return rows;
+        }
         [Fact]
         public void DeviceStatusChange_RefreshesCaptureCommandAvailability()
         {
@@ -277,11 +401,7 @@ namespace XMAT.Tests
                 {
                     PendingPhase = "download",
                     PendingOperation = Task.FromException(expected),
-                    PacketOnDownload = """
-                        {"event":{"processId":4,"threadId":308,"timestamp":"2026-01-01T12:00:00Z"},
-                         "packet":{"mediaType":"ethernet","flags":["start","end","receive"],
-                         "data":"////////xJ3tqEMCCABFAABOT/wAAIARZlDAqAEDwKgB/wCJAIkAOvm7/+ABEAABAAAAAAAAIEVKRUlGRUVQRUtFRUVPRUtGQkNBQ0FDQUNBQ0FDQUFBAAAgAAE="}}
-                        """
+                    PacketOnDownload = NetBiosPacket
                 };
                 var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
                 {
@@ -347,6 +467,8 @@ namespace XMAT.Tests
             internal Task PendingOperation { get; set; } = Task.CompletedTask;
             internal int SubscriberCount => EventRecordAvailable?.GetInvocationList().Length ?? 0;
             internal string PacketOnDownload { get; set; }
+            internal int PacketCount { get; set; } = 1;
+            internal string[] OtherPacketsOnDownload { get; set; } = Array.Empty<string>();
 
             public event EventHandler<string> EventRecordAvailable;
 
@@ -358,9 +480,14 @@ namespace XMAT.Tests
 
             public Task GetAllEventsAsync()
             {
-                if (PacketOnDownload != null)
+                for (int packet = 0; PacketOnDownload != null && packet < PacketCount; packet++)
                 {
                     EventRecordAvailable?.Invoke(this, PacketOnDownload);
+                }
+
+                foreach (string packet in OtherPacketsOnDownload)
+                {
+                    EventRecordAvailable?.Invoke(this, packet);
                 }
                 return PendingPhase == "download" ? PendingOperation : Task.CompletedTask;
             }

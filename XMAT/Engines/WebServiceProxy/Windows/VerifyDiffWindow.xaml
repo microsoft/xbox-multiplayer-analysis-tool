@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Verification differences" Width="1000" Height="720" MinWidth="600" MinHeight="400"
         WindowStartupLocation="CenterOwner"
-        Background="{DynamicResource PanelBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}">
+        Background="{DynamicResource SurfacePanelBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}">
   <!-- One row's recorded verification, prepared in the background and shown while the row is in its tab
        (VerifyDiffWindow.xaml.cs). -->
   <Grid Margin="12">

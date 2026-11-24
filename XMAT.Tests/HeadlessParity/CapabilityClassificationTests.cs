@@ -40,7 +40,7 @@ namespace XMAT.Tests.HeadlessParity
             Assert.Contains(CapabilityKeys.Command("XMAT.WebServiceCapture.WebServiceProxyCommands.PingDevice"), keys);
             Assert.Contains(CapabilityKeys.WpfCommand("New", "Windows/MainWindow.xaml"), keys);
             Assert.Contains(CapabilityKeys.WpfCommand("Close", "Controls/AllCaptureDevicesTabControl.xaml"), keys);
-            Assert.Contains(CapabilityKeys.Click("Windows/MainWindow.xaml", "ToggleDarkMode_Click"), keys);
+            Assert.Contains(CapabilityKeys.Click("Windows/MainWindow.xaml", "SelectTheme_Click"), keys);
             Assert.Contains(CapabilityKeys.Window("XMAT.MainWindow"), keys);
             Assert.Contains(CapabilityKeys.EnumValue("XMAT.SharedInterfaces.DeviceType", "GenericProxyDevice"), keys);
             Assert.Contains(CapabilityKeys.EnumValue("XMAT.WebServiceCaptureScriptableEventType", "WebResponse"), keys);

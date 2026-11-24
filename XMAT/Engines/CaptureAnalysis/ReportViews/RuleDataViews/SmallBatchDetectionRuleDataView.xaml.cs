@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows.Controls;
+using CaptureAnalysisEngine;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
 {
@@ -15,6 +16,8 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
         public static string MinUsersAllowedLabel { get { return Localization.GetLocalizedString("LTA_SMALL_CALLS_MIN"); } }
         public static string CallsBelowCountLabel { get { return Localization.GetLocalizedString("LTA_SMALL_CALLS_COUNT"); } }
         public static string PercentBelowCountLabel { get { return Localization.GetLocalizedString("LTA_SMALL_CALLS_PERCENT"); } }
+
+        public static string TableName { get { return Localization.GetLocalizedString("LTA_RULE_DATA_TABLE", SmallBatchDetectionRule.DisplayName); } }
 
         public SmallBatchDetectionRuleDataView()
         {

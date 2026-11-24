@@ -9,6 +9,8 @@
     <IsTestProject>true</IsTestProject>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <!-- Every run takes these settings, including CI's and Visual Studio's: the test host renders at 96 DPI. -->
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)XMAT.Tests.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +28,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
+    <!-- The design system app: the tests check its pages and keep pictures of them. -->
+    <ProjectReference Include="..\XMAT.DesignSystem\XMAT.DesignSystem.csproj" />
     <!-- Build order only: the tests in Cli run the built xmat.exe from XMAT.Cli's output folder. Private="false" keeps
          xmat.exe and its configuration files out of the test output, so they are never run without xmat.dll. -->
     <ProjectReference Include="..\XMAT.Cli\XMAT.Cli.csproj" ReferenceOutputAssembly="false" Private="false" />

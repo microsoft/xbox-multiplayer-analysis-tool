@@ -19,9 +19,11 @@ namespace XMAT.WebServiceCapture
     public partial class CaptureConnectionView
     {
         // A delete item shows its key; on a read-only tab, where it is disabled, its tooltip points to export instead.
-        private static MenuItem DeleteItem(string header, RoutedCommand command, ModifierKeys modifiers, IInputElement target, string readOnly)
+        private static MenuItem DeleteItem(string header, RoutedCommand command, ModifierKeys modifiers, IInputElement target, string readOnly) =>
+            WithDeleteKey(CommandItem(header, command, target), modifiers, readOnly);
+
+        private static MenuItem WithDeleteKey(MenuItem item, ModifierKeys modifiers, string readOnly)
         {
-            MenuItem item = CommandItem(header, command, target);
             item.InputGestureText = new KeyGesture(Key.Delete, modifiers).GetDisplayStringForCulture(CultureInfo.CurrentUICulture);
             item.ToolTip = readOnly;
             ToolTipService.SetShowOnDisabled(item, true);

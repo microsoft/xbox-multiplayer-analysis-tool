@@ -1,0 +1,31 @@
+<UserControl x:Class="XMAT.ConfirmPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="440">
+    <!-- A confirmation in the new look, in ConfirmWindow and on the design system's Dialogs page: a question that names
+         the action and what it affects, what the action does, the counts that matter, and then the action's button and
+         Cancel, which is the default answer. An action that can't be undone has the red button (DangerButtonStyle). -->
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                Padding="{DynamicResource DialogFooterInset}">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="ConfirmButton" MinWidth="88" MinHeight="{DynamicResource ControlHeight}"
+                        Margin="{DynamicResource InlineGap}" Click="Confirm_Click"/>
+                <Button x:Name="CancelButton" MinWidth="88" MinHeight="{DynamicResource ControlHeight}"
+                        IsCancel="True" IsDefault="True"/>
+            </StackPanel>
+        </Border>
+        <StackPanel Margin="{DynamicResource DialogInset}">
+            <TextBlock x:Name="HeadingText" Style="{DynamicResource SectionTitleStyle}" TextWrapping="Wrap"
+                       Margin="{DynamicResource HeadingContentGap}"/>
+            <TextBlock x:Name="MessageText" TextWrapping="Wrap"/>
+            <ItemsControl x:Name="DetailList" Margin="0,8,0,0" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </DockPanel>
+</UserControl>
