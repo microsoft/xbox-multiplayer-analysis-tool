@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
 using XMAT.Scripting;
 using XMAT.Tests.Proxy;
@@ -1748,6 +1749,8 @@ namespace XMAT.Tests
                 });
             await origin.StartAsync(CancellationToken.None);
             await using var proxy = await ProxyTestHarness.StartAsync();
+            int opened = 0;
+            proxy.Proxy.WebSocketOpened += (_, _) => Interlocked.Increment(ref opened);
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
@@ -1755,6 +1758,7 @@ namespace XMAT.Tests
                 new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token));
 
             Assert.Equal(HttpStatusCode.Unauthorized, client.HttpStatusCode);
+            Assert.Equal(0, opened);
             Assert.Contains(client.HttpResponseHeaders, header =>
                 header.Key.Equals("WWW-Authenticate", StringComparison.OrdinalIgnoreCase) &&
                 header.Value.Contains("Bearer realm=\"xmat-test\""));
@@ -1765,6 +1769,8 @@ namespace XMAT.Tests
         {
             using Socket reservedEndpoint = ReserveNonListeningSocket(out int closedPort);
             await using var proxy = await ProxyTestHarness.StartAsync();
+            int opened = 0;
+            proxy.Proxy.WebSocketOpened += (_, _) => Interlocked.Increment(ref opened);
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
@@ -1772,11 +1778,16 @@ namespace XMAT.Tests
                 new Uri($"wss://127.0.0.1:{closedPort}/socket"), timeout.Token));
 
             Assert.Equal(HttpStatusCode.BadGateway, client.HttpStatusCode);
+            Assert.Equal(0, opened);
         }
 
         [Fact]
         public async Task ForwardProxy_RelaysAcceptedWebSocketUpgrade()
         {
+            var messages = new ConcurrentQueue<WebSocketMessageEventArgs>();
+            var messagesReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closed = new TaskCompletionSource<WebSocketClosedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            WebSocketOpenedEventArgs opened = null;
             using var certificate = CreateCertificate();
             await using var origin = new InterceptedHttpHost(
                 (_, _) => certificate,
@@ -1806,6 +1817,14 @@ namespace XMAT.Tests
                 });
             await origin.StartAsync(CancellationToken.None);
             await using var proxy = await ProxyTestHarness.StartAsync();
+            proxy.Proxy.WebSocketOpened += (_, args) => opened = args;
+            proxy.Proxy.WebSocketMessage += (_, args) =>
+            {
+                messages.Enqueue(args);
+                if (messages.Count == 2)
+                    messagesReceived.TrySetResult();
+            };
+            proxy.Proxy.WebSocketClosed += (_, args) => closed.TrySetResult(args);
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
@@ -1818,11 +1837,226 @@ namespace XMAT.Tests
 
                 Assert.Equal(HttpStatusCode.SwitchingProtocols, client.HttpStatusCode);
                 Assert.Equal("ping", Encoding.UTF8.GetString(buffer, 0, echo.Count));
+                await messagesReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.NotNull(opened);
+                Assert.Equal($"wss://127.0.0.1:{origin.Port}/socket", opened.RemoteEndPoint);
+                ClientRequest request = Assert.Single(proxy.CapturedRequests);
+                Assert.Equal(request.RequestNumber, opened.RequestNumber);
+                Assert.All(messages, message =>
+                {
+                    Assert.Equal(opened.ConnectionID, message.ConnectionID);
+                    Assert.Equal(opened.RequestNumber, message.RequestNumber);
+                    Assert.Same(opened.ProcessContext, message.ProcessContext);
+                    Assert.Equal(WebSocketMessageType.Text, message.MessageType);
+                    Assert.Equal("ping", Encoding.UTF8.GetString(message.Message));
+                    Assert.False(message.PayloadTruncated);
+                });
+                Assert.Single(messages, message => message.FromHost);
+                Assert.Single(messages, message => !message.FromHost);
             }
             finally
             {
                 await CloseWebSocketAsync(client);
             }
+            WebSocketClosedEventArgs completion = await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(opened.ConnectionID, completion.ConnectionID);
+            Assert.Equal(opened.RequestNumber, completion.RequestNumber);
+            Assert.Same(opened.ProcessContext, completion.ProcessContext);
+        }
+
+        [Theory]
+        [InlineData(WebSocketMessageType.Text, 0)]
+        [InlineData(WebSocketMessageType.Text, 20001)]
+        [InlineData(WebSocketMessageType.Binary, 20001)]
+        [InlineData(WebSocketMessageType.Binary, WebSocketProxy.MaximumCapturedMessageBytes)]
+        [InlineData(WebSocketMessageType.Binary, WebSocketProxy.MaximumCapturedMessageBytes + 8193)]
+        public async Task ForwardProxy_CapturesSecureWebSocketMessages(
+            WebSocketMessageType messageType,
+            int payloadLength)
+        {
+            byte[] payload = Enumerable.Range(0, payloadLength)
+                .Select(i => messageType == WebSocketMessageType.Text ? (byte)('a' + i % 26) : (byte)i)
+                .ToArray();
+            byte[][] sent = [payload, "next"u8.ToArray()];
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync("capture-test");
+                foreach (byte[] expected in sent)
+                {
+                    byte[] received = await ReceiveWebSocketMessageAsync(socket, messageType, timeout.Token);
+                    Assert.Equal(expected, received);
+                    await SendFragmentedAsync(socket, received);
+                }
+                await socket.ReceiveAsync(new byte[64], timeout.Token);
+            }, useTls: true, useWebSockets: true);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            var messages = new ConcurrentQueue<WebSocketMessageEventArgs>();
+            var messagesReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            WebSocketOpenedEventArgs opened = null;
+            Guid sourceId = Guid.NewGuid();
+            HttpRequestEventArgs request = null;
+            proxy.Proxy.ReceivedWebRequest += (_, args) =>
+            {
+                args.Request.RowKey = new CaptureRowKey(sourceId, 1, args.Request.RequestNumber, 1);
+                request = args;
+            };
+            proxy.Proxy.WebSocketOpened += (_, args) => opened = args;
+            proxy.Proxy.WebSocketMessage += (_, args) =>
+            {
+                messages.Enqueue(args);
+                if (messages.Count == 4)
+                    messagesReceived.TrySetResult();
+            };
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            client.Options.AddSubProtocol("capture-test");
+
+            try
+            {
+                await client.ConnectAsync(new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
+                foreach (byte[] expected in sent)
+                {
+                    await SendFragmentedAsync(client, expected);
+                    Assert.Equal(expected, await ReceiveWebSocketMessageAsync(client, messageType, timeout.Token));
+                }
+                await messagesReceived.Task.WaitAsync(timeout.Token);
+
+                Assert.NotNull(opened);
+                Assert.NotNull(request);
+                Assert.NotNull(request.ProcessContext);
+                Assert.Equal("capture-test", opened.SubProtocol);
+                Assert.Equal(request.ConnectionID, opened.ConnectionID);
+                Assert.Equal(request.Request.RequestNumber, opened.RequestNumber);
+                Assert.Same(request.ProcessContext, opened.ProcessContext);
+                foreach (bool fromHost in new[] { false, true })
+                {
+                    WebSocketMessageEventArgs[] directional = messages.Where(message => message.FromHost == fromHost).ToArray();
+                    Assert.Equal(2, directional.Length);
+                    Assert.Equal(payload.Take(WebSocketProxy.MaximumCapturedMessageBytes).ToArray(), directional[0].Message);
+                    Assert.Equal(payloadLength > WebSocketProxy.MaximumCapturedMessageBytes, directional[0].PayloadTruncated);
+                    Assert.Equal(sent[1], directional[1].Message);
+                    Assert.False(directional[1].PayloadTruncated);
+                }
+                Assert.All(messages, message =>
+                {
+                    Assert.Equal(messageType, message.MessageType);
+                    Assert.Equal(request.ConnectionID, message.ConnectionID);
+                    Assert.Equal(request.Request.RequestNumber, message.RequestNumber);
+                    Assert.Equal(request.Request.RowKey, message.RowKey);
+                    Assert.Same(request.ProcessContext, message.ProcessContext);
+                });
+            }
+            finally
+            {
+                await CloseWebSocketAsync(client);
+            }
+
+            async Task SendFragmentedAsync(WebSocket socket, byte[] bytes)
+            {
+                int split = bytes.Length / 2;
+                await socket.SendAsync(new ArraySegment<byte>(bytes, 0, split), messageType, false, timeout.Token);
+                await socket.SendAsync(new ArraySegment<byte>(bytes, split, bytes.Length - split), messageType, true, timeout.Token);
+            }
+        }
+
+        [Fact]
+        public async Task ForwardProxy_RejectsSecureWebSocketWhenOpenedSubscriberRejects()
+        {
+            var releaseOrigin = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+                await releaseOrigin.Task.WaitAsync(timeout.Token);
+            }, useTls: true, useWebSockets: true);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            int opened = 0;
+            int messages = 0;
+            int closed = 0;
+            proxy.Proxy.WebSocketOpened += (_, args) =>
+            {
+                Interlocked.Increment(ref opened);
+                args.AcceptConnection = false;
+            };
+            proxy.Proxy.WebSocketMessage += (_, _) => Interlocked.Increment(ref messages);
+            proxy.Proxy.WebSocketClosed += (_, _) => Interlocked.Increment(ref closed);
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+
+            try
+            {
+                await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectAsync(
+                    new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token));
+
+                Assert.Equal(HttpStatusCode.Forbidden, client.HttpStatusCode);
+                Assert.Equal(1, opened);
+                Assert.Equal(0, messages);
+                Assert.Equal(0, closed);
+            }
+            finally
+            {
+                releaseOrigin.TrySetResult();
+            }
+        }
+
+        [Fact]
+        public async Task ForwardProxy_AbortedSecureWebSocketClosesCaptureWithoutPublishingPartialMessage()
+        {
+            var fragmentReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseOrigin = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+                WebSocketReceiveResult fragment = await socket.ReceiveAsync(new byte[64], timeout.Token);
+                Assert.False(fragment.EndOfMessage);
+                fragmentReceived.TrySetResult();
+                await releaseOrigin.Task.WaitAsync(timeout.Token);
+            }, useTls: true, useWebSockets: true);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            var messages = new ConcurrentQueue<WebSocketMessageEventArgs>();
+            int closedCount = 0;
+            proxy.Proxy.WebSocketMessage += (_, args) => messages.Enqueue(args);
+            proxy.Proxy.WebSocketClosed += (_, _) =>
+            {
+                Interlocked.Increment(ref closedCount);
+                closed.TrySetResult();
+            };
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+
+            try
+            {
+                await client.ConnectAsync(new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
+                await client.SendAsync("partial"u8.ToArray(), WebSocketMessageType.Text, false, timeout.Token);
+                await fragmentReceived.Task.WaitAsync(timeout.Token);
+                client.Abort();
+                await closed.Task.WaitAsync(timeout.Token);
+
+                Assert.Empty(messages);
+                Assert.Equal(1, closedCount);
+            }
+            finally
+            {
+                releaseOrigin.TrySetResult();
+            }
+        }
+
+        private static async Task<byte[]> ReceiveWebSocketMessageAsync(
+            WebSocket socket,
+            WebSocketMessageType expectedType,
+            CancellationToken cancellationToken)
+        {
+            using var message = new MemoryStream();
+            var buffer = new byte[8192];
+            WebSocketReceiveResult received;
+            do
+            {
+                received = await socket.ReceiveAsync(buffer, cancellationToken);
+                Assert.Equal(expectedType, received.MessageType);
+                message.Write(buffer, 0, received.Count);
+            }
+            while (!received.EndOfMessage);
+            return message.ToArray();
         }
 
         private static ClientWebSocket CreateProxiedWebSocket(int proxyPort)
