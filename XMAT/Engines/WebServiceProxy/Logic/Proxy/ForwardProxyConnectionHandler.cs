@@ -152,6 +152,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 var stream =
                     new DuplexPipeStream(
                         connection.Transport);
+                System.Console.Error.WriteLine($"DIAG read begin connection={connectionID}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                 ProxyRequestReadResult readResult =
                     await _requestReader.ReadAsync(
                             connection.Transport.Input,
@@ -165,6 +166,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 if (readResult.Failure !=
                     ProxyRequestReadFailure.None)
                 {
+                    System.Console.Error.WriteLine($"DIAG read failure {readResult.Failure}, cancelled={cancellationToken.IsCancellationRequested}, stopping={_applicationStopping.IsCancellationRequested}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                     _logger.Log(
                         connectionID,
                         LogLevel.WARN,
@@ -216,6 +218,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
                 ClientRequest request =
                     readResult.Request;
+                System.Console.Error.WriteLine($"DIAG read complete connection={connectionID}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                 request.RequestNumber =
                     _proxy.GetNextRequestID();
                 if (request.Method == "CONNECT")
@@ -613,6 +616,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 overflow = buffered.Overflow;
                 if (buffered.Complete)
                 {
+                    System.Console.Error.WriteLine($"DIAG response buffered connection={connectionID}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                     serverResponse.BodyBytes = capture.Freeze();
                     serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
                     if (!await AcceptResponseAsync(connectionID, clientRequest, serverResponse, processContext, ct)
@@ -636,6 +640,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         bufferedFraming,
                         trailerNames,
                         ct).ConfigureAwait(false);
+                    System.Console.Error.WriteLine($"DIAG response written connection={connectionID}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                     return;
                 }
             }

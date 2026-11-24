@@ -184,10 +184,12 @@ namespace XMAT.Operations.Captures
                                 throw;
                             }
                             context.Progress.Report(new OperationProgress("capture.listening", request.Port));
+                            Console.Error.WriteLine($"DIAG listening {Stopwatch.GetTimestamp()}");
                             schedule = ScheduleAsync(shaping, request.Shaping, diagnostics, running.Token);
                             Task duration = Task.Delay(TimeSpan.FromSeconds(request.DurationSeconds), token);
                             Task finished = await Task.WhenAny(duration, recorder.Failure.Task, schedule).ConfigureAwait(false);
                             await finished.ConfigureAwait(false);
+                            Console.Error.WriteLine($"DIAG duration finished {Stopwatch.GetTimestamp()}");
                             if (finished == recorder.Failure.Task)
                             {
                                 throw new InvalidOperationException("Capture recording failed or reached its safety limit.");
@@ -195,6 +197,7 @@ namespace XMAT.Operations.Captures
                         }
                         finally
                         {
+                            Console.Error.WriteLine($"DIAG shutdown begin {Stopwatch.GetTimestamp()}");
                             await running.CancelAsync().ConfigureAwait(false);
                             try
                             {
@@ -312,9 +315,11 @@ namespace XMAT.Operations.Captures
                     await Task.Delay(TimeSpan.FromMilliseconds(milliseconds), cancellationToken).ConfigureAwait(false);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
+                Console.Error.WriteLine($"DIAG schedule due {Stopwatch.GetTimestamp()}");
                 var result = await new SetNetworkShapingOperation().ExecuteAsync(
                     new(controller, change.Profile, plan.BodyTimeoutSeconds),
                     OperationContext.None, cancellationToken).ConfigureAwait(false);
+                Console.Error.WriteLine($"DIAG schedule applied {Stopwatch.GetTimestamp()}");
                 if (!result.Succeeded)
                 {
                     throw new InvalidOperationException("The scheduled shaping change failed.");

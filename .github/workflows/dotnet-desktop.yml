@@ -2,6 +2,7 @@ name: XMAT Win64 Desktop Build
 
 on:
   push:
+    branches-ignore: [emily/investigate-cli-ci-timing]
   pull_request:
 
 permissions:

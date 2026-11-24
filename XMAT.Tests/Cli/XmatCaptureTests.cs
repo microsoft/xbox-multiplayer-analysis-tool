@@ -8,6 +8,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Xunit.Abstractions;
 using XMAT.Cli;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Captures;
@@ -20,6 +21,10 @@ namespace XMAT.Tests.Cli
     [Collection(IsolatedProxyTests.Name)]
     public class XmatCaptureTests
     {
+        private readonly ITestOutputHelper _output;
+
+        public XmatCaptureTests(ITestOutputHelper output) => _output = output;
+
         [Theory]
         [InlineData("--shape secret-canary", "cli.usage.invalid-value", "--shape")]
         [InlineData("--shape off --down-kbps 1000", "cli.usage.invalid-value", "--down-kbps")]
@@ -302,6 +307,7 @@ namespace XMAT.Tests.Cli
         [Fact]
         public async Task ExplicitBodyDeadlineReachesTheProductionReader()
         {
+            var clock = Stopwatch.StartNew();
             using var directory = new CliTestDirectory();
             await using var origin = await LoopbackOrigin.StartAsync();
             int port = AvailablePort();
@@ -310,6 +316,7 @@ namespace XMAT.Tests.Cli
                 "--port", port.ToString(), "--duration-seconds", "3", "--out", "capture.xmatcap",
                 "--body-timeout-seconds", "1");
             await WaitForListenerAsync(child, port);
+            _output.WriteLine($"Deadline listener ready at {clock.Elapsed.TotalMilliseconds:F1} ms; timestamp {Stopwatch.GetTimestamp()}");
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             NetworkStream stream = client.GetStream();
@@ -318,9 +325,12 @@ namespace XMAT.Tests.Cli
                 "Content-Length: 2\r\nConnection: close\r\n\r\na"));
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
-            Assert.StartsWith("HTTP/1.1 408", await reader.ReadLineAsync(timeout.Token));
+            string status = await reader.ReadLineAsync(timeout.Token);
+            _output.WriteLine($"Deadline response at {clock.Elapsed.TotalMilliseconds:F1} ms: {status ?? "<null>"}; timestamp {Stopwatch.GetTimestamp()}");
             Assert.Empty(origin.Requests);
             XmatRun run = await child.CompleteAsync();
+            _output.WriteLine($"Deadline child exit {run.ExitCode}: {run.Stderr}\n{run.Stdout}");
+            Assert.StartsWith("HTTP/1.1 408", status);
             CliAssert.ExitCode(0, run);
             using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
             NetworkShapingMetadata history = NetworkShapingMetadata.Parse(
@@ -351,13 +361,21 @@ namespace XMAT.Tests.Cli
             var elapsed = Stopwatch.StartNew();
             using var content = new ByteArrayContent(body);
             using HttpResponseMessage response = await client.PostAsync(origin.Url("/upload"), content);
-            Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
+            byte[] firstBody = await response.Content.ReadAsByteArrayAsync();
+            _output.WriteLine($"Shaped HTTP complete {elapsed.Elapsed.TotalMilliseconds:F1} ms");
+            Assert.Equal(body, firstBody);
+            _output.WriteLine($"Shaped with equality {elapsed.Elapsed.TotalMilliseconds:F1} ms");
             Assert.InRange(elapsed.Elapsed.TotalMilliseconds, 850, 3000);
             await Task.Delay(TimeSpan.FromSeconds(2.1));
             elapsed.Restart();
-            Assert.Equal(body, await client.GetByteArrayAsync(origin.Url("/after")));
-            Assert.True(elapsed.Elapsed < TimeSpan.FromMilliseconds(800));
+            byte[] secondBody = await client.GetByteArrayAsync(origin.Url("/after"));
+            TimeSpan httpElapsed = elapsed.Elapsed;
+            Assert.Equal(body, secondBody);
+            TimeSpan assertionElapsed = elapsed.Elapsed;
+            _output.WriteLine($"Off HTTP {httpElapsed.TotalMilliseconds:F1} ms; with equality {assertionElapsed.TotalMilliseconds:F1} ms; timestamp {Stopwatch.GetTimestamp()}");
             XmatRun run = await child.CompleteAsync();
+            _output.WriteLine($"Shaping child exit {run.ExitCode}: {run.Stderr}\n{run.Stdout}");
+            Assert.True(assertionElapsed < TimeSpan.FromMilliseconds(800), $"HTTP {httpElapsed.TotalMilliseconds:F1} ms, with equality {assertionElapsed.TotalMilliseconds:F1} ms");
             CliAssert.ExitCode(0, run);
             Assert.False(run.WindowSeen);
             Assert.Equal(2, run.Json().GetProperty("capture").GetProperty("records").GetInt64());

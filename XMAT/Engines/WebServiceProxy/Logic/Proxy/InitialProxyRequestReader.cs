@@ -2041,6 +2041,7 @@ namespace XMAT.WebServiceCapture.Proxy
                             callerToken);
                 _total.CancelAfter(
                     policy.BodyTotalTimeout);
+                System.Console.Error.WriteLine($"DIAG body timer start seconds={policy.BodyTotalTimeout.TotalSeconds}, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                 _inactivity =
                     CancellationTokenSource
                         .CreateLinkedTokenSource(

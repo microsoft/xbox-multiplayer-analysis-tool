@@ -168,7 +168,9 @@ namespace XMAT.Operations.Captures
                 }
                 try
                 {
+                    long started = System.Diagnostics.Stopwatch.GetTimestamp();
                     action();
+                    Console.Error.WriteLine($"DIAG record {action.Method.Name}, elapsed={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms, timestamp={System.Diagnostics.Stopwatch.GetTimestamp()}");
                     return true;
                 }
                 catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
