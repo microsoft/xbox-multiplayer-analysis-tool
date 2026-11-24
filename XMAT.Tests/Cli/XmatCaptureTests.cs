@@ -304,9 +304,15 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { "blocked.xmatcap" }, directory.Entries());
         }
 
-        [Fact]
-        public async Task ExplicitBodyDeadlineReachesTheProductionReader()
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(4)]
+        public async Task ExplicitBodyDeadlineReachesTheProductionReader(int iteration)
         {
+            Console.WriteLine($"DIAGNOSTIC deadline iteration {iteration}");
             var clock = Stopwatch.StartNew();
             using var directory = new CliTestDirectory();
             await using var origin = await LoopbackOrigin.StartAsync();
@@ -317,6 +323,7 @@ namespace XMAT.Tests.Cli
                 "--body-timeout-seconds", "1");
             await WaitForListenerAsync(child, port);
             _output.WriteLine($"Deadline listener ready at {clock.Elapsed.TotalMilliseconds:F1} ms; timestamp {Stopwatch.GetTimestamp()}");
+            Console.WriteLine($"DIAGNOSTIC deadline listener ready at {clock.Elapsed.TotalMilliseconds:F1} ms; timestamp {Stopwatch.GetTimestamp()}");
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             NetworkStream stream = client.GetStream();
@@ -327,9 +334,11 @@ namespace XMAT.Tests.Cli
             using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
             string status = await reader.ReadLineAsync(timeout.Token);
             _output.WriteLine($"Deadline response at {clock.Elapsed.TotalMilliseconds:F1} ms: {status ?? "<null>"}; timestamp {Stopwatch.GetTimestamp()}");
+            Console.WriteLine($"DIAGNOSTIC deadline response at {clock.Elapsed.TotalMilliseconds:F1} ms: {status ?? "<null>"}; timestamp {Stopwatch.GetTimestamp()}");
             Assert.Empty(origin.Requests);
             XmatRun run = await child.CompleteAsync();
             _output.WriteLine($"Deadline child exit {run.ExitCode}: {run.Stderr}\n{run.Stdout}");
+            Console.WriteLine($"DIAGNOSTIC deadline response={status ?? "<null>"}, timestamp={Stopwatch.GetTimestamp()}\n{run.Stderr}");
             Assert.StartsWith("HTTP/1.1 408", status);
             CliAssert.ExitCode(0, run);
             using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
@@ -338,9 +347,15 @@ namespace XMAT.Tests.Cli
             Assert.Equal(1, Assert.Single(history.Traces).BodyTimeoutSeconds);
         }
 
-        [Fact]
-        public async Task ForegroundCaptureShapesThenDisablesAndSavesBytesAndHistory()
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(4)]
+        public async Task ForegroundCaptureShapesThenDisablesAndSavesBytesAndHistory(int iteration)
         {
+            Console.WriteLine($"DIAGNOSTIC shaping iteration {iteration}");
             using var directory = new CliTestDirectory();
             GuiStorageProbe gui = GuiStorageProbe.Capture();
             byte[] body = Enumerable.Range(0, 128 * 1024).Select(index => (byte)(index % 251)).ToArray();
@@ -375,6 +390,7 @@ namespace XMAT.Tests.Cli
             _output.WriteLine($"Off HTTP {httpElapsed.TotalMilliseconds:F1} ms; with equality {assertionElapsed.TotalMilliseconds:F1} ms; timestamp {Stopwatch.GetTimestamp()}");
             XmatRun run = await child.CompleteAsync();
             _output.WriteLine($"Shaping child exit {run.ExitCode}: {run.Stderr}\n{run.Stdout}");
+            Console.WriteLine($"DIAGNOSTIC Off HTTP {httpElapsed.TotalMilliseconds:F1} ms; with equality {assertionElapsed.TotalMilliseconds:F1} ms\n{run.Stderr}");
             Assert.True(assertionElapsed < TimeSpan.FromMilliseconds(800), $"HTTP {httpElapsed.TotalMilliseconds:F1} ms, with equality {assertionElapsed.TotalMilliseconds:F1} ms");
             CliAssert.ExitCode(0, run);
             Assert.False(run.WindowSeen);
