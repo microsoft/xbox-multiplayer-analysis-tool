@@ -1913,7 +1913,8 @@ namespace XMAT.WebServiceCapture
         {
             var callbackStopwatch = Stopwatch.StartNew();
             TimeSpan timeout = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            var timeoutTask = Task.Delay(timeout);
+            using var timeoutCancellation = new CancellationTokenSource();
+            var timeoutTask = Task.Delay(timeout, timeoutCancellation.Token);
             try
             {
                 while (!callbacksDrained.IsCompleted)
@@ -1924,10 +1925,19 @@ namespace XMAT.WebServiceCapture
                         _captureCallbacks.ActiveOperationCount,
                         _uiUpdateQueue.PendingCount));
 
-                    var completed = await Task.WhenAny(
-                        callbacksDrained,
-                        timeoutTask,
-                        Task.Delay(ProgressUpdateInterval));
+                    using var updateCancellation = new CancellationTokenSource();
+                    Task completed;
+                    try
+                    {
+                        completed = await Task.WhenAny(
+                            callbacksDrained,
+                            timeoutTask,
+                            Task.Delay(ProgressUpdateInterval, updateCancellation.Token));
+                    }
+                    finally
+                    {
+                        updateCancellation.Cancel();
+                    }
                     if (completed == timeoutTask)
                     {
                         throw new TimeoutException();
@@ -1953,6 +1963,10 @@ namespace XMAT.WebServiceCapture
                         timeoutSeconds),
                     ex);
             }
+            finally
+            {
+                timeoutCancellation.Cancel();
+            }
         }
 
         // Waits for a proxy stop, which ends only after the proxy has completed the capture of every stream it forwarded.
@@ -1961,19 +1975,32 @@ namespace XMAT.WebServiceCapture
         private async Task<bool> WaitForProxyStopAsync(Task proxyStopped)
         {
             TimeSpan budget = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
-            if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+            if (!await CompletesWithinAsync(proxyStopped, budget))
             {
                 if (_captureCallbackCancellationTokenSource != null)
                 {
                     await _captureCallbackCancellationTokenSource.CancelAsync();
                 }
-                if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+                if (!await CompletesWithinAsync(proxyStopped, budget))
                 {
                     return false;
                 }
             }
             await proxyStopped;
             return true;
+        }
+
+        private static async Task<bool> CompletesWithinAsync(Task operation, TimeSpan timeout)
+        {
+            using var delayCancellation = new CancellationTokenSource();
+            try
+            {
+                return await Task.WhenAny(operation, Task.Delay(timeout, delayCancellation.Token)) == operation;
+            }
+            finally
+            {
+                delayCancellation.Cancel();
+            }
         }
 
         private TimeoutException CaptureBudgetExceeded() =>
@@ -1994,9 +2021,17 @@ namespace XMAT.WebServiceCapture
                     0,
                     _uiUpdateQueue.PendingCount));
 
-                await Task.WhenAny(
-                    uiUpdatesDrained,
-                    Task.Delay(ProgressUpdateInterval));
+                using var updateCancellation = new CancellationTokenSource();
+                try
+                {
+                    await Task.WhenAny(
+                        uiUpdatesDrained,
+                        Task.Delay(ProgressUpdateInterval, updateCancellation.Token));
+                }
+                finally
+                {
+                    updateCancellation.Cancel();
+                }
             }
 
             await uiUpdatesDrained;
