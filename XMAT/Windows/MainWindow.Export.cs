@@ -103,19 +103,7 @@ namespace XMAT
                 Task<OperationResult<ExportCaptureResult>> running = Task.Run(() => export(window, cancellation.Token));
                 _ = running.ContinueWith(
                     _ => finished.TrySetResult(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-                Task firstCompleted;
-                using (var delayCancellation = new CancellationTokenSource())
-                {
-                    try
-                    {
-                        firstCompleted = await Task.WhenAny(running, Task.Delay(250, delayCancellation.Token));
-                    }
-                    finally
-                    {
-                        delayCancellation.Cancel();
-                    }
-                }
-                if (firstCompleted != running)
+                if (await Task.WhenAny(running, Task.Delay(250)) != running)
                 {
                     window.ShowDialog();
                 }
