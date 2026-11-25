@@ -34,6 +34,7 @@ namespace XMAT.Operations.Capabilities
         private const string SourceAddressXaml = "Engines/WebServiceProxy/Windows/SourceAddressWindow.xaml";
         private const string PortChangeXaml = "Engines/WebServiceProxy/Windows/ProxyPortChangeWindow.xaml";
         private const string BlockListXaml = "Engines/WebServiceProxy/Views/BlockListView.xaml";
+        private const string AutoResponderXaml = "Engines/WebServiceProxy/Views/AutoResponderView.xaml";
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
         private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
@@ -227,6 +228,18 @@ namespace XMAT.Operations.Capabilities
             Capability.Planned(
                 "script.validate", "Validate a capture script without running it", "S8a", Owner,
                 gui: new[] { Command(ScriptCommandsPrefix + "ValidateScript") }),
+            Capability.Planned(
+                "capture.auto-responder", "Mock proxy responses with ordered rules", "S8a", Owner,
+                gui: new[]
+                {
+                    Click(AutoResponderXaml, "Add_Click"),
+                    Click(AutoResponderXaml, "Update_Click"),
+                    Click(AutoResponderXaml, "Remove_Click"),
+                    Click(AutoResponderXaml, "BodyFile_Click"),
+                    Click(AutoResponderXaml, "CapturedResponse_Click"),
+                    Click(AutoResponderXaml, "Save_Click"),
+                    Click(AutoResponderXaml, "Load_Click"),
+                }),
             // The lists last only for the session, but they change what the proxy captures, so they are not
             // presentation.
             Capability.Planned(

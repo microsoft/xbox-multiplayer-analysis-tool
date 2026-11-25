@@ -178,6 +178,7 @@ namespace XMAT.WebServiceCapture
             ShowAllProcessesButton.Content = Localization.GetLocalizedString("PROCESS_FILTER_SHOW_ALL");
 
             ReqestResponseTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB");
+            AutoResponderTab.Header = Localization.GetLocalizedString("AUTORESPONDER_TITLE");
             ScriptEditorTab.Header = Localization.GetLocalizedString("WEBCAP_EDITOR_TAB");
 
             RequestViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_REQUEST");

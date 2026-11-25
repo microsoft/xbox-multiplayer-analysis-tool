@@ -181,6 +181,32 @@ The [foreground CLI command and timed JSON schedules](cli.md#foreground-proxy-ca
 without changing system settings or requiring a driver.
 Developers extending this feature can use the [maintainer guide](network-shaping-design.md).
 
+## Mock responses with AutoResponder
+
+In a live web capture, open **AutoResponder** to respond to matching HTTP requests
+without contacting the origin. Enter an absolute HTTP or HTTPS URL pattern (`*`
+matches any sequence), a method or `*`, a status, optional headers and body, and a
+delay in milliseconds; then choose **Add rule**. Rules are checked in list order and
+the first match wins. URL paths are case-sensitive; host and scheme are not. Disable
+the checkbox to temporarily forward requests normally without removing the rules.
+
+The starter scenarios fill the editor with a 429 throttling response, 401
+authentication failure, 503 service failure, or a 200 response delayed by five
+seconds. Adjust the fields before adding the rule. A delay can trigger a client's
+timeout but does not itself simulate a disconnect. **Update selected** replaces a
+rule without changing its position. **Use selected response** copies a complete
+captured response into the editor; responses with transfer-encoding or truncated
+bodies cannot be copied. **Load body file** loads bytes as Base64, so binary bodies
+are preserved. Content-Length and connection-specific headers are managed by XMAT.
+
+Rules apply per capture, run after request scripts and the block list, and do not
+apply to bypassed TLS connections or WebSocket upgrades. Mock responses are recorded
+in the capture; response scripts do not run on them. Rules are not saved with captures
+or active after restarting XMAT: use **Save rules** and **Load rules** to reuse them.
+Saved files can contain sensitive headers and bodies; review them before sharing.
+Bodies are limited to 1 MiB, rule files to 4 MiB, and each set to 128 rules. Loading
+replaces the current set and can immediately affect matching traffic.
+
 ## Inspect requests and responses
 
 1. Launch an app on the kit, such as the ATG NetRumble sample.
