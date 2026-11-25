@@ -56,6 +56,22 @@ namespace XMAT.Tests.Proxy
             Assert.NotNull(rules.Match("GET", new Uri(requestUrl)));
         }
 
+        [Theory]
+        [InlineData("https://api.example.test/Case/status", true)]
+        [InlineData("https://API.EXAMPLE.TEST/Case/status", true)]
+        [InlineData("https://one.two.example.test/Case/nested/status?x=1", true)]
+        [InlineData("https://api.example.test/case/status", false)]
+        [InlineData("https://unrelated.test/Case/status", false)]
+        [InlineData("https://unrelated.test/path.example.test/Case/status", false)]
+        [InlineData("https://unrelated.test/?next=api.example.test/Case/status", false)]
+        [InlineData("https://unrelated.test/#api.example.test/Case/status", false)]
+        public void Rules_HostWildcardStaysWithinAuthority(string requestUrl, bool shouldMatch)
+        {
+            var rules = new AutoResponderRules();
+            rules.Add(new AutoResponderRule("https://*.example.test/Case/*", "GET", 200, "", "", 0));
+            Assert.Equal(shouldMatch, rules.Match("GET", new Uri(requestUrl)) != null);
+        }
+
         [Fact]
         public void Rule_PreservesBinaryResponseBody()
         {
@@ -180,6 +196,33 @@ namespace XMAT.Tests.Proxy
             using (var request = NewRequest(HttpMethod.Get, origin.Url("/mock"), version))
             using (var response = await client.SendAsync(request)) Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
             Assert.Equal(2, calls);
+        }
+
+        [Theory]
+        [InlineData("http11", "/path.example.test/mock")]
+        [InlineData("http11", "/?next=api.example.test/mock")]
+        [InlineData("https11", "/path.example.test/mock")]
+        [InlineData("https11", "/?next=api.example.test/mock")]
+        [InlineData("https2", "/path.example.test/mock")]
+        [InlineData("https2", "/?next=api.example.test/mock")]
+        public async Task HostWildcard_DoesNotMatchPathOrQueryOnAnotherHost(string route, string path)
+        {
+            (Version version, bool tls) = Route(route);
+            int calls = 0;
+            await using var origin = await LoopbackOrigin.StartAsync(context =>
+            {
+                Interlocked.Increment(ref calls);
+                context.Response.StatusCode = 204;
+                return Task.CompletedTask;
+            }, useTls: tls);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            proxy.Proxy.AutoResponder.Add(new AutoResponderRule(
+                (tls ? "https" : "http") + "://*.example.test/*", "GET", 503, "", "offline", 0));
+            using HttpClient client = proxy.CreateClient();
+            using var request = NewRequest(HttpMethod.Get, origin.Url(path), version);
+            using HttpResponseMessage response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Equal(1, calls);
         }
 
         [Theory]

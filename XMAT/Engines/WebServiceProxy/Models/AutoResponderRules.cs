@@ -107,7 +107,7 @@ namespace XMAT.WebServiceCapture.Models
                 authority = origin.GetLeftPart(UriPartial.Authority);
                 if (path.Length == 0) path = "/";
             }
-            _pattern = new Regex("^(?i:" + Regex.Escape(authority).Replace("\\*", ".*") + ")" +
+            _pattern = new Regex("^(?i:" + Regex.Escape(authority).Replace("\\*", "[^/?#]*") + ")" +
                 Regex.Escape(path).Replace("\\*", ".*") + "$",
                 RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
         }
