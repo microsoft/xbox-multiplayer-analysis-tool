@@ -502,34 +502,47 @@ namespace XMAT.Tests.Proxy
             {
                 controller.Apply(new(NetworkShapingMode.Shape, DownKbps: 1_000_000));
             }
-            await using var proxy = await StartAsync(controller);
-            using var stalled = new StalledClients();
-            for (int i = 0; i < 8; i++)
+            int heldBufferSlots = 0;
+            if (shaped)
             {
-                // The client never reads, so its download queue fills and stays full.
-                TcpClient client = stalled.Add();
-                await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
-                await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
-                    $"GET {origin.Url("/large")} HTTP/1.1\r\nHost: 127.0.0.1:{origin.Port}\r\n\r\n"));
+                // Hold the shared pool empty deterministically instead of waiting for stalled sockets to fill it.
+                while (controller.BufferSlots.Wait(0))
+                {
+                    heldBufferSlots++;
+                }
             }
-            var elapsed = Stopwatch.StartNew();
-            while (origin.Requests.Count < stalled.Count && elapsed.Elapsed < TimeSpan.FromSeconds(10))
-            {
-                await Task.Delay(20);
-            }
-            Assert.Equal(stalled.Count, origin.Requests.Count);
-            // Shaped queues borrow the shared pool until it is empty; unshaped queues use only their reserve.
-            var filling = Stopwatch.StartNew();
-            while (controller.BufferSlots.CurrentCount > 0 &&
-                filling.Elapsed < (shaped ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(1.5)))
-            {
-                await Task.Delay(20);
-            }
-            Assert.Equal(shaped ? 0 : 256, controller.BufferSlots.CurrentCount);
 
-            using HttpClient other = proxy.CreateClient();
-            other.Timeout = TimeSpan.FromSeconds(5);
-            Assert.Equal(new byte[16], await other.GetByteArrayAsync(origin.Url("/small")));
+            try
+            {
+                await using var proxy = await StartAsync(controller);
+                using var stalled = new StalledClients();
+                for (int i = 0; i < 8; i++)
+                {
+                    // The client never reads, so its download queue fills and stays full.
+                    TcpClient client = stalled.Add();
+                    await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+                    await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+                        $"GET {origin.Url("/large")} HTTP/1.1\r\nHost: 127.0.0.1:{origin.Port}\r\n\r\n"));
+                }
+                var elapsed = Stopwatch.StartNew();
+                while (origin.Requests.Count < stalled.Count && elapsed.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    await Task.Delay(20);
+                }
+                Assert.Equal(stalled.Count, origin.Requests.Count);
+                Assert.Equal(shaped ? 0 : 256, controller.BufferSlots.CurrentCount);
+
+                using HttpClient other = proxy.CreateClient();
+                other.Timeout = TimeSpan.FromSeconds(5);
+                Assert.Equal(new byte[16], await other.GetByteArrayAsync(origin.Url("/small")));
+            }
+            finally
+            {
+                if (heldBufferSlots > 0)
+                {
+                    controller.BufferSlots.Release(heldBufferSlots);
+                }
+            }
         }
 
         private static Task<ProxyTestHarness> StartAsync(NetworkShapingController controller) =>
