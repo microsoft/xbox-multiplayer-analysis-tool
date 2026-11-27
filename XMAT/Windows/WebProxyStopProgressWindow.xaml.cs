@@ -4,6 +4,7 @@
 
 using System;
 using System.ComponentModel;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -40,10 +41,18 @@ namespace XMAT
             TimeSpan delay)
         {
             ArgumentNullException.ThrowIfNull(operationTask);
-            var completed = await Task.WhenAny(
-                operationTask,
-                Task.Delay(delay));
-            return completed != operationTask && !operationTask.IsCompleted;
+            using var delayCancellation = new CancellationTokenSource();
+            try
+            {
+                var completed = await Task.WhenAny(
+                    operationTask,
+                    Task.Delay(delay, delayCancellation.Token));
+                return completed != operationTask && !operationTask.IsCompleted;
+            }
+            finally
+            {
+                delayCancellation.Cancel();
+            }
         }
 
         private async void Window_ContentRendered(
