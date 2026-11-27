@@ -500,7 +500,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 await ProxyWebSocketAsync(
                     context,
-                    tunnel.ConnectionId,
+                    tunnel,
                     uri,
                     clientRequest,
                     cancellationToken).ConfigureAwait(false);
@@ -878,7 +878,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private async Task ProxyWebSocketAsync(
             HttpContext context,
-            int connectionId,
+            InterceptedTunnelContext tunnel,
             Uri uri,
             ClientRequest clientRequest,
             CancellationToken cancellationToken)
@@ -917,30 +917,66 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 // A failure racing with client abort or shutdown is a cancellation.
                 cancellationToken.ThrowIfCancellationRequested();
-                RespondToFailedUpgrade(context, connectionId, upstream, ex);
+                RespondToFailedUpgrade(context, tunnel.ConnectionId, upstream, ex);
                 return;
             }
 
-            using WebSocket downstream =
-                await context.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol).ConfigureAwait(false);
+            var opened = new WebSocketOpenedEventArgs
+            {
+                Timestamp = DateTime.Now,
+                ConnectionID = tunnel.ConnectionId,
+                RequestNumber = clientRequest.RequestNumber,
+                RemoteEndPoint = upstreamUri.ToString(),
+                SubProtocol = upstream.SubProtocol,
+                AcceptConnection = true,
+                ProcessContext = tunnel.ProcessContext,
+            };
+            _proxy.RaiseWebSocketOpened(opened);
+            if (!opened.AcceptConnection)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
 
-            // WebSockets leave HTTP framing after the handshake, so relay messages
-            // directly until either peer closes and then stop the opposite pump.
-            using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken);
+            try
+            {
+                using WebSocket downstream =
+                    await context.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol).ConfigureAwait(false);
 
-            Task downstreamToUpstream = RelayWebSocketAsync(
-                downstream,
-                upstream,
-                relayCancellation.Token);
-            Task upstreamToDownstream = RelayWebSocketAsync(
-                upstream,
-                downstream,
-                relayCancellation.Token);
+                // WebSockets leave HTTP framing after the handshake, so relay messages
+                // directly until either peer closes and then stop the opposite pump.
+                using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
 
-            await Task.WhenAny(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
-            relayCancellation.Cancel();
-            await Task.WhenAll(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
+                Task downstreamToUpstream = RelayWebSocketAsync(
+                    downstream,
+                    upstream,
+                    tunnel,
+                    clientRequest,
+                    fromHost: false,
+                    relayCancellation.Token);
+                Task upstreamToDownstream = RelayWebSocketAsync(
+                    upstream,
+                    downstream,
+                    tunnel,
+                    clientRequest,
+                    fromHost: true,
+                    relayCancellation.Token);
+
+                await Task.WhenAny(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
+                relayCancellation.Cancel();
+                await Task.WhenAll(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
+            }
+            finally
+            {
+                _proxy.RaiseWebSocketClosed(new WebSocketClosedEventArgs
+                {
+                    Timestamp = DateTime.Now,
+                    ConnectionID = tunnel.ConnectionId,
+                    RequestNumber = clientRequest.RequestNumber,
+                    ProcessContext = tunnel.ProcessContext,
+                });
+            }
         }
 
         // The server either answered the upgrade without switching protocols (for example 401
@@ -981,12 +1017,17 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private static async Task RelayWebSocketAsync(
+        private async Task RelayWebSocketAsync(
             WebSocket source,
             WebSocket destination,
+            InterceptedTunnelContext tunnel,
+            ClientRequest clientRequest,
+            bool fromHost,
             CancellationToken cancellationToken)
         {
             byte[] buffer = new byte[8192];
+            using var message = new MemoryStream();
+            bool messageTruncated = false;
 
             try
             {
@@ -1010,13 +1051,37 @@ namespace XMAT.WebServiceCapture.Proxy
                         result.MessageType,
                         result.EndOfMessage,
                         cancellationToken).ConfigureAwait(false);
+
+                    messageTruncated |= WebSocketProxy.AppendCapturedPayload(
+                        message,
+                        buffer,
+                        result.Count,
+                        WebSocketProxy.MaximumCapturedMessageBytes);
+                    if (result.EndOfMessage)
+                    {
+                        _proxy.RaiseWebSocketMessage(new WebSocketMessageEventArgs
+                        {
+                            Timestamp = DateTime.Now,
+                            ConnectionID = tunnel.ConnectionId,
+                            RequestNumber = clientRequest.RequestNumber,
+                            FromHost = fromHost,
+                            MessageType = result.MessageType,
+                            Message = message.ToArray(),
+                            PayloadTruncated = messageTruncated,
+                            ProcessContext = tunnel.ProcessContext,
+                            RowKey = clientRequest.RowKey,
+                        });
+                        message.SetLength(0);
+                        messageTruncated = false;
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
             }
-            catch (WebSocketException)
+            catch (WebSocketException ex)
             {
+                Log(tunnel.ConnectionId, LogLevel.ERROR, $"WebSocket relay failed: {ex.Message}");
             }
         }
 
