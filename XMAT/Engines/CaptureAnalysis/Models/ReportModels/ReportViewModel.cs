@@ -22,6 +22,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
 
         public abstract string ReportName { get; }
 
+        // Screen readers name a report tab after its item.
+        public override string ToString() => ReportName;
+
         public virtual bool Show { get { return true; } }
 
         public ICaptureAppModel CaptureAppModel { get; }

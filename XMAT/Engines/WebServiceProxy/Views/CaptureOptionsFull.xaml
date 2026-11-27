@@ -28,7 +28,7 @@
             <CheckBox x:Name="StreamAllCheckBox" IsChecked="{Binding StreamAllResponses, UpdateSourceTrigger=Explicit}">
                 <TextBlock x:Name="StreamAllLabel" TextWrapping="Wrap" Text="Stream all responses"/>
             </CheckBox>
-            <TextBlock x:Name="StreamingNote" TextWrapping="Wrap" Margin="0,2,0,4" Foreground="{DynamicResource SecondaryForegroundBrush}"
+            <TextBlock x:Name="StreamingNote" TextWrapping="Wrap" Margin="0,2,0,4" Foreground="{DynamicResource TextSecondaryBrush}"
                        Text="Streamed responses reach the device as they arrive, so scripts cannot change or block them."/>
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="CaptureLimitLabel" VerticalAlignment="Center" Text="Capture limit (MB):"/>

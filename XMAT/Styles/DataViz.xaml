@@ -1,0 +1,354 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:XMAT">
+
+    <!-- Data visualizations of the new look. -->
+
+    <!-- Column summary icon (ColumnSummaryButton): the info icon at the right end of a column header that opens the
+         column's summary. A 12px glyph centered in a 20x20 hit area, in the secondary text color at rest, the primary
+         text color on hover and keyboard focus, and the accent color while its summary is open. Keyboard focus adds a
+         1px accent ring around the hit area; in high contrast, the hover outline marks hover too. -->
+    <Style TargetType="local:ColumnSummaryButton">
+        <Setter Property="Width" Value="20"/>
+        <Setter Property="Height" Value="20"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:ColumnSummaryButton">
+                    <Grid Background="{TemplateBinding Background}">
+                        <TextBlock x:Name="Glyph" Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{TemplateBinding Foreground}"/>
+                        <Border x:Name="HoverOutline" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}"/>
+                        <Border x:Name="FocusRing" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"
+                                BorderBrush="{DynamicResource AccentBrush}"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsFocusVisible" Value="True">
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                            <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsSummaryOpen" Value="True">
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Column summary (ColumnSummary): the popup below a table's column header, opened from its info icon, that shows
+         the column's most common values. It looks like the app's other popups (the panel surface, a 1px border, 4px
+         corners) with a soft shadow, which the margin around the surface leaves room for. Every row has the same
+         lanes: the value, its bar, its count and its share. Status bars take the timeline's status colors and other
+         bars are neutral; the bars are never the only cue, since every row also shows its value and count. The row
+         with the table's selected row is filled with the highlight and marked by an accent bar at its left. -->
+    <Style TargetType="local:ColumnSummaryView">
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="UseLayoutRounding" Value="True"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:ColumnSummaryView">
+                    <Border x:Name="PART_Surface" Margin="12,4,12,16" Padding="0,12"
+                            Width="{TemplateBinding SurfaceWidth}" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                            BorderThickness="1" CornerRadius="{DynamicResource ControlCornerRadius}">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black"
+                                              Opacity="{Binding Background, ElementName=PART_Surface, Converter={x:Static local:ColumnSummaryView.ShadowOpacityConverter}}"/>
+                        </Border.Effect>
+                        <StackPanel>
+                            <!-- The name on a 20px line, with the totals on its baseline. -->
+                            <Grid Margin="12,0,12,8" MinHeight="20">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Title}" FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Margin="12,0,0,1" VerticalAlignment="Bottom" Text="{Binding Totals}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            </Grid>
+                            <ListBox x:Name="PART_Values" ItemsSource="{Binding Rows}" Focusable="False"
+                                     AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.HelpText="{Binding Hint}">
+                                <ListBox.Template>
+                                    <ControlTemplate TargetType="ListBox">
+                                        <ItemsPresenter/>
+                                    </ControlTemplate>
+                                </ListBox.Template>
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel/>
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                                        <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+                                        <Setter Property="AutomationProperties.ItemStatus" Value="{Binding ItemStatus}"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <Grid MinHeight="24" Background="Transparent">
+                                                        <Border x:Name="Fill"/>
+                                                        <Border x:Name="HoverOutline" BorderThickness="1" Visibility="Collapsed"
+                                                                BorderBrush="{DynamicResource HoverOutlineBrush}"/>
+                                                        <Grid Margin="12,0">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="{Binding ValueLaneWidth, RelativeSource={RelativeSource AncestorType=local:ColumnSummaryView}}"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="{Binding CountLaneWidth, RelativeSource={RelativeSource AncestorType=local:ColumnSummaryView}}"/>
+                                                                <ColumnDefinition Width="{Binding PercentLaneWidth, RelativeSource={RelativeSource AncestorType=local:ColumnSummaryView}}"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock x:Name="Label" Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                                                                       VerticalAlignment="Center"/>
+                                                            <Grid Grid.Column="1" Height="8" VerticalAlignment="Center">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="{Binding BarWidth}" MinWidth="2"/>
+                                                                    <ColumnDefinition Width="{Binding BarRemainder}"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <Border x:Name="Bar" CornerRadius="2"
+                                                                        Background="{DynamicResource ColumnHeaderDividerBrush}"/>
+                                                            </Grid>
+                                                            <TextBlock x:Name="Count" Grid.Column="2" Text="{Binding CountText}"
+                                                                       TextAlignment="Right" VerticalAlignment="Center"/>
+                                                            <TextBlock x:Name="Percent" Grid.Column="3" Text="{Binding PercentText}"
+                                                                       TextAlignment="Right" VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                        </Grid>
+                                                        <Border x:Name="Marker" Width="2" HorizontalAlignment="Left" Visibility="Collapsed"
+                                                                Background="{DynamicResource AccentBrush}"/>
+                                                    </Grid>
+                                                    <ControlTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding Bar}" Value="NoStatus">
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource NeutralFillBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Bar}" Value="Success">
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource SuccessFillBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Bar}" Value="Redirect">
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource InfoFillBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Bar}" Value="ClientError">
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource WarningFillBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Bar}" Value="ServerError">
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
+                                                        </DataTrigger>
+                                                        <!-- The rest of the values. -->
+                                                        <DataTrigger Binding="{Binding IsMore}" Value="True">
+                                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                                        </DataTrigger>
+                                                        <!-- Only a value that filters the table responds to the pointer. -->
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True"/>
+                                                                <Condition Binding="{Binding CanSelect}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter TargetName="Fill" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                                                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
+                                                        <!-- The value of the table's selected row; a neutral bar takes the accent color. -->
+                                                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                            <Setter TargetName="Fill" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                                            <Setter TargetName="Marker" Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding IsCurrent}" Value="True"/>
+                                                                <Condition Binding="{Binding Bar}" Value="Neutral"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                                        </MultiDataTrigger>
+                                                        <!-- High contrast fills that row with the system highlight, so everything on it takes the
+                                                             highlight text color. -->
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding IsCurrent}" Value="True"/>
+                                                                <Condition Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                                            <Setter TargetName="Count" Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                                            <Setter TargetName="Percent" Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                                            <Setter TargetName="Marker" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                                        </MultiDataTrigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
+                            <Border Height="1" Margin="0,8" Background="{DynamicResource BorderSubtleBrush}"/>
+                            <TextBlock Margin="12,0" Text="{Binding Hint}" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <!-- High contrast draws no shadow. -->
+                        <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                            <Setter TargetName="PART_Surface" Property="Effect" Value="{x:Null}"/>
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Histogram (HistogramView): a titled list of values in a report, such as the network analysis's packets by
+         source. The title, with the totals under it, so histograms side by side start their rows at the same height;
+         then a row per value in a column summary's lanes: its label, a neutral bar against the longest bar, its amount
+         and its share. The rest of the values share a row with a secondary label, and Show all, under the rows,
+         lists every value. In a shared size scope (Grid.IsSharedSizeScope), histograms share their label and amount
+         lanes, so a report's bars line up. A row reads as one sentence to screen readers; Tab enters the rows once and
+         the arrow keys move between them. -->
+    <Style TargetType="local:HistogramView">
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="UseLayoutRounding" Value="True"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:HistogramView">
+                    <StackPanel>
+                        <StackPanel x:Name="Header" Margin="0,0,0,6">
+                            <TextBlock x:Name="Title" Text="{Binding Title}" TextWrapping="Wrap"
+                                       FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" AutomationProperties.HeadingLevel="Level3"/>
+                            <TextBlock x:Name="Totals" Text="{Binding Totals}" Margin="0,2,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                        <ItemsControl x:Name="PART_Rows" ItemsSource="{TemplateBinding ShownRows}" Focusable="False"
+                                      AutomationProperties.Name="{Binding AccessibleName}"
+                                      KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Contained">
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Focusable" Value="True"/>
+                                    <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid MinHeight="24">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="{Binding LabelLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"
+                                                              SharedSizeGroup="HistogramLabelLane"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="{Binding AmountLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"
+                                                              SharedSizeGroup="HistogramAmountLane"/>
+                                            <ColumnDefinition Width="{Binding ShareLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="Label" Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                        <Grid Grid.Column="1" Height="8" VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="{Binding BarWidth}" MinWidth="2"/>
+                                                <ColumnDefinition Width="{Binding BarRemainder}"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="Bar" CornerRadius="2"
+                                                    Background="{DynamicResource ColumnHeaderDividerBrush}"/>
+                                        </Grid>
+                                        <TextBlock x:Name="Amount" Grid.Column="2" Text="{Binding AmountText}"
+                                                   TextAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="Share" Grid.Column="3" Text="{Binding ShareText}"
+                                                   TextAlignment="Right" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    </Grid>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsMore}" Value="True">
+                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- A histogram without values says so on the line of its first row. -->
+                        <TextBlock x:Name="Empty" Text="{Binding EmptyText}" MinHeight="24" Padding="0,4"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Visibility="Collapsed"/>
+                        <!-- Show all, and once chosen Show fewer: secondary text and a chevron, lined up with the
+                             labels, with the hover fill and outline of the app's quiet buttons. -->
+                        <ToggleButton x:Name="PART_ShowAll" HorizontalAlignment="Left" Margin="-6,4,0,0"
+                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Style>
+                                <Style TargetType="ToggleButton">
+                                    <Setter Property="Content" Value="{Binding ShowAllText}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                    <Setter Property="Padding" Value="6,0"/>
+                                    <Setter Property="MinHeight" Value="24"/>
+                                    <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Grid>
+                                                    <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}"
+                                                            CornerRadius="{DynamicResource ControlCornerRadius}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                                                       VerticalAlignment="Center"/>
+                                                            <Path x:Name="Chevron" Data="M0.5,0.5 L4.5,4.5 L8.5,0.5" Width="9" Height="5"
+                                                                  Margin="6,1,0,0" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.25"
+                                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                                  VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                                            BorderThickness="1" BorderBrush="{DynamicResource HoverOutlineBrush}"
+                                                            Visibility="Collapsed" IsHitTestVisible="False"/>
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter TargetName="Chevron" Property="RenderTransform">
+                                                            <Setter.Value>
+                                                                <RotateTransform Angle="180"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Trigger>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                                                        <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsPressed" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CanShowAll}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Content" Value="{Binding ShowFewerText}"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToggleButton.Style>
+                        </ToggleButton>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsEmpty}" Value="True">
+                            <Setter TargetName="Empty" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

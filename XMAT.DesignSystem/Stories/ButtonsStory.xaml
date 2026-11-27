@@ -1,0 +1,174 @@
+<ds:Story x:Class="XMAT.DesignSystem.ButtonsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:sys="clr-namespace:System;assembly=mscorlib"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Buttons"
+          Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on; a toggle switch turns a setting on or off."
+          Section="Components"
+          DefinedIn="XMAT/Styles/Buttons.xaml, XMAT/Styles/ToggleSwitch.xaml">
+    <StackPanel>
+        <ds:StoryUsage>
+            <ds:StoryUsage.UseFor>
+                <sys:String>Starting an action, such as Add capture in a dialog's footer or Save in a panel.</sys:String>
+                <sys:String>Turning an option on and off among other buttons, with a toggle button, such as Wrap lines.</sys:String>
+            </ds:StoryUsage.UseFor>
+            <ds:StoryUsage.NotFor>
+                <sys:String>Going to another view: use a tab.</sys:String>
+                <sys:String>Choosing one of several options: use radio buttons or choice cards.</sys:String>
+                <sys:String>Turning a setting on or off in a form: use a check box.</sys:String>
+            </ds:StoryUsage.NotFor>
+        </ds:StoryUsage>
+
+        <ds:StorySection Title="Standard button" StyleName="Button (default style)"
+                         Description="For actions in dialogs and panels, such as Save in the host list manager.">
+            <ds:StoryExample Caption="Rest">
+                <Button Content="Save"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Content="Save" IsEnabled="False"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Long label">
+                <Button Content="Export root certificate to desktop"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Icon button" StyleName="SoftIconButtonStyle"
+                         Description="A 24px button with one glyph, such as New capture at the start of the capture tabs. Give it a tooltip and an accessible name that say what it does.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource SoftIconButtonStyle}" ToolTip="New capture"
+                        AutomationProperties.Name="New capture">
+                    <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Button>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Style="{DynamicResource SoftIconButtonStyle}" IsEnabled="False"
+                        AutomationProperties.Name="New capture">
+                    <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Button>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Tab close button" StyleName="TabCloseButtonStyle"
+                         Description="The quiet close glyph on capture and analysis tabs. Its 24px target fills on hover.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource TabCloseButtonStyle}" Content="&#xE894;"
+                        FontFamily="Segoe MDL2 Assets" ToolTip="Close tab" AutomationProperties.Name="Close tab"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Danger button" StyleName="DangerButtonStyle"
+                         Description="The button of an action that can't be undone, in a confirmation, such as Delete 12 sessions (Dialogs). It's filled red, and it says the action again.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource DangerButtonStyle}" Content="Delete 12 sessions" MinWidth="88"
+                        MinHeight="{DynamicResource ControlHeight}"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Style="{DynamicResource DangerButtonStyle}" Content="Delete 12 sessions" MinWidth="88"
+                        MinHeight="{DynamicResource ControlHeight}" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Toggle button" StyleName="ToggleButton (default style)"
+                         Description="An option that stays on while the button is pressed. On, it takes the soft accent fill and an accent outline.">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Content="Wrap lines"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Content="Wrap lines" IsChecked="True"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ToggleButton Content="Wrap lines" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Toggle switch" StyleName="ToggleSwitchStyle"
+                         Description="A setting that takes effect as soon as it's switched, such as New look at the right of the menu bar. An option of a tool, such as Wrap lines, is a toggle button (BUTTON-3).">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsChecked="True"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsEnabled="False"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled, on">
+                <ToggleButton Style="{DynamicResource ToggleSwitchStyle}" Content="New look" IsChecked="True"
+                              IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Filter toggle" StyleName="FilterToggleButtonStyle"
+                         Description="A toggle among the filter dropdowns, with their corners and height, such as Process in the traffic filters. It is on while its popup is open.">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process" IsChecked="True"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Filters button" StyleName="FilterOverflowButtonStyle, FilterOverflowPopupStyle"
+                         Description="When the traffic pane is too narrow for its filters, they fold into this button, and its popup lists them. An accent dot shows that a filter is on.">
+            <ds:StoryExample x:Name="NoFilterExample" Caption="No filter on"/>
+            <ds:StoryExample x:Name="ActiveFilterExample" Caption="A filter on"/>
+            <ds:StoryExample Caption="Its popup">
+                <Border Style="{DynamicResource FilterOverflowPopupStyle}">
+                    <StackPanel>
+                        <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Status"
+                                      HorizontalAlignment="Left"/>
+                        <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process"
+                                      HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StoryRules Description="What every button in XMAT follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID. A Should rule is checked in review.">
+            <ds:StoryRule RuleId="BUTTON-1">
+                <ds:RuleExample Kind="Do" Caption="Each button says what happens.">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Delete capture" Margin="0,0,8,0"/>
+                        <Button Content="Cancel"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Yes and No send people back to read the question.">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Yes" Margin="0,0,8,0"/>
+                        <Button Content="No"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="BUTTON-2">
+                <ds:RuleExample Kind="Do" Caption="Its tooltip says New capture, and Narrator reads the same.">
+                    <Button Style="{DynamicResource SoftIconButtonStyle}" ToolTip="New capture"
+                            AutomationProperties.Name="New capture">
+                        <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Button>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="No tooltip, and Narrator reads only “button”.">
+                    <Button Style="{DynamicResource SoftIconButtonStyle}">
+                        <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Button>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="BUTTON-3">
+                <ds:RuleExample Kind="Do" Caption="Wrap lines stays pressed while lines wrap.">
+                    <ToggleButton Content="Wrap lines" IsChecked="True"/>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Save as a toggle button stays pressed after saving, as if something were still on.">
+                    <ToggleButton Content="Save" IsChecked="True"/>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
+    </StackPanel>
+</ds:Story>

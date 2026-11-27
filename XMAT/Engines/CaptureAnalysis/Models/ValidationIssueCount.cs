@@ -31,6 +31,19 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
             }
         }
 
+        // The count with its level in words, such as "3 errors", or "No issues".
+        public string Description => IssueLevel switch
+        {
+            ViolationLevel.Error => Localization.GetLocalizedString(
+                Errors == 1 ? "LTA_ISSUE_COUNT_ERROR" : "LTA_ISSUE_COUNT_ERRORS", Errors),
+            ViolationLevel.Warning => Localization.GetLocalizedString(
+                Warnings == 1 ? "LTA_ISSUE_COUNT_WARNING" : "LTA_ISSUE_COUNT_WARNINGS", Warnings),
+            _ => Localization.GetLocalizedString("LTA_ISSUE_COUNT_NONE")
+        };
+
+        // The rule and its Description, for a control that is not beside the rule's name.
+        public string AccessibleName => Localization.GetLocalizedString("LTA_ISSUE_COUNT_NAME", RuleName, Description);
+
         public ValidationIssueCount(string ruleName)
         {
             RuleName = ruleName;

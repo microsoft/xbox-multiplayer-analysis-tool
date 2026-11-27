@@ -35,8 +35,8 @@ namespace XMAT.Tests
                 WindowStyle = WindowStyle.None,
                 ShowInTaskbar = false
             };
-            window.Resources["PrimaryForegroundBrush"] = Brushes.Black;
-            window.Resources["SecondaryForegroundBrush"] = Brushes.Gray;
+            window.Resources["TextPrimaryBrush"] = Brushes.Black;
+            window.Resources["TextSecondaryBrush"] = Brushes.Gray;
             try
             {
                 test(window);

@@ -26,6 +26,10 @@ namespace XMAT.WebServiceCapture
             InitializeComponent();
             Title = Localization.GetLocalizedString("HOST_LISTS_WINDOW_TITLE");
             IntroText.Text = Localization.GetLocalizedString("HOST_LISTS_WINDOW_INTRO");
+            IntroLeadText.Text = Localization.GetLocalizedString("HOST_LISTS_WINDOW_LEAD");
+            ChangesFactText.Text = Localization.GetLocalizedString("HOST_LISTS_WINDOW_FACT_CHANGES");
+            BlockFactText.Text = Localization.GetLocalizedString("HOST_LISTS_WINDOW_FACT_BLOCK");
+            ExitFactText.Text = Localization.GetLocalizedString("HOST_LISTS_WINDOW_FACT_EXIT");
             BlockTab.Header = Localization.GetLocalizedString("HOST_LISTS_BLOCK_TAB");
             BypassTab.Header = Localization.GetLocalizedString("HOST_LISTS_BYPASS_TAB");
             CloseButton.Content = Localization.GetLocalizedString("HOST_LISTS_CLOSE");

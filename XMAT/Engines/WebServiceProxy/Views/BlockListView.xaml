@@ -4,12 +4,511 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             xmlns:app="clr-namespace:XMAT"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
              mc:Ignorable="d"
              x:Name="BlockListViewControl"
              d:DesignHeight="450" d:DesignWidth="600">
-    <Grid Margin="8">
+    <!-- The original look shows the instructions above the entry field, and the list below it. The new look is laid out on
+         the spacing grid (Styles/Spacing.xaml) and reads from the top: what the list is, adding an entry, the list and its
+         actions, then how matching works, behind a disclosure. From HostListLayout.TwoColumnWidth the list and its actions
+         take a column of their own beside the rest. Styles used by elements that both looks show keep the original look's
+         values and change them only in the new look. -->
+    <UserControl.Resources>
+        <!-- This panel's sizes, on the 4 px grid -->
+        <sys:Double x:Key="EntryColumnWidth">348</sys:Double>
+        <sys:Double x:Key="PatternColumnWidth">100</sys:Double>
+        <sys:Double x:Key="AddButtonMinWidth">72</sys:Double>
+        <Thickness x:Key="ActionButtonPadding">12,4</Thickness>
+        <!-- The text box applies its padding twice, around its border and around its text, after a 1 px border and a
+             2 px caret gap, so typed text and the hint over it start 12 px in, as the list's rows do. -->
+        <Thickness x:Key="FieldPadding">4.5,2</Thickness>
+        <Thickness x:Key="FieldTextInset">12,0</Thickness>
+
+        <!-- The panel: the original look's margin, or the new look's padding. -->
+        <Style x:Key="PanelStyle" TargetType="Grid">
+            <Setter Property="Margin" Value="8"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource PanelInset}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The heading, the entry field and the help span the panel, or keep the left column in two columns. -->
+        <Style x:Key="LeftRegionStyle" TargetType="FrameworkElement">
+            <Setter Property="Grid.ColumnSpan" Value="2"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding ActualWidth, ElementName=BlockListViewControl, Converter={x:Static local:HostListLayout.IsTwoColumn}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Grid.ColumnSpan" Value="1"/>
+                    <Setter Property="Width" Value="{StaticResource EntryColumnWidth}"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- What the list is. The original look shows the heading just above the list. -->
+        <Style x:Key="HeadingRegionStyle" TargetType="StackPanel" BasedOn="{StaticResource LeftRegionStyle}">
+            <Setter Property="Grid.Row" Value="2"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Grid.Row" Value="0"/>
+                    <Setter Property="Margin" Value="{DynamicResource GroupGap}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="EntryRegionStyle" TargetType="StackPanel" BasedOn="{StaticResource LeftRegionStyle}">
+            <Setter Property="Grid.Row" Value="1"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource SectionGap}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- How matching works comes last in one column, and below the entry field in two. -->
+        <Style x:Key="HelpRegionStyle" TargetType="Border" BasedOn="{StaticResource LeftRegionStyle}">
+            <Setter Property="Grid.Row" Value="4"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding ActualWidth, ElementName=BlockListViewControl, Converter={x:Static local:HostListLayout.IsTwoColumn}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Grid.Row" Value="2"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The list and its actions: in two columns they fill the right column, from the heading's top to the bottom. -->
+        <Style x:Key="ListRegionStyle" TargetType="Grid">
+            <Setter Property="Grid.Row" Value="3"/>
+            <Setter Property="Grid.ColumnSpan" Value="2"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource SectionGap}"/>
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding ActualWidth, ElementName=BlockListViewControl, Converter={x:Static local:HostListLayout.IsTwoColumn}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Grid.Row" Value="0"/>
+                    <Setter Property="Grid.RowSpan" Value="5"/>
+                    <Setter Property="Grid.Column" Value="1"/>
+                    <Setter Property="Grid.ColumnSpan" Value="1"/>
+                    <Setter Property="Margin" Value="{DynamicResource ColumnGap}"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="HelpTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <!-- Text to read, such as the description and the matching rules, on 20 px lines. -->
+        <Style x:Key="ReadingTextStyle" TargetType="TextBlock" BasedOn="{StaticResource HelpTextStyle}">
+            <Setter Property="LineHeight" Value="{DynamicResource TextLineHeight}"/>
+        </Style>
+
+        <!-- The heading row, with the list's description 4 px below it in the new look. -->
+        <Style x:Key="HeadingRowStyle" TargetType="StackPanel">
+            <Setter Property="Orientation" Value="Horizontal"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource HeadingDescriptionGap}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Keeps the count 8 px after the heading, whose line is 20 px tall like the description's. -->
+        <Style x:Key="HeadingHostStyle" TargetType="Border">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource InlineGap}"/>
+                    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource TextLineHeight}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The number of entries beside the list's heading, in the new look while the list has any. It sits on the
+             heading's baseline. -->
+        <Style x:Key="ListCountStyle" TargetType="TextBlock">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Margin">
+                <Setter.Value>
+                    <MultiBinding Converter="{x:Static local:HostListLayout.BaselineMargin}">
+                        <Binding Path="FontFamily" ElementName="BlockedUrlsLabel"/>
+                        <Binding Path="FontSize" ElementName="BlockedUrlsLabel"/>
+                        <Binding Path="FontFamily" RelativeSource="{RelativeSource Self}"/>
+                        <Binding Path="FontSize" RelativeSource="{RelativeSource Self}"/>
+                    </MultiBinding>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The entry row keeps the original look's spacing. In the new look the field fills the row and Add stays beside
+             it at every width; the hint or an entry error follows 4 px below. -->
+        <Style x:Key="EntryRowStyle" TargetType="app:ReflowPanel">
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Spacing" Value="6"/>
+            <Setter Property="StackedSpacing" Value="6"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource HeadingDescriptionGap}"/>
+                    <Setter Property="Spacing" Value="{DynamicResource SpaceS}"/>
+                    <Setter Property="StackBelow" Value="0"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- In the new look the field and Add are as tall as the app's other controls. -->
+        <Style x:Key="EntryFieldStyle" TargetType="Grid">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- What to type, shown over the empty entry field in the new look, where typed text starts. The field keeps its
+             accessible name. -->
+        <Style x:Key="EntryHintStyle" TargetType="TextBlock">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="{StaticResource FieldTextInset}"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding Text, ElementName=NewBlockTextBox}" Value=""/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Visibility" Value="Visible"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Examples below the entry field, in the new look. An entry error takes their place. -->
+        <Style x:Key="EntryExampleStyle" TargetType="TextBlock" BasedOn="{StaticResource ReadingTextStyle}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Visibility, ElementName=EntryErrorText}" Value="Visible">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- An entry error in the new look: on 20 px lines, after an icon centered on its first line, 8 px before the
+             message. -->
+        <Style x:Key="ErrorLineStyle" TargetType="DockPanel">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource TextLineHeight}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ErrorIconStyle" TargetType="Grid">
+            <Setter Property="DockPanel.Dock" Value="Left"/>
+            <Setter Property="Width" Value="{DynamicResource SpaceM}"/>
+            <Setter Property="Height" Value="{DynamicResource TextLineHeight}"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Margin" Value="{DynamicResource InlineGap}"/>
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding Visibility, ElementName=EntryErrorText}" Value="Visible"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Visibility" Value="Visible"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The well keeps its actions 8 px below it in the new look. -->
+        <Style x:Key="ListWellStyle" TargetType="app:FlexFill">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource HeadingContentGap}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- A row of the list in the new look: 32 px tall, with its text 12 px from the well's edge. A hovered row takes
+             the buttons' hover fill; a selected row takes the selection fill and outline of the app's tables. -->
+        <Style x:Key="EntryItemStyle" TargetType="ListBoxItem">
+            <Setter Property="MinHeight" Value="{DynamicResource ListRowHeight}"/>
+            <Setter Property="Padding" Value="{DynamicResource RowInset}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Grid>
+                            <Border x:Name="Row" Background="Transparent" Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter VerticalAlignment="Center">
+                                    <!-- The row's text takes the row's colors, such as the selection's, not the app-wide
+                                         TextBlock color. -->
+                                    <ContentPresenter.Resources>
+                                        <Style TargetType="TextBlock"/>
+                                    </ContentPresenter.Resources>
+                                </ContentPresenter>
+                            </Border>
+                            <Border x:Name="Outline" BorderThickness="1" BorderBrush="Transparent"
+                                    IsHitTestVisible="False" SnapsToDevicePixels="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource HoverOutlineBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsSelected" Value="True"/>
+                                    <Condition Property="Selector.IsSelectionActive" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightBrushKey}}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The list takes the app's list colors in the original look; in the new look its rows draw on the well. -->
+        <Style x:Key="EntryListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="BorderThickness" Value="0"/>
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="ItemContainerStyle" Value="{StaticResource EntryItemStyle}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBox">
+                                <ScrollViewer Focusable="False" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Shown in the well while the list is empty, in the new look. -->
+        <Style x:Key="EmptyListStyle" TargetType="TextBlock" BasedOn="{StaticResource HelpTextStyle}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="{DynamicResource EmptyStatePadding}"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding HasItems, ElementName=BlockedUrlList}" Value="False"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Visibility" Value="Visible"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The list's actions are as tall as the app's other controls in the new look, and turn off while there is
+             nothing for them to do: Remove selected until an entry is selected, Clear all while the list is empty. The
+             original look keeps them on. -->
+        <Style x:Key="RemoveActionStyle" TargetType="Border">
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="Margin" Value="{DynamicResource InlineGap}"/>
+                    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}"/>
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding SelectedItem, ElementName=BlockedUrlList}" Value="{x:Null}"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="IsEnabled" Value="False"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ClearActionStyle" TargetType="Border">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
+                    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}"/>
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True"/>
+                        <Condition Binding="{Binding HasItems, ElementName=BlockedUrlList}" Value="False"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="IsEnabled" Value="False"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- How matching works: a 12 px chevron and, 8 px after it, a heading that shows or hides the help. The heading is
+             a toggle button, so Tab reaches it and Space or Enter opens it; keyboard focus outlines its text. The help
+             starts 8 px below, indented to the heading's text. -->
+        <Style x:Key="DisclosureStyle" TargetType="Expander">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Expander">
+                        <StackPanel>
+                            <ToggleButton x:Name="HeaderSite" HorizontalAlignment="Left" FocusVisualStyle="{x:Null}"
+                                          Content="{TemplateBinding Header}" Foreground="{TemplateBinding Foreground}"
+                                          IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <StackPanel Orientation="Horizontal" Background="Transparent"
+                                                    MinHeight="{DynamicResource TextLineHeight}">
+                                            <Path x:Name="Chevron" Width="{DynamicResource SpaceM}" Height="{DynamicResource SpaceM}"
+                                                  Margin="{DynamicResource InlineGap}" VerticalAlignment="Center"
+                                                  Data="M4.5,2.5 L8,6 L4.5,9.5" Stroke="{TemplateBinding Foreground}"
+                                                  StrokeThickness="1.25" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  StrokeLineJoin="Round"/>
+                                            <Grid>
+                                                <Border x:Name="FocusRing" Margin="-3,-1" BorderThickness="1" Visibility="Collapsed"
+                                                        CornerRadius="{DynamicResource InputCornerRadius}"
+                                                        BorderBrush="{DynamicResource TextPrimaryBrush}"/>
+                                                <TextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                                           FontSize="{DynamicResource BaseFontSize}" FontWeight="SemiBold"
+                                                           Foreground="{TemplateBinding Foreground}"/>
+                                            </Grid>
+                                        </StackPanel>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="Chevron" Property="Data" Value="M2.5,4.5 L6,8 L9.5,4.5"/>
+                                            </Trigger>
+                                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                                <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ExpandSite" Visibility="Collapsed" Margin="{DynamicResource DisclosureIndent}"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="True">
+                                <Setter TargetName="HeaderSite" Property="Margin" Value="{DynamicResource HeadingContentGap}"/>
+                                <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- An example: the pattern in its column and, 16 px after it, what it matches. Each row has 4 px above and below
+             its first 20 px line, so a one-line row is 28 px tall. In a narrow panel the description drops 4 px below its
+             pattern. -->
+        <Style x:Key="ExampleRowStyle" TargetType="app:ReflowPanel">
+            <Setter Property="Margin" Value="{DynamicResource TableRowInset}"/>
+            <Setter Property="Spacing" Value="{DynamicResource SpaceL}"/>
+            <Setter Property="StackedSpacing" Value="{DynamicResource SpaceXS}"/>
+            <Setter Property="StackBelow" Value="0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ActualWidth, ElementName=BlockListViewControl, Converter={x:Static local:HostListLayout.IsNarrow}}" Value="True">
+                    <Setter Property="StackBelow" Value="Infinity"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The pattern's cell, as tall as the description's first line, which the chip fills. Its column is at least
+             PatternColumnWidth wide, and as wide as the longest pattern, in every row. -->
+        <Style x:Key="PatternCellStyle" TargetType="Grid">
+            <Setter Property="MinHeight" Value="{DynamicResource TextLineHeight}"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+        </Style>
+
+        <!-- An example pattern: monospace text in a chip on the theme's recessed surface, 6 px from its sides and 2 px from
+             its top and bottom. Like a well, its 1 px edge shows only in high contrast. -->
+        <Style x:Key="CodeChipStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WellEdgeBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="{DynamicResource InputCornerRadius}"/>
+            <Setter Property="Padding" Value="5,1"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+        </Style>
+
+        <Style x:Key="CodeTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Code within a sentence, such as a pattern in a matching rule. -->
+        <Style x:Key="InlineCodeStyle" TargetType="Run">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        </Style>
+
+        <Style x:Key="ExampleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource ReadingTextStyle}">
+            <Setter Property="app:ReflowPanel.Weight" Value="1"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+        </Style>
+
+        <!-- A matching rule: a bullet in a 12 px column, with the text wrapping beside it. Rules are 4 px apart. -->
+        <Style x:Key="RuleStyle" TargetType="DockPanel">
+            <Setter Property="Margin" Value="{DynamicResource BulletGap}"/>
+        </Style>
+
+        <Style x:Key="BulletStyle" TargetType="TextBlock" BasedOn="{StaticResource ReadingTextStyle}">
+            <Setter Property="DockPanel.Dock" Value="Left"/>
+            <Setter Property="Text" Value="&#x2022;"/>
+            <Setter Property="Width" Value="{DynamicResource BulletIndent}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- The list fills the tab. When the tab is too short for everything, the tab scrolls instead of cutting off the
+         list and its buttons. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+    <Grid Style="{StaticResource PanelStyle}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -17,7 +516,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,8">
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,8" Visibility="{app:Look New=Collapsed, Original=Visible}">
             <TextBlock TextWrapping="Wrap">
                 <Run Text="Enter URLs to block below. You can use * as a wildcard. Examples:"/>
                 <LineBreak/>
@@ -31,30 +530,163 @@
             <TextBlock x:Name="ScopeText" TextWrapping="Wrap" FontStyle="Italic" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <Grid Grid.Row="1" Margin="0,0,0,4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBox x:Name="NewBlockTextBox" Grid.Column="0" VerticalAlignment="Center"
-                     Padding="3" KeyDown="NewBlockTextBox_KeyDown"/>
-            <Button x:Name="AddUrlBlockButton" Grid.Column="1" Margin="6,0,0,0" Padding="8,3"
-                    Content="Add URL Block" Click="AddUrlBlock_Click"/>
+        <!-- What the list is. The heading names the list for screen readers. -->
+        <StackPanel Style="{StaticResource HeadingRegionStyle}">
+            <StackPanel Style="{StaticResource HeadingRowStyle}">
+                <Border Style="{StaticResource HeadingHostStyle}">
+                    <TextBlock x:Name="BlockedUrlsLabel" Style="{DynamicResource SectionTitleStyle}"
+                               Margin="{app:Look New=0, Original='0,4,0,4'}"
+                               Text="{app:Look New={x:Static local:BlockListView.ListHeadingText}, Original='Blocked URLs:'}"/>
+                </Border>
+                <TextBlock x:Name="BlockedCountText" Style="{StaticResource ListCountStyle}"/>
+            </StackPanel>
+            <TextBlock x:Name="DescriptionText" Style="{StaticResource ReadingTextStyle}"
+                       Visibility="{app:Look New=Visible, Original=Collapsed}"/>
+        </StackPanel>
+
+        <!-- Adding an entry. The entry field keeps a usable width; in the original look its button moves below it in a
+             narrow pane. -->
+        <StackPanel Style="{StaticResource EntryRegionStyle}">
+            <app:ReflowPanel Style="{StaticResource EntryRowStyle}">
+                <Grid app:ReflowPanel.Weight="1" Style="{StaticResource EntryFieldStyle}">
+                    <TextBox x:Name="NewBlockTextBox" VerticalAlignment="{app:Look New=Stretch, Original=Center}"
+                             VerticalContentAlignment="Center" MinWidth="{app:Look New=0, Original=160}"
+                             Padding="{app:Look New={StaticResource FieldPadding}, Original=3}"
+                             KeyDown="NewBlockTextBox_KeyDown"/>
+                    <TextBlock x:Name="EntryHintText" Style="{StaticResource EntryHintStyle}"/>
+                </Grid>
+                <Button x:Name="AddUrlBlockButton" app:ReflowPanel.StackedAlignment="Left"
+                        Padding="{app:Look New={StaticResource ActionButtonPadding}, Original='8,3'}"
+                        MinWidth="{app:Look New={StaticResource AddButtonMinWidth}, Original=0}"
+                        Content="{app:Look New={x:Static local:BlockListView.AddButtonText}, Original='Add URL Block'}"
+                        Click="AddUrlBlock_Click"/>
+            </app:ReflowPanel>
+
+            <TextBlock x:Name="EntryExampleText" Style="{StaticResource EntryExampleStyle}"/>
+            <DockPanel Style="{StaticResource ErrorLineStyle}">
+                <Grid Style="{StaticResource ErrorIconStyle}">
+                    <Canvas Width="12" Height="12" VerticalAlignment="Center">
+                        <Ellipse Width="12" Height="12" Fill="{DynamicResource ErrorTextBrush}"/>
+                        <Path Data="M6,3 L6,6.75" Stroke="{DynamicResource SurfacePanelBrush}" StrokeThickness="1.25"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        <Path Fill="{DynamicResource SurfacePanelBrush}">
+                            <Path.Data>
+                                <EllipseGeometry Center="6,8.75" RadiusX="0.75" RadiusY="0.75"/>
+                            </Path.Data>
+                        </Path>
+                    </Canvas>
+                </Grid>
+                <TextBlock x:Name="EntryErrorText" Style="{DynamicResource NoticeTextStyle}"
+                           FontWeight="{app:Look New=Normal, Original=SemiBold}"
+                           Margin="{app:Look New=0, Original='0,0,0,4'}" app:LiveRegion.Mode="Assertive"/>
+            </DockPanel>
+        </StackPanel>
+
+        <!-- The list and its actions. -->
+        <Grid Style="{StaticResource ListRegionStyle}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <app:FlexFill x:Name="ListWell" MinHeight="120" Style="{StaticResource ListWellStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Padding="{DynamicResource WellInset}">
+                    <ContentControl.Resources>
+                        <!-- No tab joins this well, so every corner is rounded. -->
+                        <CornerRadius x:Key="AttachedSurfaceCornerRadius">4</CornerRadius>
+                    </ContentControl.Resources>
+                    <Grid>
+                        <ListBox x:Name="BlockedUrlList" Style="{StaticResource EntryListStyle}"
+                                 AutomationProperties.LabeledBy="{Binding ElementName=BlockedUrlsLabel}"
+                                 SelectionMode="Extended"
+                                 ItemsSource="{Binding BlockList.BlockedUrls, ElementName=BlockListViewControl}"/>
+                        <TextBlock x:Name="BlockedEmptyText" Style="{StaticResource EmptyListStyle}"/>
+                    </Grid>
+                </ContentControl>
+            </app:FlexFill>
+
+            <WrapPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                       Margin="{app:Look New=0, Original='0,8,0,0'}">
+                <Border Style="{StaticResource RemoveActionStyle}">
+                    <Button x:Name="RemoveSelectedButton"
+                            Padding="{app:Look New={StaticResource ActionButtonPadding}, Original='8,3'}"
+                            Content="{app:Look New={x:Static local:BlockListView.RemoveButtonText}, Original='Remove Selected'}"
+                            Click="RemoveSelected_Click"/>
+                </Border>
+                <Border Style="{StaticResource ClearActionStyle}">
+                    <Button x:Name="ClearAllButton"
+                            Padding="{app:Look New={StaticResource ActionButtonPadding}, Original='8,3'}"
+                            Content="{app:Look New={x:Static local:BlockListView.ClearButtonText}, Original='Clear All'}"
+                            Click="ClearAll_Click"/>
+                </Border>
+            </WrapPanel>
         </Grid>
 
-        <TextBlock x:Name="EntryErrorText" Grid.Row="2" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <!-- How matching works: examples, then the rules. -->
+        <Border Style="{StaticResource HelpRegionStyle}" Visibility="{app:Look New=Visible, Original=Collapsed}">
+            <Expander x:Name="MatchingRules" Style="{StaticResource DisclosureStyle}">
+                <StackPanel>
+                    <StackPanel Grid.IsSharedSizeScope="True" Margin="{DynamicResource GroupGap}">
+                        <app:ReflowPanel Style="{StaticResource ExampleRowStyle}">
+                            <Grid Style="{StaticResource PatternCellStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" MinWidth="{StaticResource PatternColumnWidth}" SharedSizeGroup="Pattern"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource CodeChipStyle}">
+                                    <TextBlock Style="{StaticResource CodeTextStyle}" Text="example.com"/>
+                                </Border>
+                            </Grid>
+                            <TextBlock x:Name="HostExampleText" Style="{StaticResource ExampleTextStyle}"/>
+                        </app:ReflowPanel>
+                        <app:ReflowPanel Style="{StaticResource ExampleRowStyle}">
+                            <Grid Style="{StaticResource PatternCellStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" MinWidth="{StaticResource PatternColumnWidth}" SharedSizeGroup="Pattern"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource CodeChipStyle}">
+                                    <TextBlock Style="{StaticResource CodeTextStyle}" Text="*.example.com"/>
+                                </Border>
+                            </Grid>
+                            <TextBlock x:Name="SubdomainsExampleText" Style="{StaticResource ExampleTextStyle}"/>
+                        </app:ReflowPanel>
+                        <app:ReflowPanel Style="{StaticResource ExampleRowStyle}">
+                            <Grid Style="{StaticResource PatternCellStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" MinWidth="{StaticResource PatternColumnWidth}" SharedSizeGroup="Pattern"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource CodeChipStyle}">
+                                    <TextBlock Style="{StaticResource CodeTextStyle}" Text="192.168.1.*"/>
+                                </Border>
+                            </Grid>
+                            <TextBlock x:Name="AddressesExampleText" Style="{StaticResource ExampleTextStyle}"/>
+                        </app:ReflowPanel>
+                    </StackPanel>
 
-        <TextBlock Grid.Row="3" Text="Blocked URLs:" FontWeight="Bold" Margin="0,4,0,4"/>
-
-        <ListBox x:Name="BlockedUrlList" Grid.Row="4"
-                 SelectionMode="Extended"
-                 ItemsSource="{Binding BlockList.BlockedUrls, ElementName=BlockListViewControl}"/>
-
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button x:Name="RemoveSelectedButton" Content="Remove Selected" Padding="8,3" Margin="0,0,6,0"
-                    Click="RemoveSelected_Click"/>
-            <Button x:Name="ClearAllButton" Content="Clear All" Padding="8,3"
-                    Click="ClearAll_Click"/>
-        </StackPanel>
+                    <StackPanel>
+                        <DockPanel Style="{StaticResource RuleStyle}">
+                            <TextBlock Style="{StaticResource BulletStyle}"/>
+                            <TextBlock x:Name="HostRuleText" Style="{StaticResource ReadingTextStyle}"/>
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource RuleStyle}">
+                            <TextBlock Style="{StaticResource BulletStyle}"/>
+                            <TextBlock x:Name="PortRuleText" Style="{StaticResource ReadingTextStyle}"/>
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource RuleStyle}">
+                            <TextBlock Style="{StaticResource BulletStyle}"/>
+                            <TextBlock x:Name="PatternRuleText" Style="{StaticResource ReadingTextStyle}"/>
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource RuleStyle}">
+                            <TextBlock Style="{StaticResource BulletStyle}"/>
+                            <TextBlock x:Name="LiteralRuleText" Style="{StaticResource ReadingTextStyle}"/>
+                        </DockPanel>
+                        <DockPanel>
+                            <TextBlock Style="{StaticResource BulletStyle}"/>
+                            <TextBlock x:Name="Ipv6RuleText" Style="{StaticResource ReadingTextStyle}"/>
+                        </DockPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Expander>
+        </Border>
     </Grid>
+    </ScrollViewer>
 </UserControl>

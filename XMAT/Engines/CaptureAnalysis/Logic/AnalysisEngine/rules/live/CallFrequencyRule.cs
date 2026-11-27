@@ -19,6 +19,8 @@ namespace CaptureAnalysisEngine
         internal class RateLimits
         {
             public String m_description = string.Empty;
+            // Whether the rules describe these limits themselves; otherwise m_description is the rule's endpoint.
+            public bool m_hasDescription;
             public List<String> m_applicableSubpaths = new List<String>();
 
             public UInt32 m_sustainedTimePeriodSeconds = Constants.CallFrequencySustainedTimePeriod;
@@ -59,6 +61,7 @@ namespace CaptureAnalysisEngine
 
             List<ServiceCallItem>[] applicableCallsByLimits =
                 ClassifyApplicableCalls(items);
+            CallRateTimeline callRates = CallRateTimeline.For(items);
 
             // For set of limits, look through items to determine where excess calls occurred
             for (var limitIndex = 0;
@@ -72,6 +75,7 @@ namespace CaptureAnalysisEngine
 
                 var sustainedExcessCallsPerWindow = Utils.GetExcessCallsForTimeWindow(applicableCalls, limits.m_sustainedTimePeriodSeconds * 1000, limits.m_sustainedCallLimit);
                 var burstExcessCallsPerWindow = Utils.GetExcessCallsForTimeWindow(applicableCalls, limits.m_burstTimePeriodSeconds * 1000, limits.m_burstCallLimit);
+                ViolationLevel sustainedLevel = ViolationLevel.Warning;
 
                 foreach (var excessCalls in sustainedExcessCallsPerWindow)
                 {
@@ -79,6 +83,7 @@ namespace CaptureAnalysisEngine
                     {
                         var desc = Localization.GetLocalizedString("LTA_FREQ_CALLS_VIOLATION_EXCEEDED", limits.m_description, limits.m_sustainedCallLimit * 10, excessCalls.Count, limits.m_sustainedTimePeriodSeconds);
                         result.AddViolation(ViolationLevel.Error, desc, excessCalls);
+                        sustainedLevel = ViolationLevel.Error;
                     }
                     else
                     {
@@ -94,6 +99,20 @@ namespace CaptureAnalysisEngine
                     result.AddViolation(ViolationLevel.Warning, desc, excessCalls);
                     m_endpointBurstViolations++;
                 }
+
+                callRates.Limits.Add(new CallRateLimits(
+                    limits.m_hasDescription ? limits.m_description : null,
+                    applicableCalls,
+                    new CallRateWindow(
+                        limits.m_burstTimePeriodSeconds,
+                        limits.m_burstCallLimit,
+                        burstExcessCallsPerWindow.Count,
+                        ViolationLevel.Warning),
+                    new CallRateWindow(
+                        limits.m_sustainedTimePeriodSeconds,
+                        limits.m_sustainedCallLimit,
+                        sustainedExcessCallsPerWindow.Count,
+                        sustainedLevel)));
 
                 // The following is information that would only be useful for internal purposes.
                 if (engine.IsInternal)
@@ -122,6 +141,7 @@ namespace CaptureAnalysisEngine
             result.Results.Add(TotalCallsDataKey, m_stats == null ? 0 : m_stats.m_numCalls);
             result.Results.Add(TimesSustainedExceededDataKey, m_endpointSustainedViolations);
             result.Results.Add(TimesBurstExceededDataKey, m_endpointBurstViolations);
+            result.CallRates = callRates;
 
             return result;
         }
@@ -266,6 +286,7 @@ namespace CaptureAnalysisEngine
                         limits.m_applicableSubpaths.Add("*");
                     }
 
+                    limits.m_hasDescription = limitObject.TryGetProperty(@"Description", out _);
                     Utils.SafeAssign(limitObject, @"Description", ref limits.m_description);
                     Utils.SafeAssign(limitObject, @"SustainedCallPeriod", ref limits.m_sustainedTimePeriodSeconds);
                     Utils.SafeAssign(limitObject, @"SustainedCallLimit", ref limits.m_sustainedCallLimit);

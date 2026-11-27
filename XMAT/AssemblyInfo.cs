@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 
 [assembly: InternalsVisibleTo("XMAT.Tests")]
+// The design system app, which runs from source and isn't shipped, builds its pages with XMAT's styling code.
+[assembly: InternalsVisibleTo("XMAT.DesignSystem")]
 
 [assembly: ThemeInfo(
     ResourceDictionaryLocation.None, //where theme specific resource dictionaries are located

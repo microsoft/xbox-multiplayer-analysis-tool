@@ -3,7 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Stopping Web Proxy Capture"
         Width="420"
-        Height="210"
+        MinHeight="210"
+        SizeToContent="Height"
+        FontSize="{DynamicResource BaseFontSize}"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner"
@@ -19,7 +21,7 @@
     </Grid.RowDefinitions>
 
     <TextBlock Grid.Row="0"
-               FontSize="16"
+               FontSize="{DynamicResource DialogTitleFontSize}"
                FontWeight="SemiBold"
                Text="{Binding PhaseText}"
                TextWrapping="Wrap"/>

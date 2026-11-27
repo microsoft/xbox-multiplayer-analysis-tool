@@ -1,0 +1,83 @@
+<ds:Story x:Class="XMAT.DesignSystem.ToolbarStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Capture toolbar"
+          Summary="The row of actions above a capture: Start or stop the capture, then text actions such as Analyze Capture, with short dividers between them. While a capture runs, the recording indicator shows beside the live view."
+          Section="Components"
+          DefinedIn="XMAT/Styles/Toolbar.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Toolbar" StyleName="ToolBar (default style)"
+                         Description="A web proxy capture's toolbar before the capture starts.">
+            <ds:StoryExample Caption="Ready to capture">
+                <ToolBar ToolBarTray.IsLocked="True" KeyboardNavigation.TabNavigation="Continue">
+                    <local:ActionToggleButton Style="{DynamicResource CaptureStartStopButtonStyle}"/>
+                    <Separator/>
+                    <Button Style="{DynamicResource CaptureToolbarButtonStyle}" Content="Analyze Capture"/>
+                    <Separator/>
+                    <Button Style="{DynamicResource CaptureToolbarButtonStyle}" Content="Clear Capture"/>
+                </ToolBar>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Start and stop capture" StyleName="CaptureStartStopButtonStyle, NetworkTraceStartStopButtonStyle"
+                         Description="The toolbar's one filled action, in Xbox green. While a capture runs, its label changes to Stop Capture and it becomes an outlined button. The network trace uses the same button.">
+            <ds:StoryExample Caption="Stopped">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <local:ActionToggleButton Style="{DynamicResource CaptureStartStopButtonStyle}"/>
+                </ToolBar>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Running">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <local:ActionToggleButton Style="{DynamicResource CaptureStartStopButtonStyle}" IsChecked="True"/>
+                </ToolBar>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Unavailable, as for a loaded capture">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <local:ActionToggleButton Style="{DynamicResource CaptureStartStopButtonStyle}" IsEnabled="False"/>
+                </ToolBar>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Network trace">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <local:ActionToggleButton Style="{DynamicResource NetworkTraceStartStopButtonStyle}"/>
+                </ToolBar>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Toolbar action" StyleName="CaptureToolbarButtonStyle"
+                         Description="A text action, as tall as the controls beside it, with a focus ring when it is reached from the keyboard.">
+            <ds:StoryExample Caption="Rest">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <Button Style="{DynamicResource CaptureToolbarButtonStyle}" Content="Analyze Capture"/>
+                </ToolBar>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Unavailable">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <Button Style="{DynamicResource CaptureToolbarButtonStyle}" Content="Clear Capture" IsEnabled="False"/>
+                </ToolBar>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Other toolbar controls"
+                         StyleName="ToolBar.ButtonStyleKey, ToolBar.ToggleButtonStyleKey, ToolBar.CheckBoxStyleKey, ToolBar.SeparatorStyleKey"
+                         Description="Inside a toolbar, WPF gives buttons, toggle buttons, check boxes and separators these styles instead of their usual ones.">
+            <ds:StoryExample Caption="Button, toggle buttons off and on, separator and check box">
+                <ToolBar ToolBarTray.IsLocked="True">
+                    <Button Content="Refresh"/>
+                    <ToggleButton Content="Pause"/>
+                    <ToggleButton Content="Pause" IsChecked="True"/>
+                    <Separator/>
+                    <CheckBox Content="Auto Scroll" IsChecked="True"/>
+                </ToolBar>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Recording indicator" StyleName="RecordingIndicatorStyle"
+                         Description="A red dot and the word Capturing beside the live view while a capture runs. The dot fades in and out, and holds still when Windows animation effects are off.">
+            <ds:StoryExample Caption="While a capture runs">
+                <local:RecordingIndicator Style="{DynamicResource RecordingIndicatorStyle}" IsActive="True"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

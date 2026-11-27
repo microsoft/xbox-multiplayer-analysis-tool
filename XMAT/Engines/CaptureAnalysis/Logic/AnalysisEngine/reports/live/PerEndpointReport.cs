@@ -62,6 +62,9 @@ namespace CaptureAnalysisEngine
         public ReportMetadata Metadata = new();
         public Dictionary<string, string> ResultData { get; }
         public List<RuleViolationData> Violations { get; }
+
+        // The call frequency rule's counted calls, for the call rate charts; internal, so the report JSON leaves it out.
+        internal CallRateTimeline CallRates { get; set; }
     }
 
     public class EndpointReportData : IEndpointReportData
@@ -228,6 +231,7 @@ namespace CaptureAnalysisEngine
 
             ruleReportData.Name = rule.RuleName;
             ruleReportData.Description = rule.RuleDescription;
+            ruleReportData.CallRates = rule.CallRates;
 
             ruleReportData.Metadata.Errors = rule.Violations.Count(v => v.m_level == ViolationLevel.Error);
             ruleReportData.Metadata.Warnings = rule.Violations.Count(v => v.m_level == ViolationLevel.Warning);

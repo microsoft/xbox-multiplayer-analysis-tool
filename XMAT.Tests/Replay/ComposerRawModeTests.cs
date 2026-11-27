@@ -7,6 +7,9 @@ using System.Text;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
@@ -123,6 +126,107 @@ namespace XMAT.Tests.Replay
             }
             finally
             {
+                window.Close();
+            }
+        });
+
+        // The new look condenses the notice at the top to what matters most, beside Details, a toggle that Tab reaches,
+        // which shows the whole notice under it. Raw mode has its own summary and notice. The original look shows the whole
+        // notice, as it always has, and no Details.
+        [Fact]
+        public Task TheNewLook_SummarizesTheNotice_AndDetailsShowsAllOfIt() => _application.RunAsync(async () =>
+        {
+            var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion);
+            bool wasNewLook = LookState.Current.IsNewLook;
+            try
+            {
+                LookState.Current.IsNewLook = true;
+                ShowOffScreen(window);
+                await SettleAsync();
+                var notice = Find<TextBlock>(window, "ReplayNotice");
+                var details = Find<Expander>(window, "NoticeDetails");
+                var full = Find<TextBlock>(window, "NoticeDetailsText");
+                var toggle = Assert.IsType<ToggleButton>(details.Template.FindName("HeaderSite", details));
+                Assert.False(notice.IsVisible);
+                Assert.True(details.IsVisible);
+                Assert.Equal(Words("COMPOSER_NOTICE_SUMMARY"), details.Header);
+                Assert.Equal(Words("COMPOSER_NOTICE_DETAILS"), toggle.Content);
+                Assert.True(toggle.Focusable && KeyboardNavigation.GetIsTabStop(toggle));
+                Assert.False(details.IsExpanded);
+                Assert.False(full.IsVisible);
+
+                toggle.IsChecked = true;
+                await SettleAsync();
+                Assert.True(details.IsExpanded);
+                Assert.True(full.IsVisible);
+                Assert.Equal(Words("COMPOSER_NOTICE"), full.Text);
+
+                Find<TextBox>(window, "UrlBox").Text = Origin + "/items";
+                await window.SwitchModeAsync();
+                Assert.Equal(Words("COMPOSER_RAW_NOTICE_SUMMARY"), details.Header);
+                Assert.Equal(Words("COMPOSER_RAW_NOTICE"), full.Text);
+
+                LookState.Current.IsNewLook = false;
+                await SettleAsync();
+                Assert.True(notice.IsVisible);
+                Assert.Equal(Words("COMPOSER_RAW_NOTICE"), notice.Text);
+                Assert.False(details.IsVisible);
+            }
+            finally
+            {
+                LookState.Current.IsNewLook = wasNewLook;
+                window.Close();
+            }
+        });
+
+        // In the new look the connection options are a form: each option's label starts at the form's left edge, beside its
+        // field, and the fields share one column, 8 after the widest label, each filling the row up to its widest. The
+        // original look wraps them in a row, as it always has.
+        [Fact]
+        public Task TheConnectionOptions_LineUpAsAForm_InTheNewLook() => _application.RunAsync(async () =>
+        {
+            var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion);
+            bool wasNewLook = LookState.Current.IsNewLook;
+            try
+            {
+                LookState.Current.IsNewLook = true;
+                ShowOffScreen(window);
+                await SettleAsync();
+                string[] labels = { "HttpVersionLabel", "ConnectToBox", "ProxyBox", "ClientCertificateBox" };
+                string[] fields = { "HttpVersionBox", "ConnectToText", "ProxyText", "ClientCertificateList" };
+                var form = Assert.IsType<FormWrapPanel>(VisualTreeHelper.GetParent(Element(window, "HttpVersionLabel")));
+                Rect Bounds(string name)
+                {
+                    FrameworkElement element = Element(window, name);
+                    return element.TransformToAncestor(form).TransformBounds(new Rect(element.RenderSize));
+                }
+
+                double column = labels.Max(name => Element(window, name).DesiredSize.Width) + form.ColumnGap;
+                Assert.Equal(8, form.ColumnGap);
+                Assert.All(labels.Append("WindowsAuthBox"), name => Assert.Equal(0, Bounds(name).Left, 1));
+                for (int i = 0; i < fields.Length; i++)
+                {
+                    Rect field = Bounds(fields[i]);
+                    Rect label = Bounds(labels[i]);
+                    Assert.Equal(column, field.Left, 1);
+                    Assert.Equal(Math.Min(form.ActualWidth, column + Element(window, fields[i]).MaxWidth), field.Right, 1);
+                    Assert.Equal((label.Top + label.Bottom) / 2, (field.Top + field.Bottom) / 2, 1);
+                }
+
+                Assert.Equal(4, Bounds("ProxyText").Top - Bounds("ConnectToText").Bottom, 1);
+                Assert.True(Bounds("WindowsAuthBox").Top >= Bounds("ClientCertificateList").Bottom);
+
+                LookState.Current.IsNewLook = false;
+                await SettleAsync();
+                Assert.Equal(Bounds("HttpVersionLabel").Right, Bounds("HttpVersionBox").Left, 1);
+                Assert.Equal(
+                    (Bounds("HttpVersionLabel").Top + Bounds("HttpVersionLabel").Bottom) / 2,
+                    (Bounds("HttpVersionBox").Top + Bounds("HttpVersionBox").Bottom) / 2, 1);
+                Assert.True(Bounds("ConnectToBox").Left > Bounds("HttpVersionBox").Right);
+            }
+            finally
+            {
+                LookState.Current.IsNewLook = wasNewLook;
                 window.Close();
             }
         });
@@ -1465,6 +1569,17 @@ namespace XMAT.Tests.Replay
             Assert.IsAssignableFrom<FrameworkElement>(window.FindName(name));
 
         private static string Status(Window window) => Find<TextBlock>(window, "StatusText").Text;
+
+        // Shows WINDOW off the screen and without taking focus, as the test host shows its windows, so the pointer and the
+        // keyboard of whoever runs the tests never reach it.
+        private static void ShowOffScreen(Window window)
+        {
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = -12000;
+            window.Top = -12000;
+            window.ShowActivated = false;
+            window.Show();
+        }
 
         // The method, URL, headers and body as the Parsed editors show them.
         private static (string, string, string, string) Editors(Window window) => (

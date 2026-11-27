@@ -1,0 +1,130 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Used in both looks while Windows high contrast is on, in place of the Light or Dark theme. Every key takes a
+         color of the user's contrast theme: surfaces use Window, and the text, lines and thumbs on them WindowText;
+         selection, accents and primary actions use Highlight with HighlightText; disabled text uses GrayText.
+         Hover and pressed fills stay on the button face, which keeps every text color legible; a hovered control is
+         outlined in the hot-track color instead.
+         It defines no system colors, so Windows' colors apply to built-in controls, focus and selection. -->
+
+    <!-- Roles, in the same groups as the Light and Dark themes. The status pairs are ones every contrast theme
+         keeps legible: errors and warnings are inverted, info uses the link color and neutral GrayText. -->
+    <!-- Surfaces -->
+    <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="SurfacePanelBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="SurfaceWellBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+    <!-- A chosen card keeps the window color: its outline and check, in the highlight color, show the choice. -->
+    <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="TextDisabledBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
+    <SolidColorBrush x:Key="TextLinkBrush" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}"/>
+
+    <!-- Borders -->
+    <SolidColorBrush x:Key="BorderSubtleBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="BorderHoverBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+
+    <!-- Accent -->
+    <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="AccentFillBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="AccentOnFillBrush" Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}"/>
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+
+    <!-- Status -->
+    <SolidColorBrush x:Key="SuccessFillBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="SuccessOnFillBrush" Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}"/>
+    <SolidColorBrush x:Key="SuccessTextBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="SuccessSoftBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="WarningFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="WarningOnFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="WarningTextBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="WarningSoftBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ErrorFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ErrorOnFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ErrorTextBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ErrorSoftBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="InfoFillBrush" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}"/>
+    <SolidColorBrush x:Key="InfoOnFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="NeutralFillBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
+    <SolidColorBrush x:Key="NeutralOnFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+
+    <!-- Component colors -->
+    <!-- Buttons take the contrast theme's button colors, so they stand out from the text around them. A button's face
+         is the panel color, which every Windows contrast theme gives the button background too. -->
+    <SolidColorBrush x:Key="ButtonTextBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonBorderBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
+    <SolidColorBrush x:Key="TabStripBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <!-- Wells share the window color here, so their edge shows. -->
+    <SolidColorBrush x:Key="WellEdgeBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <!-- Skeleton placeholders stay still here: a GrayText bar with no highlight. -->
+    <SolidColorBrush x:Key="SkeletonBaseBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
+    <SolidColorBrush x:Key="SkeletonHighlightBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="RecordingIndicatorBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="CaptureActionBorderBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ColumnHeaderDividerBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ExpanderHeaderBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ExpanderSubHeaderBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ExpanderDetailBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ColumnDividerBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <!-- Table rows take no wash in a contrast theme; the status cell's icon and words show the meaning. -->
+    <SolidColorBrush x:Key="ProblemRowBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="AttentionRowBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <!-- A hovered control is outlined in the hot-track color, which differs from the highlight on checked toggles. -->
+    <SolidColorBrush x:Key="HoverOutlineBrush" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}"/>
+    <!-- Every tab shares the window color here, so the selected rounded tab keeps a highlight top edge. -->
+    <SolidColorBrush x:Key="TabItemSelectedEdgeBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="ScrollBarBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="CaptureActionSheenBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="CaptureActionBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="CaptureActionHoverBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="CaptureActionPressedBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="TabItemInsetShadowBrush" Color="Transparent"/>
+
+    <!-- Old names that the original look, and views shared with it, still use. Remove them with the original look. -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="AltRowBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="PrimaryForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="SecondaryForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="DisabledForegroundBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
+    <SolidColorBrush x:Key="CapturePendingForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="GridSplitterBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="InactiveSelectionBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="ActiveSelectionBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+    <SolidColorBrush x:Key="ActiveSelectionForegroundBrush" Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}"/>
+    <SolidColorBrush x:Key="MenuBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="MenuForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="StatusBarForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ToolBarBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="ToolBarForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="TabItemBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="TabItemSelectedBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="TabItemForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="TabItemSelectedForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonForegroundBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonHoverBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+    <SolidColorBrush x:Key="TextBoxBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="TextBoxForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="TextBoxBorderBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="CheckBoxForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="DataGridHeaderBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="DataGridHeaderForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="IssueErrorBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="IssueErrorForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="IssueWarningBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="IssueWarningForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="IssueInfoBackgroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <SolidColorBrush x:Key="IssueInfoForegroundBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+
+</ResourceDictionary>

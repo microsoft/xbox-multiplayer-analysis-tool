@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls"
              xmlns:logic="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
+             xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
     <Expander x:Name="EndpointRuleExpanderTemplate" IsExpanded="False" Background="{DynamicResource ExpanderDetailBrush}" >
@@ -13,6 +14,7 @@
                 <Image
                     Width="20"
                     Height="20"
+                    AutomationProperties.Name="{x:Static local:RuleViolationDetail.ViolationIconName}"
                     Source="/Resources/error.png"/>
                 <TextBlock
                     Width="80"
@@ -23,7 +25,7 @@
                 <TextBlock Text="{Binding Summary}" />
             </StackPanel>
         </Expander.Header>
-        <ItemsControl ItemsSource="{Binding CallData}" x:Name="ViolationCallStack">
+        <ItemsControl ItemsSource="{Binding CallData}" x:Name="ViolationCallStack" Grid.IsSharedSizeScope="True">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <StackPanel Orientation="Vertical"/>
@@ -31,13 +33,21 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <StackPanel Orientation="Horizontal">
-                        <Button Width="50" FontWeight="Bold"
+                    <!-- The new look's button padding needs more than 50 pixels for longer request numbers, so the
+                         buttons take the widest number's width. -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="RequestNumber"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button MinWidth="50" Width="{app:Look New=Auto, Original=50}" FontWeight="Bold"
                                 Content="{Binding Id}"
+                                AutomationProperties.Name="{Binding Id, StringFormat={x:Static local:RuleViolationDetail.GoToRequestFormat}}"
+                                ToolTip="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource Self}}"
                                 Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" CommandParameter="{Binding Id}"
                                 />
-                        <TextBlock Text="{Binding UriMethod}" />
-                    </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{Binding UriMethod}" />
+                    </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>

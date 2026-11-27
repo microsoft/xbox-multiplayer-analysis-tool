@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows.Controls;
+using CaptureAnalysisEngine;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
 {
@@ -14,6 +15,8 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
         public static string TotalCallsLabel { get { return Localization.GetLocalizedString("LTA_REPEATED_CALLS_DATA_TOTAL"); } }
         public static string DuplicatesLabel { get { return Localization.GetLocalizedString("LTA_REPEATED_CALLS_DATA_DUPS"); } }
         public static string PercentageLabel { get { return Localization.GetLocalizedString("LTA_REPEATED_CALLS_DATA_PERCENT"); } }
+
+        public static string TableName { get { return Localization.GetLocalizedString("LTA_RULE_DATA_TABLE", RepeatedCallsRule.DisplayName); } }
 
         public RepeatedCallsRuleDataView()
         {

@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Net;
 using System.Windows;
 using System.Windows.Controls;
 using XMAT.SharedInterfaces;
@@ -10,9 +9,9 @@ using XMAT.SharedInterfaces;
 namespace XMAT
 {
     /// <summary>
-    /// Interaction logic for AddDeviceWindow.xaml
+    /// Interaction logic for AddDeviceWindow.xaml: New Capture in the original look. NewCaptureWindow is the new look's.
     /// </summary>
-    public partial class AddDeviceWindow : Window
+    public partial class AddDeviceWindow : Window, INewCaptureDialog
     {
         public enum AddDeviceResult
         {
@@ -107,24 +106,7 @@ namespace XMAT
         private void ConsoleIpOrHostname_TextChanged(object sender, TextChangedEventArgs e)
         {
             CustomIpHostnameConsole.IsChecked = true;
-            OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
-        }
-
-        private bool IsConsoleIPOrHostnameValid(string text)
-        {
-            return IsConsoleIpAddressValid(text) || IsConsoleHostnameValid(text);
-        }
-
-        private bool IsConsoleIpAddressValid(string ip)
-        {
-            // IPAddress accepts int64 IP addresses in string format as network order byte representations of IP's... so we have to validate the string first (e.g. "123" is a valid IP according to C#)
-            return ip.Split('.').Length == 4 && IPAddress.TryParse(ip, out IPAddress ipx);
-        }
-
-        private bool IsConsoleHostnameValid(string hostname)
-        {
-            // Basic validation for hostname format
-            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255 && !hostname.Contains(" ");
+            OkButton.IsEnabled = ConsoleAddress.IsValid(ConsoleIpOrHostname.Text);
         }
 
         private void ResetOKButtonState(object sender, RoutedEventArgs e)
@@ -133,7 +115,7 @@ namespace XMAT
             {
                 if (CustomIpHostnameConsole.IsChecked.GetValueOrDefault())
                 {
-                    OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
+                    OkButton.IsEnabled = ConsoleAddress.IsValid(ConsoleIpOrHostname.Text);
                 }
                 else if (GenericDevice.IsChecked.GetValueOrDefault())
                 {

@@ -6,7 +6,8 @@
              xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
-    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True">
+    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True"
+              AutomationProperties.Name="{x:Static local:SmallBatchDetectionRuleDataView.TableName}">
         <DataGrid.Columns>
             <DataGridTextColumn Binding="{Binding TotalBatchCalls}" Header="{x:Static local:SmallBatchDetectionRuleDataView.TotalBatchCallsLabel}"/>
             <DataGridTextColumn Binding="{Binding MinUsersAllowed}" Header="{x:Static local:SmallBatchDetectionRuleDataView.MinUsersAllowedLabel}"/>

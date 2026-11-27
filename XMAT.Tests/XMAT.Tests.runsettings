@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings for every run of XMAT.Tests: from the command line, Visual Studio and CI. -->
+<RunSettings>
+  <RunConfiguration>
+    <EnvironmentVariables>
+      <!-- The test host runs without DPI awareness, so WPF lays out and renders at 96 DPI whatever scale Windows was
+           signed in with. The design system's reference pictures are made at 96 DPI and match only there. -->
+      <__COMPAT_LAYER>DPIUNAWARE</__COMPAT_LAYER>
+    </EnvironmentVariables>
+  </RunConfiguration>
+</RunSettings>

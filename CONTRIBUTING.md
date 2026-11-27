@@ -119,6 +119,19 @@ packaging, and run a smoke command from the assembled artifact in `.github/workf
   `XMAT.Tests/HeadlessParity/HeadlessBans.cs`, needs a reviewer's explicit approval and the reason in the pull
   request.
 
+# Design System
+
+Views and styles take their colors from the roles in [docs/design-system.md](docs/design-system.md), such as
+`TextPrimaryBrush`, never from color values. Each component's styles are in a file of its own in `XMAT/Styles`, and
+the design system app (`XMAT.DesignSystem`, which runs from source and isn't shipped) shows every component in its
+states. The page explains how to choose a role, change a base color, add a role, and add a component with its design
+system page; the tests in `XMAT.Tests/DesignSystem` check the rules.
+
+- `XMAT.Tests/DesignSystem/UncoveredStyles.txt` only shrinks: a new style comes with an example on its component's
+  design system page.
+- A change to a component changes its pictures in `XMAT.Tests/DesignSystem/Reference`. Update them as the page
+  describes and include them in the pull request, so reviewers see the before and after.
+
 # Coding Standards
 
 This project utilized the standard [C# coding conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions).

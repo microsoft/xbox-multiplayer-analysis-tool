@@ -10,7 +10,7 @@
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
     <UserControl.CommandBindings>
-        <CommandBinding Command="Close" Executed="TabClose_Executed"/>
+        <CommandBinding Command="Close" Executed="TabClose_Executed" CanExecute="TabClose_CanExecute"/>
     </UserControl.CommandBindings>
     <UserControl.Resources>
         <DataTemplate x:Key="XboxLiveCaptureAnalyzerTemplate">
@@ -23,37 +23,168 @@
             x:Key="AnalysisTabSelector"
             XboxLiveCaptureAnalyzerTemplate="{StaticResource XboxLiveCaptureAnalyzerTemplate}"
             NetworkTraceCaptureAnalyzerTemplate="{StaticResource NetworkTraceCaptureAnalyzerTemplate}"/>
+        <!-- A run's results, in the view that the tab control's ContentTemplateSelector picks. In the new look, while the
+             run is processing, its results are held back and, once processing outlasts a short delay, a skeleton of the
+             report stands in for them (see UpdateLoading). -->
+        <DataTemplate x:Key="AnalysisRunTemplate">
+            <Grid>
+                <ContentPresenter x:Name="AnalysisResults" Content="{Binding}"
+                                  ContentTemplateSelector="{Binding ContentTemplateSelector, RelativeSource={RelativeSource AncestorType=TabControl}}">
+                    <ContentPresenter.Style>
+                        <Style TargetType="ContentPresenter">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsHoldingResults, RelativeSource={RelativeSource AncestorType=local:CaptureAnalysisControl}}" Value="True">
+                                    <Setter Property="Visibility" Value="Hidden"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ContentPresenter.Style>
+                </ContentPresenter>
+                <!-- The shape of the report in a well: a title, then endpoint rows with their issue counts. It takes the
+                     tab control's width, since the content host is only as wide as its content. Screen readers hear only
+                     its label, once, when it appears. -->
+                <Border x:Name="AnalysisSkeleton" HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                        Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=TabControl}}"
+                        Padding="{DynamicResource TextAreaPadding}" CornerRadius="{DynamicResource ControlCornerRadius}"
+                        Background="{DynamicResource SurfaceWellBrush}"
+                        Visibility="{Binding ShowsSkeleton, RelativeSource={RelativeSource AncestorType=local:CaptureAnalysisControl}, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock x:Name="AnalysisSkeletonLabel" Margin="0,0,0,12" local:LiveRegion.Mode="Polite"
+                                   Foreground="{DynamicResource TextSecondaryBrush}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ShowsSkeleton, RelativeSource={RelativeSource AncestorType=local:CaptureAnalysisControl}}" Value="True">
+                                            <Setter Property="Text" Value="{x:Static local:CaptureAnalysisControl.AnalyzingText}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <local:SkeletonBlock Width="112" Height="14" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="232"/>
+                                <ColumnDefinition Width="56"/>
+                                <ColumnDefinition Width="56"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="26"/>
+                                <RowDefinition Height="26"/>
+                                <RowDefinition Height="26"/>
+                                <RowDefinition Height="26"/>
+                                <RowDefinition Height="26"/>
+                                <RowDefinition Height="26"/>
+                            </Grid.RowDefinitions>
+                            <local:SkeletonBlock Grid.Row="0" Width="176" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="0" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="0" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="0" Grid.Column="3" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="1" Width="136" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="1" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="1" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="2" Width="204" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="2" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="2" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="2" Grid.Column="3" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="3" Width="152" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="3" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="3" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="3" Grid.Column="3" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="4" Width="120" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="4" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="4" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="5" Width="188" Height="10" HorizontalAlignment="Left"/>
+                            <local:SkeletonBlock Grid.Row="5" Grid.Column="1" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="5" Grid.Column="2" Style="{DynamicResource SkeletonPillStyle}"/>
+                            <local:SkeletonBlock Grid.Row="5" Grid.Column="3" Style="{DynamicResource SkeletonPillStyle}"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
     </UserControl.Resources>
+    <!-- A flat section of the shared content surface, not a separate card. -->
+    <Border Background="Transparent" Padding="{DynamicResource PanelPadding}" BorderThickness="0">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <TextBlock x:Name="CaptureAnalysisTitle" Grid.Row="0" FontWeight="Bold" FontSize="10">
+        <TextBlock x:Name="CaptureAnalysisTitle" Grid.Row="0" Style="{DynamicResource PaneTitleStyle}" FontSize="{DynamicResource AnalysisTitleFontSize}" Margin="{DynamicResource HeadingBottomSpacing}">
         </TextBlock>
-        <TabControl
-            Grid.Row="1"
-            x:Name="CaptureAnalysisResultsTabs"
-            IsSynchronizedWithCurrentItem="True"
-            HorizontalAlignment="Stretch"
-            HorizontalContentAlignment="Left"
-            VerticalAlignment="Stretch"
-            VerticalContentAlignment="Top"
-            ContentTemplateSelector="{StaticResource AnalysisTabSelector}"
-            ItemsSource="{Binding AnalysisRuns}">
-            <TabControl.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Height="20">
-                        <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
-                        <Button x:Name="CloseButton" Width="20" Height="20" Margin="8,0,0,0"
-                                Padding="0" BorderThickness="0" BorderBrush="{x:Null}" Background="Transparent"
-                                Content="&#xE894;" FontFamily="Segoe MDL2 Assets"
-                                Command="Close" CommandParameter="{Binding}"
-                                Visibility="{Binding CloseVisibility}"
-                                Tag="{Binding Id}"/>
-                    </StackPanel>
-                </DataTemplate>
-            </TabControl.ItemTemplate>
-        </TabControl>
+        <!-- The new look replaces the empty results area with guidance in a well; the original look keeps the empty tabs. -->
+        <Border x:Name="AnalysisEmptyState" Grid.Row="1" Padding="{DynamicResource EmptyStatePadding}"
+                Background="{DynamicResource SurfaceWellBrush}" CornerRadius="{DynamicResource ControlCornerRadius}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding AnalysisRuns.Count}" Value="0"/>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static local:LookState.Current}}" Value="True"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="320">
+            <TextBlock x:Name="AnalysisEmptyMessage" Text="{Binding AnalysisEmptyStateText}" TextAlignment="Center"
+                       local:LiveRegion.Mode="Polite"
+                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+            <Button x:Name="AnalyzeEmptyCaptureButton" HorizontalAlignment="Center" Margin="0,12,0,0"
+                    Command="{x:Static local:AppCommands.AnalyzeCaptures}"
+                    CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
+                    Visibility="{Binding HasSelectedCaptureData, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    ToolTipService.ShowOnDisabled="True"/>
+            </StackPanel>
+        </Border>
+        <Grid Grid.Row="1">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding AnalysisRuns.Count}" Value="0"/>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static local:LookState.Current}}" Value="True"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <TabControl
+                x:Name="CaptureAnalysisResultsTabs"
+                IsSynchronizedWithCurrentItem="True"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Left"
+                VerticalAlignment="Stretch"
+                VerticalContentAlignment="Top"
+                ContentTemplate="{StaticResource AnalysisRunTemplate}"
+                ContentTemplateSelector="{StaticResource AnalysisTabSelector}"
+                ItemsSource="{Binding AnalysisRuns}"
+                Style="{DynamicResource InspectorTabControlStyle}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Height="{local:Look New=Auto, Original=20}">
+                            <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
+                            <!-- The new look's 24px target overlaps the tab's padding, so the tab keeps its size. -->
+                            <Button x:Name="CloseButton" Style="{DynamicResource TabCloseButtonStyle}"
+                                    Margin="{local:Look New='6,-2,-2,-2', Original='8,0,0,0'}"
+                                    Content="&#xE894;" FontFamily="Segoe MDL2 Assets"
+                                    AutomationProperties.Name="{Binding StringFormat={x:Static local:AllCaptureDevicesTabControl.CloseTabFormat}}"
+                                    ToolTip="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource Self}}"
+                                    Command="Close" CommandParameter="{Binding}"
+                                    Visibility="{Binding CloseVisibility}"
+                                    Tag="{Binding Id}"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+            </TabControl>
+        </Grid>
     </Grid>
+    </Border>
 </UserControl>

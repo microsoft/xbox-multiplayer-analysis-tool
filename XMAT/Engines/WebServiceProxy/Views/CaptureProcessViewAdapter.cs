@@ -99,7 +99,7 @@ namespace XMAT.WebServiceCapture
 
         // Appends the process items for one request, decided when the menu opens. Each item runs a proxy command with
         // the specification to apply, routed from the element that owns the menu. A request without a process gets a
-        // disabled note instead of actions.
+        // disabled note instead of actions. The new look shows them as the menu's Process group.
         internal static void AddMenuItems(
             ContextMenu menu,
             ProxyConnectionModel model,
@@ -107,6 +107,12 @@ namespace XMAT.WebServiceCapture
             IInputElement commandTarget)
         {
             ArgumentNullException.ThrowIfNull(menu);
+            if (LookState.Current.IsNewLook)
+            {
+                AddProcessGroup(menu, model, current, commandTarget);
+                return;
+            }
+
             menu.Items.Add(new Separator());
             ClientProcessInfo info = model?.ClientProcess;
             string selector = SelectorOf(info);
@@ -145,7 +151,57 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static string SelectorOf(ClientProcessInfo info)
+        // The new look's Process group. Its header names the process once, so the rows leave it out of their labels, and
+        // their accessible names keep it.
+        private static void AddProcessGroup(
+            ContextMenu menu,
+            ProxyConnectionModel model,
+            ProcessFilterSpec current,
+            IInputElement commandTarget)
+        {
+            ClientProcessInfo info = model?.ClientProcess;
+            string selector = SelectorOf(info);
+            OperationResult<ProcessFilterSpec> only = selector == null ? null : WithOnly(current, selector);
+            OperationResult<ProcessFilterSpec> hide = selector == null ? null : WithExcluded(current, selector);
+            bool offered = only?.Succeeded == true && hide?.Succeeded == true;
+            string label = offered ? LabelOf(info) : null;
+            GroupedMenu.AddGroup(menu, Localization.GetLocalizedString("MENU_GROUP_PROCESS"), label);
+            if (offered)
+            {
+                menu.Items.Add(GroupedItem(
+                    "MENU_SHOW_ONLY_PROCESS",
+                    MenuGlyphs.Filter,
+                    Localization.GetLocalizedString("MENU_SHOW_ONLY_PROCESS_NAME", label),
+                    WebServiceProxyCommands.ShowOnlyProcess,
+                    only.Value,
+                    commandTarget));
+                menu.Items.Add(GroupedItem(
+                    "MENU_HIDE_PROCESS",
+                    MenuGlyphs.Hide,
+                    Localization.GetLocalizedString("MENU_HIDE_PROCESS_NAME", label),
+                    WebServiceProxyCommands.HideProcess,
+                    hide.Value,
+                    commandTarget));
+            }
+            else
+            {
+                menu.Items.Add(GroupedMenu.Note(Localization.GetLocalizedString("PROCESS_FILTER_NO_PROCESS")));
+            }
+
+            if (!ProcessFilter.IsEmpty(current))
+            {
+                menu.Items.Add(GroupedItem(
+                    "PROCESS_FILTER_SHOW_ALL",
+                    MenuGlyphs.ShowAll,
+                    null,
+                    WebServiceProxyCommands.ShowAllProcesses,
+                    ProcessFilterSpec.Empty,
+                    commandTarget));
+            }
+        }
+
+        // The selector that matches a process, or null for a request without one.
+        internal static string SelectorOf(ClientProcessInfo info)
         {
             if (ProcessFilter.IsUnknown(info))
             {
@@ -157,7 +213,7 @@ namespace XMAT.WebServiceCapture
                 : info.Name;
         }
 
-        private static string LabelOf(ClientProcessInfo info) =>
+        internal static string LabelOf(ClientProcessInfo info) =>
             string.IsNullOrEmpty(info.Name)
                 ? Localization.GetLocalizedString("PROCESS_COLUMN_PID", info.ProcessId)
                 : info.Name;
@@ -186,6 +242,21 @@ namespace XMAT.WebServiceCapture
                 CommandTarget = commandTarget,
                 Command = command,
             };
+
+        private static MenuItem GroupedItem(
+            string labelKey,
+            string glyph,
+            string accessibleName,
+            RoutedCommand command,
+            ProcessFilterSpec target,
+            IInputElement commandTarget)
+        {
+            MenuItem item = GroupedMenu.Item(Localization.GetLocalizedString(labelKey), glyph, accessibleName);
+            item.CommandParameter = target;
+            item.CommandTarget = commandTarget;
+            item.Command = command;
+            return item;
+        }
     }
 
     // The PROCESS column: ClientProcess and IsProcessResolving as text.

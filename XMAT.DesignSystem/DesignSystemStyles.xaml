@@ -1,0 +1,255 @@
+<!-- The design system's own styles: the list of pages, and the sections and captioned examples a page is made of. The
+     window merges this dictionary with the new look's resources, so these styles use its roles and sizes. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ds="clr-namespace:XMAT.DesignSystem">
+
+    <!-- A page in the list: a hover fill, and for the page shown, the panel color with an accent bar at its start, as
+         in What's new. A section that search lists under its page is indented. -->
+    <Style x:Key="DesignSystemPageItemStyle" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                            CornerRadius="4" Margin="0,0,0,2" Padding="12,7,10,7" SnapsToDevicePixels="True">
+                        <Grid>
+                            <Border x:Name="Bar" Width="3" Margin="-12,0,0,0" HorizontalAlignment="Left"
+                                    CornerRadius="1.5" Background="{DynamicResource AccentFillBrush}"
+                                    Visibility="Collapsed"/>
+                            <ContentPresenter x:Name="Content"/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsSection}" Value="True">
+                            <Setter TargetName="Content" Property="Margin" Value="12,0,0,0"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+                            <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush"
+                                    Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A section: its title, what the variant is for, the style it uses, and its examples on a panel, side by side
+         and wrapping. -->
+    <Style TargetType="ds:StorySection">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <WrapPanel/>
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StorySection">
+                    <StackPanel Margin="0,0,0,32">
+                        <TextBlock Text="{TemplateBinding Title}" Style="{DynamicResource SectionTitleStyle}"/>
+                        <TextBlock Text="{TemplateBinding Description}" Margin="0,4,0,0" MaxWidth="720"
+                                   HorizontalAlignment="Left" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock Text="{TemplateBinding StyleName}" Margin="0,4,0,0" FontFamily="Consolas"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <Border Margin="0,12,0,0" Padding="20,20,0,4" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource SurfacePanelBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}">
+                            <ItemsPresenter/>
+                        </Border>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An example, with the state it shows written under it. -->
+    <Style TargetType="ds:StoryExample">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Margin" Value="0,0,32,16"/>
+        <Setter Property="VerticalAlignment" Value="Top"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StoryExample">
+                    <StackPanel>
+                        <ContentPresenter HorizontalAlignment="Left"/>
+                        <TextBlock Text="{TemplateBinding Caption}" Margin="0,8,0,0"
+                                   FontSize="{DynamicResource MetadataFontSize}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An entry of a usage list, after a bullet. -->
+    <DataTemplate x:Key="UsageEntryTemplate">
+        <Grid Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="•" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            <TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap"/>
+        </Grid>
+    </DataTemplate>
+
+    <!-- When to use a component: what it is for beside what it isn't for, on a panel. -->
+    <Style TargetType="ds:StoryUsage">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StoryUsage">
+                    <StackPanel Margin="0,0,0,32">
+                        <TextBlock Text="When to use it" Style="{DynamicResource SectionTitleStyle}"/>
+                        <Border Margin="0,12,0,0" Padding="20,16,20,12" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource SurfacePanelBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="32"/>
+                                    <ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Use it for" Margin="0,0,0,8" FontWeight="SemiBold"
+                                               AutomationProperties.HeadingLevel="Level4"/>
+                                    <ItemsControl Focusable="False" ItemTemplate="{StaticResource UsageEntryTemplate}"
+                                                  ItemsSource="{Binding UseFor, RelativeSource={RelativeSource TemplatedParent}}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Not for" Margin="0,0,0,8" FontWeight="SemiBold"
+                                               AutomationProperties.HeadingLevel="Level4"/>
+                                    <ItemsControl Focusable="False" ItemTemplate="{StaticResource UsageEntryTemplate}"
+                                                  ItemsSource="{Binding NotFor, RelativeSource={RelativeSource TemplatedParent}}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A page's rules: a heading and what the rules cover, then the rules on a panel, one under another. -->
+    <Style TargetType="ds:StoryRules">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StoryRules">
+                    <StackPanel Margin="0,0,0,32">
+                        <TextBlock Text="{TemplateBinding Title}" Style="{DynamicResource SectionTitleStyle}"/>
+                        <TextBlock Text="{TemplateBinding Description}" Margin="0,4,0,0" MaxWidth="720"
+                                   HorizontalAlignment="Left" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <Border Margin="0,12,0,0" Padding="20,20,20,0" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource SurfacePanelBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}">
+                            <ItemsPresenter/>
+                        </Border>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A rule: its ID and how firmly it holds, what it says, why, and how it's checked, then its Do and Don't
+         examples side by side. A Should rule's level is quieter than a Must rule's. -->
+    <Style TargetType="ds:StoryRule">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Margin" Value="0,0,0,24"/>
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <UniformGrid Columns="2"/>
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StoryRule">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Border Padding="6,0" CornerRadius="4" BorderThickness="1" VerticalAlignment="Center"
+                                    BorderBrush="{DynamicResource BorderSubtleBrush}">
+                                <TextBlock Text="{TemplateBinding RuleId}" FontFamily="Consolas"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            </Border>
+                            <TextBlock x:Name="Level" Margin="8,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"
+                                       Text="{Binding Rule.LevelText, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding Rule.Text, RelativeSource={RelativeSource TemplatedParent}}"
+                                   MaxWidth="720" HorizontalAlignment="Left" TextWrapping="Wrap" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level4"/>
+                        <TextBlock Text="{Binding Rule.Why, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Margin="0,4,0,0" MaxWidth="720" HorizontalAlignment="Left" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding Rule.CheckText, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Margin="0,4,0,0" MaxWidth="720" HorizontalAlignment="Left" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <ItemsPresenter x:Name="Examples" Margin="0,12,0,0"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding Rule.Level, RelativeSource={RelativeSource Self}}" Value="Should">
+                            <Setter TargetName="Level" Property="FontWeight" Value="Normal"/>
+                            <Setter TargetName="Level" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                        </DataTrigger>
+                        <Trigger Property="HasItems" Value="False">
+                            <Setter TargetName="Examples" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A Do or Don't example: the live example on the panel, framed, over a bar and a label that say which it is,
+         then what to notice. The label's icon and word carry the meaning, so it holds without color (COLOR-7). -->
+    <Style TargetType="ds:RuleExample">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Margin" Value="0,0,16,0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:RuleExample">
+                    <StackPanel>
+                        <Border MinHeight="72" Padding="16" CornerRadius="4,4,0,0" BorderThickness="1,1,1,0"
+                                Background="{DynamicResource SurfacePanelBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                        </Border>
+                        <Border x:Name="Bar" Height="3" Background="{DynamicResource SuccessFillBrush}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock x:Name="Icon" Text="&#xE73E;" Margin="0,0,6,0" VerticalAlignment="Center"
+                                       FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource SuccessTextBrush}"/>
+                            <TextBlock x:Name="Label" Text="Do" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SuccessTextBrush}"/>
+                        </StackPanel>
+                        <TextBlock Text="{TemplateBinding Caption}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Kind" Value="Dont">
+                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
+                            <Setter TargetName="Icon" Property="Text" Value="&#xE711;"/>
+                            <Setter TargetName="Icon" Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
+                            <Setter TargetName="Label" Property="Text" Value="Don't"/>
+                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

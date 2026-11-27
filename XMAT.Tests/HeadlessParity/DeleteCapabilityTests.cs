@@ -25,7 +25,10 @@ namespace XMAT.Tests.HeadlessParity
             Assert.StartsWith("Policy exception:", delete.Reason, StringComparison.Ordinal);
             Assert.True(delete.CliRoute == null && delete.Operation == null);
             Assert.Equal(
-                new[] { "DeleteSelectedSessions", "DeleteUnselectedSessions" }.Select(name => CapabilityKeys.Command(ProxyCommands + name)),
+                new[] { "DeleteSelectedSessions", "DeleteUnselectedSessions" }.Select(name => CapabilityKeys.Command(ProxyCommands + name))
+                    // The new look's confirmation, and its button that deletes.
+                    .Append(CapabilityKeys.Window("XMAT.ConfirmWindow"))
+                    .Append(CapabilityKeys.Click("Controls/ConfirmPanel.xaml", "Confirm_Click")),
                 delete.GuiEntryPoints);
             Assert.DoesNotContain(delete, CliCatalog.Commands().SelectMany(command => CliCatalog.CapabilitiesOf(command)));
             Assert.StartsWith("GUI only by policy", CapabilityTable.Status(delete), StringComparison.Ordinal);

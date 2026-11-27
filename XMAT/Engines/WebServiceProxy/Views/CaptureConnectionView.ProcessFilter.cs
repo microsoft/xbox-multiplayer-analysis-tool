@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using XMAT.Operations;
 using XMAT.Operations.Captures;
@@ -24,31 +25,42 @@ namespace XMAT.WebServiceCapture
                 ? row.State.HasFlag(ProcessRowState.Included)
                 : _processMatcher.Matches(model.ClientProcess);
 
-        // Live filtering re-evaluates one row when its process changes. It is on only while a process filter is set, and
-        // only on the grid's own view.
-        private void SetLiveProcessFiltering(bool active)
+        // Live filtering re-evaluates one row when a property its filter reads changes: its process while a process filter
+        // is set, and also its status, host, path and method while a search is. It is on only while one of them is set,
+        // and only on the grid's own view.
+        private void SetLiveFiltering(bool process, bool search)
         {
             ListCollectionView view = _connectionsView;
             if (view == null || !view.CanChangeLiveFiltering)
             {
                 return;
             }
-            const string property = nameof(ProxyConnectionModel.ClientProcess);
-            if (active)
+            string[] searched =
             {
-                if (!view.LiveFilteringProperties.Contains(property))
+                nameof(ProxyConnectionModel.Status), nameof(ProxyConnectionModel.Host), nameof(ProxyConnectionModel.Path),
+                nameof(ProxyConnectionModel.Method),
+            };
+            Set(nameof(ProxyConnectionModel.ClientProcess), process || search);
+            foreach (string property in searched)
+            {
+                Set(property, search);
+            }
+            bool live = process || search;
+            if (view.IsLiveFiltering != live)
+            {
+                view.IsLiveFiltering = live;
+            }
+
+            void Set(string property, bool watched)
+            {
+                if (watched && !view.LiveFilteringProperties.Contains(property))
                 {
                     view.LiveFilteringProperties.Add(property);
                 }
-                if (view.IsLiveFiltering != true)
+                else if (!watched)
                 {
-                    view.IsLiveFiltering = true;
+                    view.LiveFilteringProperties.Remove(property);
                 }
-            }
-            else if (view.IsLiveFiltering == true || view.LiveFilteringProperties.Contains(property))
-            {
-                view.IsLiveFiltering = false;
-                view.LiveFilteringProperties.Remove(property);
             }
         }
 
@@ -212,6 +224,7 @@ namespace XMAT.WebServiceCapture
             var visibility = active ? Visibility.Visible : Visibility.Collapsed;
             ProcessFilterIndicator.Visibility = visibility;
             ShowAllProcessesButton.Visibility = visibility;
+            UpdateActiveFilterCount();
         }
 
         private void SetProcessFilter(ProcessFilterSpec spec)
@@ -299,6 +312,27 @@ namespace XMAT.WebServiceCapture
             {
                 e.Handled = true;
                 ApplyProcessEditor();
+            }
+        }
+
+        private void ProcessFilterPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                ProcessFilterPopup.IsOpen = false;
+            }
+        }
+
+        // When the popup closes with focus inside it, focus would be left in a hidden window; give it back to the
+        // Process button. A click elsewhere keeps the focus it moved.
+        private void ReturnFocusFromProcessFilter()
+        {
+            if (Keyboard.FocusedElement is not DependencyObject focused ||
+                (ProcessFilterPopup.Child is { } content &&
+                    (ReferenceEquals(focused, content) || (focused is Visual visual && content.IsAncestorOf(visual)))))
+            {
+                ProcessFilterButton.Focus();
             }
         }
 

@@ -2,10 +2,13 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.CodeAnalysis;
@@ -47,6 +50,16 @@ namespace XMAT
         public static readonly DependencyProperty TabSizeProperty =
             DependencyProperty.Register("TabSize", typeof(int), typeof(ScriptEditorView), new PropertyMetadata(4));
 
+        // Follows ScriptLayout.IsStacked: whether the type reference is below the editor rather than beside it.
+        private static readonly DependencyProperty TypesBelowEditorProperty =
+            DependencyProperty.Register("TypesBelowEditor", typeof(bool), typeof(ScriptEditorView),
+                new PropertyMetadata(false, (d, e) => ((ScriptEditorView)d).ArrangePanes((bool)e.NewValue)));
+
+        // The type reference's size in the layout that is not in use, given back when the layout changes back. Below
+        // the editor it starts tall enough for a few rows of types above their description.
+        private (GridLength Size, double Min, bool IsNewLook) _typesBeside;
+        private (GridLength Size, double Min) _typesBelow = (new GridLength(180), 120);
+
         public static string EnabledText
         {
             get { return Localization.GetLocalizedString("SCRIPT_CMD_ENABLED"); }
@@ -69,8 +82,59 @@ namespace XMAT
             ScriptLabel.Content = Localization.GetLocalizedString("SCRIPT_CONTENT_LABEL");
             EventSelectorLabel.Content = Localization.GetLocalizedString("SCRIPT_EVENT_LABEL");
             ScriptStatusLabel.Content = Localization.GetLocalizedString("SCRIPT_STATUS_LABEL");
+            AutomationProperties.SetHelpText(ScriptEditor, Localization.GetLocalizedString("A11Y_SCRIPT_EDITOR_HELP"));
+            AutomationProperties.SetName(TypeInfoTree, Localization.GetLocalizedString("A11Y_SCRIPT_TYPES_TREE"));
+            AutomationProperties.SetName(TypeDescription, Localization.GetLocalizedString("A11Y_SCRIPT_TYPE_DESCRIPTION"));
+            AutomationProperties.SetName(ScriptTypesSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_SCRIPT_TYPES"));
+            AutomationProperties.SetName(TypeDescriptionSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_TYPE_DESCRIPTION"));
+            SetBinding(TypesBelowEditorProperty, new Binding(nameof(ReflowPanel.IsStacked)) { Source = ScriptLayout });
             EventSelector.SelectionChanged += EventSelector_SelectionChanged;
             AttachSelectedScript(EventSelector.SelectedItem as ScriptModel);
+        }
+
+        // Beside the editor, the type reference and the divider before it have columns of their own; below it, rows.
+        // The column or row not in use takes no room. SetCurrentValue keeps the column's look binding, so a later
+        // switch to the original look still gives it the original proportions. A width kept from the other look is
+        // dropped instead of restored, so the column takes this look's width.
+        private void ArrangePanes(bool below)
+        {
+            if (below)
+            {
+                _typesBeside = (TypesColumn.Width, TypesColumn.MinWidth, LookState.Current.IsNewLook);
+                TypesColumn.SetCurrentValue(ColumnDefinition.MinWidthProperty, 0.0);
+                TypesColumn.SetCurrentValue(ColumnDefinition.WidthProperty, new GridLength(0));
+                TypesRow.MinHeight = _typesBelow.Min;
+                TypesRow.Height = _typesBelow.Size;
+            }
+            else
+            {
+                _typesBelow = (TypesRow.Height, TypesRow.MinHeight);
+                TypesRow.MinHeight = 0;
+                TypesRow.Height = new GridLength(0);
+                TypesColumn.SetCurrentValue(ColumnDefinition.MinWidthProperty, _typesBeside.Min);
+                if (_typesBeside.IsNewLook == LookState.Current.IsNewLook)
+                {
+                    TypesColumn.SetCurrentValue(ColumnDefinition.WidthProperty, _typesBeside.Size);
+                }
+                else
+                {
+                    TypesColumn.InvalidateProperty(ColumnDefinition.WidthProperty);
+                }
+            }
+
+            Grid.SetRow(ScriptTypesSplitter, below ? 1 : 0);
+            Grid.SetColumn(ScriptTypesSplitter, below ? 0 : 1);
+            Grid.SetRow(TypeReferencePane, below ? 2 : 0);
+            Grid.SetColumn(TypeReferencePane, below ? 0 : 2);
+            ScriptTypesSplitter.ResizeDirection = below ? GridResizeDirection.Rows : GridResizeDirection.Columns;
+        }
+
+        // The type reference takes at most half of the panes, so the editor stays the largest of them. A smaller tab
+        // then shrinks a pane that was dragged larger instead of pushing the panes past its edge.
+        private void ScriptPanes_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            TypesColumn.MaxWidth = Math.Max(0, (ScriptPanes.ActualWidth - ScriptPanes.ColumnDefinitions[1].ActualWidth) / 2);
+            TypesRow.MaxHeight = Math.Max(0, (ScriptPanes.ActualHeight - ScriptPanes.RowDefinitions[1].ActualHeight) / 2);
         }
 
         private void LoadScript_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -233,11 +297,23 @@ namespace XMAT
         {
             // always set focus back to the editor, even if we bail out below
             ScriptEditor.Focus();
+            InsertTypePath(sender as TreeViewItem);
+        }
 
-            if (sender is not TreeViewItem tvi)
+        // Enter on a type or member inserts its path, as a double-click does.
+        private void TreeViewItem_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter || sender is not TreeViewItem { IsSelected: true } tvi)
                 return;
 
-            if (!tvi.IsSelected)
+            e.Handled = true;
+            ScriptEditor.Focus();
+            InsertTypePath(tvi);
+        }
+
+        private void InsertTypePath(TreeViewItem tvi)
+        {
+            if (tvi == null || !tvi.IsSelected)
                 return;
 
             if (tvi.Tag is not ScriptTypeInfo sti)
@@ -273,6 +349,16 @@ namespace XMAT
 
         private void ScriptEditor_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                // Tab indents the script, so Ctrl+Tab and Ctrl+Shift+Tab move focus out of the editor.
+                e.Handled = true;
+                ScriptEditor.MoveFocus(new TraversalRequest((Keyboard.Modifiers & ModifierKeys.Shift) != 0
+                    ? FocusNavigationDirection.Previous
+                    : FocusNavigationDirection.Next));
+                return;
+            }
+
             if (e.Key == Key.Tab)
             {
                 if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))

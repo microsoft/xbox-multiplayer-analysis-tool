@@ -57,6 +57,7 @@ namespace XMAT.Models
                         previousController, SelectedCaptureController_PropertyChanged, string.Empty);
                 }
                 _selectedDeviceContext = value;
+                ObserveSelectedCaptureRows();
                 if (_selectedDeviceContext?.CaptureController is IDeviceCaptureController currentController)
                 {
                     PropertyChangedEventManager.AddHandler(
@@ -167,6 +168,17 @@ namespace XMAT.Models
             !IsAnyCaptureRunning &&
             !IsAnalysisRunning &&
             !IsCaptureDataOperationRunning;
+        public bool HasSelectedCaptureData => SelectedDeviceContext?.CaptureController switch
+        {
+            WebServiceDeviceCaptureController proxy => proxy.ProxyConnections.Count > 0,
+            NetworkTraceCaptureController network => network.NetworkTracePackets.Count > 0,
+            _ => false
+        };
+        public string AnalysisEmptyStateText => Localization.GetLocalizedString(
+            IsAnalysisRunning ? "ANALYSIS_EMPTY_RUNNING" :
+            IsCaptureDataOperationRunning ? "ANALYSIS_EMPTY_BUSY" :
+            IsAnyCaptureRunning ? "ANALYSIS_EMPTY_STOP" :
+            HasSelectedCaptureData ? "ANALYSIS_EMPTY_READY" : "ANALYSIS_EMPTY_CAPTURE");
         internal bool CanModifyCaptureData =>
             !IsClosing &&
             !IsAnalysisRunning &&
@@ -185,6 +197,8 @@ namespace XMAT.Models
 
         private readonly ObservableCollection<ICaptureDeviceContext> _captureDeviceContexts = new();
         private ICaptureDeviceContext _selectedDeviceContext = null;
+        private INotifyCollectionChanged _selectedCaptureRows;
+        private bool _hadSelectedCaptureData;
         private readonly List<ICaptureAnalyzer> _captureAnalyzers = new();
         private readonly ObservableCollection<ICaptureAnalysisRun> _analysisRuns = new();
         private readonly object _analysisStateLock = new();
@@ -539,8 +553,53 @@ namespace XMAT.Models
             RaisePropertyChange(nameof(StatusBarText3));
         }
 
+        private void ObserveSelectedCaptureRows()
+        {
+            INotifyCollectionChanged rows = SelectedDeviceContext?.CaptureController switch
+            {
+                WebServiceDeviceCaptureController proxy => proxy.ProxyConnections,
+                NetworkTraceCaptureController network => network.NetworkTracePackets,
+                _ => null
+            };
+            if (ReferenceEquals(rows, _selectedCaptureRows))
+            {
+                return;
+            }
+            if (_selectedCaptureRows != null)
+            {
+                CollectionChangedEventManager.RemoveHandler(_selectedCaptureRows, SelectedCaptureRows_CollectionChanged);
+            }
+            _selectedCaptureRows = rows;
+            if (rows != null)
+            {
+                CollectionChangedEventManager.AddHandler(rows, SelectedCaptureRows_CollectionChanged);
+            }
+        }
+
+        private void SelectedCaptureRows_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (ReferenceEquals(sender, _selectedCaptureRows) && HasSelectedCaptureData != _hadSelectedCaptureData)
+            {
+                InvalidateCommands();
+            }
+        }
+
+        private void RaiseAnalysisPresentation()
+        {
+            _hadSelectedCaptureData = HasSelectedCaptureData;
+            RaisePropertyChange(nameof(HasSelectedCaptureData));
+            RaisePropertyChange(nameof(AnalysisEmptyStateText));
+        }
+
         private void SelectedCaptureController_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            if (ReferenceEquals(sender, SelectedDeviceContext?.CaptureController) &&
+                (string.IsNullOrEmpty(e.PropertyName) ||
+                 e.PropertyName == nameof(WebServiceDeviceCaptureController.ProxyConnections) ||
+                 e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets)))
+            {
+                InvalidateCommands();
+            }
             if (!ReferenceEquals(sender, SelectedDeviceContext?.CaptureController) ||
                 sender is not WebServiceCapture.WebServiceDeviceCaptureController ||
                 (!string.IsNullOrEmpty(e.PropertyName) &&
@@ -662,10 +721,12 @@ namespace XMAT.Models
             {
                 _dispatcher.BeginInvoke(
                     DispatcherPriority.Background,
-                    new Action(CommandManager.InvalidateRequerySuggested));
+                    new Action(InvalidateCommands));
                 return;
             }
 
+            ObserveSelectedCaptureRows();
+            RaiseAnalysisPresentation();
             CommandManager.InvalidateRequerySuggested();
         }
 

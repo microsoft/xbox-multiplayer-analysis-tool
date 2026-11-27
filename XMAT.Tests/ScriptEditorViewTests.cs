@@ -257,9 +257,7 @@ namespace XMAT.Tests
 
         private static Style AppComboBoxStyle()
         {
-            using var stream = typeof(ScriptEditorViewTests).Assembly.GetManifestResourceStream("XMAT.Tests.App.xaml");
-            Assert.NotNull(stream);
-            var document = XDocument.Load(stream);
+            var document = NewLookMarkup.Document;
             var style = new XElement(document.Descendants(Presentation + "Style")
                 .Single(element => (string)element.Attribute("TargetType") == "ComboBox"));
             foreach (var declaration in document.Root.Attributes().Where(attribute =>

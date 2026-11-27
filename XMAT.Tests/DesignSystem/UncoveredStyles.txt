@@ -1,0 +1,31 @@
+# Styles of the new look that no design system page shows yet, as "file: key". This list only shrinks: a new style
+# comes with an example on its component's page (docs/design-system.md), and when a page starts showing a style,
+# StoryCoverageTests asks for its line to be removed.
+Looks/NewLook.xaml: ColumnHeaderGripperStyle
+Looks/NewLook.xaml: ColumnSplitterStyle
+Looks/NewLook.xaml: FilterLabelStyle
+Looks/NewLook.xaml: InspectorTreeViewStyle
+Looks/NewLook.xaml: MainStatusBarStyle
+Looks/NewLook.xaml: MessageGridHeaderStyle
+Looks/NewLook.xaml: PacketGridHeaderStyle
+Looks/NewLook.xaml: PaneSplitterStyle
+Looks/NewLook.xaml: TrafficGridHeaderStyle
+Looks/NewLook.xaml: {x:Type DataGridCell}
+Looks/NewLook.xaml: {x:Type DataGridColumnHeader}
+Looks/NewLook.xaml: {x:Type DataGridRowHeader}
+Looks/NewLook.xaml: {x:Type DataGridRow}
+Looks/NewLook.xaml: {x:Type DataGrid}
+Looks/NewLook.xaml: {x:Type GridSplitter}
+Looks/NewLook.xaml: {x:Type GroupBox}
+Looks/NewLook.xaml: {x:Type Label}
+Looks/NewLook.xaml: {x:Type Separator}
+Looks/NewLook.xaml: {x:Type StatusBar}
+Looks/NewLook.xaml: {x:Type ToolTip}
+Looks/NewLook.xaml: {x:Type TreeViewItem}
+Looks/NewLook.xaml: {x:Type TreeView}
+Looks/NewLook.xaml: {x:Type UserControl}
+Looks/NewLook.xaml: {x:Type Window}
+Styles/DataViz.xaml: {x:Type ColumnSummaryButton}
+Styles/Motion.xaml: SkeletonPillStyle
+Styles/Motion.xaml: {x:Type SkeletonBlock}
+Styles/Toolbar.xaml: {x:Type ToolBarTray}

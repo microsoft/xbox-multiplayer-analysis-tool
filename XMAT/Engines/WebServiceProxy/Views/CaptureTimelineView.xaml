@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d" 
              d:DesignHeight="150" d:DesignWidth="800">
     <Grid>
@@ -12,34 +13,60 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Header bar -->
-        <Border Grid.Row="0" Background="{DynamicResource PanelBackgroundBrush}"
-                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
-                Padding="4,2">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Timeline" FontWeight="Bold" Margin="0,0,12,0" VerticalAlignment="Center"/>
+        <!-- Header bar: the title and modes, then Capturing and Auto Scroll at the right, or on a line of their own under
+             the modes when the bar is too narrow for both. -->
+        <Border Grid.Row="0" Style="{DynamicResource TimelineHeaderStyle}">
+            <app:ReflowPanel x:Name="HeaderRow" Spacing="{app:Look New=16, Original=0}" StackedSpacing="{app:Look New=4, Original=0}">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" app:ReflowPanel.Weight="1">
+                <TextBlock Text="Timeline" Style="{DynamicResource PaneTitleStyle}" Margin="{app:Look New='0,0,16,0', Original='0,0,12,0'}"/>
                 <RadioButton x:Name="WaterfallMode" Content="Waterfall" IsChecked="True"
-                             Margin="0,0,8,0" GroupName="TimelineMode"
+                             Margin="{app:Look New='0,0,16,0', Original='0,0,8,0'}" GroupName="TimelineMode"
+                             VerticalAlignment="Center" Checked="ViewMode_Changed"/>
+                <RadioButton x:Name="ByHostMode" Content="By Host" Margin="{app:Look New='0,0,16,0', Original='0'}"
+                             GroupName="TimelineMode" VerticalAlignment="Center"
                              Checked="ViewMode_Changed"/>
-                <RadioButton x:Name="ByHostMode" Content="By Host"
-                             GroupName="TimelineMode"
+                <!-- Requests per second instead of bars; the new look only. -->
+                <RadioButton x:Name="VolumeMode" Content="Volume" Visibility="{app:Look New=Visible, Original=Collapsed}"
+                             GroupName="TimelineMode" VerticalAlignment="Center"
                              Checked="ViewMode_Changed"/>
             </StackPanel>
+            <!-- While a capture runs, its red dot and Capturing sit with the live timeline, beside Auto Scroll. -->
+            <StackPanel x:Name="HeaderEnd" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        app:ReflowPanel.StackedAlignment="Left">
+                <app:RecordingIndicator x:Name="CapturingIndicator" Style="{DynamicResource RecordingIndicatorStyle}" Margin="0,0,16,0"
+                                        IsActive="{Binding IsCaptureRunning, RelativeSource={RelativeSource AncestorType=local:CaptureTimelineView}}"/>
+                <CheckBox x:Name="AutoScrollButton" Content="Auto Scroll" VerticalAlignment="Center"
+                          IsChecked="{Binding AutoScroll, RelativeSource={RelativeSource AncestorType=local:CaptureTimelineView}}"
+                          Visibility="{app:Look New=Visible, Original=Collapsed}"/>
+            </StackPanel>
+            </app:ReflowPanel>
         </Border>
 
-        <!-- Timeline scroll area -->
-        <ScrollViewer x:Name="TimelineScrollViewer" Grid.Row="1"
+        <!-- Timeline scroll area. Its parts are transparent so the panel shows through, or the well in the new look.
+             Volume replaces it in the same well. -->
+        <Border Grid.Row="1" Style="{DynamicResource TimelineWellStyle}">
+        <Grid>
+        <ScrollViewer x:Name="TimelineScrollViewer"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       ScrollChanged="TimelineScrollChanged"
                       SizeChanged="TimelineSizeChanged"
-                      Background="{DynamicResource PanelBackgroundBrush}">
+                      Background="Transparent">
             <Canvas x:Name="TimelineExtent">
                 <Canvas x:Name="TimeAxisCanvas" Height="20" ClipToBounds="True"
-                        Background="{DynamicResource PanelBackgroundBrush}"/>
+                        Background="Transparent"/>
                 <Canvas x:Name="TimelineCanvas" ClipToBounds="True"
-                        Background="{DynamicResource PanelBackgroundBrush}"/>
+                        Background="Transparent"/>
             </Canvas>
         </ScrollViewer>
+        <local:CaptureVolumeChart x:Name="VolumeChart" Visibility="Collapsed"
+                                  LineBrush="{DynamicResource AccentBrush}"
+                                  GridLineBrush="{DynamicResource BorderSubtleBrush}"
+                                  BaselineBrush="{DynamicResource BorderSubtleBrush}"
+                                  LabelBrush="{DynamicResource TextSecondaryBrush}"
+                                  AxisFontSize="{DynamicResource TimelineAxisFontSize}"
+                                  ReadoutFontSize="{DynamicResource BaseFontSize}"/>
+        </Grid>
+        </Border>
     </Grid>
 </UserControl>

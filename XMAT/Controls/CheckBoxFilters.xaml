@@ -7,6 +7,7 @@
              xmlns:logic="clr-namespace:XMAT"
              xmlns:scm="clr-namespace:System.ComponentModel;assembly=WindowsBase"
              x:Name="CheckBoxFiltersControl"
+             Margin="{local:Look New='0,0,8,0', Original='0,0,20,0'}"
              mc:Ignorable="d">
     <UserControl.Resources>
         <CollectionViewSource x:Key="BoundItems" Source="{Binding ItemsSource,RelativeSource={RelativeSource FindAncestor, 
@@ -16,10 +17,48 @@
                 <scm:SortDescription PropertyName="Text"/>
             </CollectionViewSource.SortDescriptions>
         </CollectionViewSource>
+
+        <!-- The original look: the check box beside the list turns the filter on, and the list's checked values show. -->
+        <DataTemplate x:Key="CheckTemplate">
+            <CheckBox x:Name="ItemCheckBox" Content="{Binding Text}" IsChecked="{Binding IsChecked}" Tag="{Binding}" Checked="FilterCheckBox_Checked" Unchecked="FilterCheckBox_Unchecked"/>
+        </DataTemplate>
+
+        <!-- The new look: the list is the filter. Only the values picked show, and with none picked, All is (Pick_Changed). -->
+        <local:FilterPickedConverter x:Key="Picked"/>
+        <local:FilterLabelConverter x:Key="Label"/>
+        <DataTemplate x:Key="PickTemplate">
+            <CheckBox x:Name="ItemCheckBox" Tag="{Binding}" Checked="Pick_Changed" Unchecked="Pick_Changed">
+                <CheckBox.Content>
+                    <MultiBinding Converter="{StaticResource Label}">
+                        <Binding Path="Text"/>
+                        <Binding Path="BlankText" RelativeSource="{RelativeSource AncestorType=local:CheckBoxFilters}"/>
+                    </MultiBinding>
+                </CheckBox.Content>
+                <CheckBox.IsChecked>
+                    <MultiBinding Converter="{StaticResource Picked}" Mode="OneWay">
+                        <Binding Path="Text"/>
+                        <Binding Path="IsChecked"/>
+                        <Binding Path="IsFilterEnabled" RelativeSource="{RelativeSource AncestorType=local:CheckBoxFilters}"/>
+                    </MultiBinding>
+                </CheckBox.IsChecked>
+            </CheckBox>
+        </DataTemplate>
     </UserControl.Resources>
-    <StackPanel Orientation="Horizontal">
-        <CheckBox x:Name="EnableFilters" IsChecked="{Binding IsFilterEnabled, ElementName=CheckBoxFiltersControl}" Checked="EnableFilters_Checked" VerticalAlignment="Center" VerticalContentAlignment="Center" Unchecked="EnableFilters_Unchecked"/>
-        <ComboBox x:Name="FilterList" Text="{Binding FilterDesc, ElementName=CheckBoxFiltersControl, Mode=OneWay}" Width="100" Height="20" Margin="0,0,20,0" IsSynchronizedWithCurrentItem="False"
+    <!-- The new look lets the dropdown fill the space its parent gives it; the original keeps a fixed width. The
+         control's right margin spaces it from the next filter in a row; a stacked list of filters sets it aside. -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <CheckBox x:Name="EnableFilters" Margin="{local:Look New='0,0,6,0', Original='0'}" Visibility="{local:Look New=Collapsed, Original=Visible}" IsChecked="{Binding IsFilterEnabled, ElementName=CheckBoxFiltersControl}" Checked="EnableFilters_Checked" VerticalAlignment="Center" VerticalContentAlignment="Center" Unchecked="EnableFilters_Unchecked"
+                  AutomationProperties.Name="{Binding FilterDesc, ElementName=CheckBoxFiltersControl, StringFormat={x:Static local:CheckBoxFilters.EnableFilterNameFormat}}"/>
+        <ComboBox x:Name="FilterList" Grid.Column="1" Text="{Binding FilterDesc, ElementName=CheckBoxFiltersControl, Mode=OneWay}"
+                  AutomationProperties.Name="{Binding Summary, ElementName=CheckBoxFiltersControl}"
+                  ItemTemplate="{local:Look New={StaticResource PickTemplate}, Original={StaticResource CheckTemplate}}"
+                  Width="{local:Look New=Auto, Original=100}" MinWidth="{local:Look New=80, Original=0}"
+                  HorizontalAlignment="{local:Look New=Stretch, Original=Left}"
+                  Height="{local:Look New=28, Original=20}" IsSynchronizedWithCurrentItem="False"
                     IsReadOnly="True" IsEditable="True">
             <ComboBox.ItemsSource>
                 <CompositeCollection>
@@ -30,12 +69,7 @@
                     <CollectionContainer Collection="{Binding Source={StaticResource BoundItems}}"/>
                 </CompositeCollection>
             </ComboBox.ItemsSource>
-            <ComboBox.ItemTemplate>
-                <DataTemplate>
-                    <CheckBox x:Name="ItemCheckBox" Content="{Binding Text}" IsChecked="{Binding IsChecked}" Tag="{Binding}" Checked="FilterCheckBox_Checked" Unchecked="FilterCheckBox_Unchecked"/>
-                </DataTemplate>
-            </ComboBox.ItemTemplate>
         </ComboBox>
 
-    </StackPanel>
+    </Grid>
 </UserControl>

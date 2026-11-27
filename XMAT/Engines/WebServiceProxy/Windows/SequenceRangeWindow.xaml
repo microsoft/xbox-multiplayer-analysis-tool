@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Sequential requests" Width="460" SizeToContent="Height" ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
-        Background="{DynamicResource PanelBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}">
+        Background="{DynamicResource SurfacePanelBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}">
   <StackPanel Margin="12">
     <TextBlock x:Name="PromptText" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <Grid>

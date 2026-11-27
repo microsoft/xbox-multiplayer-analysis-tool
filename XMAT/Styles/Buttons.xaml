@@ -1,0 +1,288 @@
+<!-- Buttons in the new look: the standard outlined button, its quiet icon and tab close variants, the red button of an
+     action that can't be undone, toggle buttons, and the filter toggles that sit among the filter dropdowns, with the
+     Filters button that a narrow filter row folds into. The capture toolbar's buttons are in Styles/Toolbar.xaml.
+     Looks/NewLook.xaml merges this dictionary. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:XMAT">
+
+    <!-- Standard buttons are outlined on the surface; toolbar actions are text-only and the primary action is filled. -->
+    <Style TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="{DynamicResource ButtonPadding}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="SoftIconButtonStyle" TargetType="Button"
+           BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Width" Value="24"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <!-- The button of an action that can't be undone, such as Delete 12 sessions in a confirmation: filled in the error
+         color, with its label on that fill. The pointer and a press shade the fill, so the button stays red. Keyboard
+         focus rings it outside the fill, as on the toolbar's filled button, so the ring shows in a contrast theme,
+         where the fill and its outline are one color. -->
+    <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ErrorOnFillBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ErrorFillBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True"/>
+                        <Border x:Name="Shade" CornerRadius="{DynamicResource ControlCornerRadius}" Opacity="0"
+                                Background="{DynamicResource TextPrimaryBrush}" IsHitTestVisible="False"/>
+                        <!-- The empty TextBlock style keeps the label in the button's foreground, not the new look's
+                             text color. -->
+                        <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          RecognizesAccessKey="True">
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock"/>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                        <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <Border x:Name="FocusRing" Margin="-2" CornerRadius="6"
+                                BorderBrush="{DynamicResource TextPrimaryBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Shade" Property="Opacity" Value="0.12"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Shade" Property="Opacity" Value="0.24"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The close button on a tab: a quiet glyph that fills on hover, with a 24px target. -->
+    <Style x:Key="TabCloseButtonStyle" TargetType="Button"
+           BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Width" Value="24"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="10"/>
+    </Style>
+
+    <Style TargetType="ToggleButton">
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="{DynamicResource ButtonPadding}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A toggle that sits among the filter dropdowns, so it shares their corners. -->
+    <Style x:Key="FilterToggleButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="{DynamicResource InputCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <Border x:Name="HoverOutline" CornerRadius="{DynamicResource InputCornerRadius}"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" BorderThickness="1"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A filter row too narrow for its filters folds into this Filters button: a 28px filter toggle with a funnel.
+         An accent dot at its corner shows that a filter is on. -->
+    <Style x:Key="FilterOverflowButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource FilterToggleButtonStyle}">
+        <Setter Property="Width" Value="28"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="ContentTemplate">
+            <Setter.Value>
+                <DataTemplate>
+                    <Grid Width="26" Height="26">
+                        <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                        <Ellipse x:Name="ActiveDot" Width="6" Height="6" Margin="0,2,2,0"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Fill="{DynamicResource AccentBrush}" Visibility="Collapsed"/>
+                    </Grid>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Value="True"
+                                     Binding="{Binding HasActiveFilters, RelativeSource={RelativeSource AncestorType=local:FilterOverflowButton}}">
+                            <Setter TargetName="ActiveDot" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
+                </DataTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Clear filters, in a filter row: its name while the row has room, and only its icon, a funnel with a cross, while
+         the row is tight (FilterOverflowHost.IsCompact), before the row folds into its Filters button. Its tooltip names it
+         while it shows only the icon. Dimmed while nothing is filtered. -->
+    <Style x:Key="ClearFiltersButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Height" Value="{DynamicResource ControlHeight}"/>
+        <Setter Property="Padding" Value="12,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+        <Setter Property="Content" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+        <Setter Property="AutomationProperties.Name" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+        <Style.Triggers>
+            <Trigger Property="local:FilterOverflowHost.IsCompact" Value="True">
+                <Setter Property="Width" Value="28"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="ToolTip" Value="{x:Static local:CheckBoxFilters.ClearFiltersText}"/>
+                <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+                <Setter Property="ContentTemplate">
+                    <Setter.Value>
+                        <DataTemplate>
+                            <Grid Width="26" Height="26">
+                                <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                                <TextBlock Text="&#xE894;" FontFamily="Segoe MDL2 Assets" FontSize="8" Margin="0,0,4,5"
+                                           HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The popup of a folded filter row is a dropdown surface; its filters stand one above another, 8px apart. -->
+    <Style x:Key="FilterOverflowPopupStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
+        <Setter Property="Padding" Value="{DynamicResource PanelPadding}"/>
+        <Setter Property="MinWidth" Value="240"/>
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+    </Style>
+</ResourceDictionary>

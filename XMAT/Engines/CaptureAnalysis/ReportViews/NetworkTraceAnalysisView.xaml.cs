@@ -17,6 +17,7 @@ namespace XMAT.NetworkTraceCaptureAnalysis
 
             NetAnalysisTitle.Text = Localization.GetLocalizedString("NETCAP_ANALYSIS_TITLE");
             TotalPacketsLabel.Text = Localization.GetLocalizedString("NETCAP_ANALYSIS_TOTAL");
+            ChecksTitle.Text = Localization.GetLocalizedString("NETCAP_ANALYSIS_CHECKS");
         }
     }
 }

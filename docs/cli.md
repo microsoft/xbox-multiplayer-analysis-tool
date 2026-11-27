@@ -1014,13 +1014,17 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |
+| Capture tab order (`view.capture-tabs`) | (none) | GUI only. Presentation: changes only the order of the capture tabs |
 | Capture viewers (`view.capture-viewers`) | (none) | GUI only. Presentation: filters, timeline and the request, response, WebSocket and packet views |
+| Comfort view (`view.comfort`) | (none) | GUI only. Presentation: spacing only |
 | Composer history (`view.composer-history`) | (none) | GUI only. Presentation: session-only navigation over rows already in the Replays tab; sends go through request.replay, and headless runs keep no session |
 | Control templates (`view.controls`) | (none) | GUI only. Presentation: scroll bar commands inside control templates |
 | Display language (`view.language`) | (none) | GUI only. Presentation: the command line emits stable codes and English diagnostics |
+| New look switch (`view.look`) | (none) | GUI only. Presentation: switches between the redesigned and the original appearance |
 | Main window (`view.main-window`) | (none) | GUI only. Presentation: hosts the GUI adapters of every capability |
 | Preferences window (`view.preferences-editor`) | (none) | GUI only. Presentation: edits saved GUI preferences; headless runs take per-run options instead |
 | Script editor (`view.script-editor`) | (none) | GUI only. Presentation: editor buffer, save, revert and error navigation; headless scripts are files |
-| Light and dark theme (`view.theme`) | (none) | GUI only. Presentation: colors only |
+| Appearance themes (`view.theme`) | (none) | GUI only. Presentation: colors only |
+| What's new (`view.whats-new`) | (none) | GUI only. Presentation: describes the new look's changes |
 | Choose the PC address a console sends traffic to (`xbox.source-address`) | (not available yet) | Planned (S7, XMAT-021) |
 <!-- xmat-capabilities:end -->

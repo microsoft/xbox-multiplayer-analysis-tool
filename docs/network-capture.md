@@ -18,7 +18,7 @@ That workflow remains available and provides higher-fidelity data.
 
 ## Capture network data
 
-1. Click the **+** tab and select your console or Local PC.
+1. Click the **+** tab and select your console or **This PC**.
 2. Choose **Network Trace** and add the capture.
 3. In the **NetworkTrace** tab, click **Start Capture**.
 4. Reproduce the issue while XMAT shows **Trace Running**.
@@ -33,6 +33,18 @@ That workflow remains available and provides higher-fidelity data.
 inspection.
 
 ![Captured packets available for filtering and inspection](../ReadmeImages/25.png)
+
+With **New look** on, the **PROTO**, **SRC IP**, **DEST IP**, **SRC MAC**, **DEST MAC**,
+**TYPE**, **PID** and **TID** column headers have an info icon at their right end. Select
+it to see how that column's values are spread over the packets the list shows, as in a
+[web proxy capture](web-proxy.md): the six most common values, largest first, with
+counts and percentages, then the rest in one row. Select a protocol, address, PID or TID
+to set that filter to the value; MAC addresses and the media type have no filter.
+
+The **PID**, **TID**, **PROTO**, **SRCIP** and **DESTIP** lists above the packets filter
+them once a capture stops, as a [web proxy capture's lists](web-proxy.md#filter-connections)
+do: with **New look** on, pick the values to show, and **Clear filters** turns every
+filter off.
 
 Use **File > Save Captures** and **Load Captures** to save and reopen trace data.
 **Clear Captures** removes the current data set; **Start Capture** clears it and
@@ -49,6 +61,14 @@ starts a new capture.
 The report includes packet-send statistics by source. It flags UDP packets exceeding
 the recommended Xbox MTU (1384), sending more than 20 packets in a second, and
 duplicate packets within a second. Detected issues have a red background.
+
+With **New look** on, the report starts with these checks: each count is green when
+the check found nothing and red when it found packets, beside the number of packets
+scanned. Each list follows as a histogram, largest values first, with bars, counts
+and each value's share of the total; averages, such as the average packet length,
+have no shares. A list of more than seven values shows the six largest and the rest
+in one row; select **Show all** to list every value. The histograms fill the pane in
+columns, so a wide pane shows several side by side.
 
 ## Recover from capture errors
 
